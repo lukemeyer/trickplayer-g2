@@ -4,6 +4,244 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Plex JWT G2 Sync Bridge</title>
+
+        <!-- Intercept and mirror all console logs before any other scripts run -->
+        <script>
+            (function () {
+                const originalLog = console.log;
+                const originalWarn = console.warn;
+                const originalError = console.error;
+                const originalInfo = console.info;
+
+                window.capturedLogs = [];
+                const MAX_LOGS = 300;
+
+                function addLogToUI(type, args) {
+                    const message = args
+                        .map((arg) => {
+                            if (arg && typeof arg === "object") {
+                                try {
+                                    return JSON.stringify(arg);
+                                } catch (e) {
+                                    return String(arg);
+                                }
+                            }
+                            return String(arg);
+                        })
+                        .join(" ");
+
+                    const logEntry = {
+                        time: new Date().toLocaleTimeString(),
+                        type: type,
+                        message: message,
+                    };
+
+                    window.capturedLogs.push(logEntry);
+                    if (window.capturedLogs.length > MAX_LOGS) {
+                        window.capturedLogs.shift();
+                    }
+
+                    const countBadge =
+                        document.getElementById("debug-log-count");
+                    if (countBadge) {
+                        countBadge.textContent = window.capturedLogs.length;
+                    }
+
+                    const output = document.getElementById("debug-log-output");
+                    if (output) {
+                        const isAtBottom =
+                            output.scrollHeight - output.clientHeight <=
+                            output.scrollTop + 20;
+
+                        const div = document.createElement("div");
+                        div.className = `log-line log-${type}`;
+
+                        const timeSpan = document.createElement("span");
+                        timeSpan.className = "log-time";
+                        timeSpan.textContent = `[${logEntry.time}] `;
+
+                        const textSpan = document.createElement("span");
+                        textSpan.className = "log-text";
+                        textSpan.textContent = message;
+
+                        div.appendChild(timeSpan);
+                        div.appendChild(textSpan);
+                        output.appendChild(div);
+
+                        while (output.childNodes.length > MAX_LOGS) {
+                            output.removeChild(output.firstChild);
+                        }
+
+                        if (isAtBottom) {
+                            output.scrollTop = output.scrollHeight;
+                        }
+                    }
+                }
+
+                console.log = function (...args) {
+                    originalLog.apply(console, args);
+                    addLogToUI("log", args);
+                };
+
+                console.warn = function (...args) {
+                    originalWarn.apply(console, args);
+                    addLogToUI("warn", args);
+                };
+
+                console.error = function (...args) {
+                    originalError.apply(console, args);
+                    addLogToUI("error", args);
+                };
+
+                console.info = function (...args) {
+                    originalInfo.apply(console, args);
+                    addLogToUI("info", args);
+                };
+
+                window.addEventListener("error", function (event) {
+                    addLogToUI("error", [
+                        `Uncaught Error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
+                    ]);
+                });
+
+                window.addEventListener("unhandledrejection", function (event) {
+                    addLogToUI("error", [
+                        `Unhandled Promise Rejection: ${event.reason}`,
+                    ]);
+                });
+
+                // Wire up UI events once DOM is loaded
+                document.addEventListener("DOMContentLoaded", () => {
+                    const output = document.getElementById("debug-log-output");
+                    const countBadge =
+                        document.getElementById("debug-log-count");
+
+                    if (countBadge) {
+                        countBadge.textContent = window.capturedLogs.length;
+                    }
+
+                    if (output) {
+                        // Replay logs captured during initialization
+                        window.capturedLogs.forEach((logEntry) => {
+                            const div = document.createElement("div");
+                            div.className = `log-line log-${logEntry.type}`;
+
+                            const timeSpan = document.createElement("span");
+                            timeSpan.className = "log-time";
+                            timeSpan.textContent = `[${logEntry.time}] `;
+
+                            const textSpan = document.createElement("span");
+                            textSpan.className = "log-text";
+                            textSpan.textContent = logEntry.message;
+
+                            div.appendChild(timeSpan);
+                            div.appendChild(textSpan);
+                            output.appendChild(div);
+                        });
+                        output.scrollTop = output.scrollHeight;
+                    }
+
+                    // Setup controls
+                    const debugPanel = document.getElementById("debug-panel");
+                    const debugToggleBtn =
+                        document.getElementById("debug-toggle-btn");
+                    const debugHeader = document.getElementById("debug-header");
+                    const debugClearBtn =
+                        document.getElementById("debug-clear-btn");
+                    const debugCopyBtn =
+                        document.getElementById("debug-copy-btn");
+
+                    function toggleDebugPanel() {
+                        if (debugPanel.classList.contains("collapsed")) {
+                            debugPanel.classList.remove("collapsed");
+                            debugPanel.classList.add("expanded");
+                            debugToggleBtn.textContent = "Collapse";
+                            if (output) {
+                                output.scrollTop = output.scrollHeight;
+                            }
+                        } else {
+                            debugPanel.classList.remove("expanded");
+                            debugPanel.classList.add("collapsed");
+                            debugToggleBtn.textContent = "Expand";
+                        }
+                    }
+
+                    if (debugToggleBtn && debugHeader && debugPanel) {
+                        debugToggleBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            toggleDebugPanel();
+                        });
+                        debugHeader.addEventListener("click", () => {
+                            toggleDebugPanel();
+                        });
+                    }
+
+                    if (debugClearBtn) {
+                        debugClearBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            window.capturedLogs = [];
+                            if (output) {
+                                output.innerHTML = "";
+                            }
+                            if (countBadge) {
+                                countBadge.textContent = "0";
+                            }
+                        });
+                    }
+
+                    if (debugCopyBtn) {
+                        debugCopyBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            const textToCopy = window.capturedLogs
+                                .map(
+                                    (log) =>
+                                        `[${log.time}] [${log.type.toUpperCase()}] ${log.message}`,
+                                )
+                                .join("\n");
+
+                            if (navigator.clipboard && window.isSecureContext) {
+                                navigator.clipboard
+                                    .writeText(textToCopy)
+                                    .then(() => {
+                                        showCopied();
+                                    })
+                                    .catch((err) => {
+                                        fallbackCopy(textToCopy);
+                                    });
+                            } else {
+                                fallbackCopy(textToCopy);
+                            }
+
+                            function showCopied() {
+                                debugCopyBtn.textContent = "Copied!";
+                                setTimeout(() => {
+                                    debugCopyBtn.textContent = "Copy";
+                                }, 1500);
+                            }
+
+                            function fallbackCopy(text) {
+                                try {
+                                    const textArea =
+                                        document.createElement("textarea");
+                                    textArea.value = text;
+                                    textArea.style.position = "fixed";
+                                    textArea.style.opacity = "0";
+                                    document.body.appendChild(textArea);
+                                    textArea.focus();
+                                    textArea.select();
+                                    document.execCommand("copy");
+                                    document.body.removeChild(textArea);
+                                    showCopied();
+                                } catch (err) {
+                                    originalError("Failed to copy logs:", err);
+                                }
+                            }
+                        });
+                    }
+                });
+            })();
+        </script>
+
         <style>
             @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap");
 
@@ -37,7 +275,7 @@
                 background: var(--bg-gradient);
                 color: var(--text);
                 min-height: 100vh;
-                padding: 40px 20px;
+                padding: 40px 20px 80px 20px;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
@@ -456,6 +694,162 @@
                 font-family: "JetBrains Mono", monospace;
                 text-shadow: 0 0 15px rgba(229, 160, 13, 0.35);
             }
+
+            /* --- COLLAPSIBLE DEBUG PANEL --- */
+            .debug-panel {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: rgba(10, 11, 15, 0.95);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+                border-top: 1px solid var(--card-border);
+                box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.8);
+                z-index: 9999;
+                font-family: "Inter", sans-serif;
+                transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                display: flex;
+                flex-direction: column;
+            }
+
+            .debug-panel.collapsed {
+                height: 45px;
+            }
+
+            .debug-panel.expanded {
+                height: 350px;
+            }
+
+            .debug-header {
+                height: 45px;
+                padding: 0 20px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                background: rgba(255, 255, 255, 0.02);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                cursor: pointer;
+                user-select: none;
+            }
+
+            .debug-title {
+                font-family: "Outfit", sans-serif;
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: var(--text-muted);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+
+            .debug-dot {
+                width: 6px;
+                height: 6px;
+                background: var(--primary);
+                border-radius: 50%;
+                box-shadow: 0 0 8px var(--primary);
+            }
+
+            .debug-actions {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            button.debug-action-btn {
+                width: auto !important;
+                padding: 6px 12px !important;
+                margin: 0 !important;
+                font-size: 0.75rem !important;
+                font-weight: 600 !important;
+                border-radius: 6px !important;
+                height: auto !important;
+                line-height: 1.2 !important;
+                box-shadow: none !important;
+                text-transform: none !important;
+                letter-spacing: normal !important;
+            }
+
+            #debug-toggle-btn {
+                background: rgba(255, 255, 255, 0.08) !important;
+                color: var(--text) !important;
+                border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            }
+            #debug-toggle-btn:hover {
+                background: rgba(255, 255, 255, 0.15) !important;
+            }
+
+            #debug-clear-btn {
+                background: rgba(239, 68, 68, 0.1) !important;
+                color: var(--danger-hover) !important;
+                border: 1px solid rgba(239, 68, 68, 0.2) !important;
+            }
+            #debug-clear-btn:hover {
+                background: rgba(239, 68, 68, 0.25) !important;
+            }
+
+            #debug-copy-btn {
+                background: rgba(229, 160, 13, 0.1) !important;
+                color: var(--primary) !important;
+                border: 1px solid rgba(229, 160, 13, 0.2) !important;
+            }
+            #debug-copy-btn:hover {
+                background: rgba(229, 160, 13, 0.2) !important;
+            }
+
+            .debug-log-output {
+                flex: 1;
+                overflow-y: auto;
+                padding: 15px 20px;
+                font-family: "JetBrains Mono", monospace;
+                font-size: 0.78rem;
+                line-height: 1.5;
+                background: rgba(10, 11, 15, 0.6);
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .log-line {
+                display: flex;
+                align-items: flex-start;
+                word-break: break-all;
+                white-space: pre-wrap;
+                padding: 4px 6px;
+                border-radius: 4px;
+            }
+
+            .log-time {
+                color: var(--text-muted);
+                margin-right: 8px;
+                user-select: none;
+                flex-shrink: 0;
+            }
+
+            .log-text {
+                flex: 1;
+            }
+
+            .log-log,
+            .log-info {
+                color: var(--text);
+                background: rgba(255, 255, 255, 0.01);
+            }
+
+            .log-warn {
+                color: #fbbf24;
+                background: rgba(251, 191, 36, 0.04);
+                border-left: 2px solid #fbbf24;
+            }
+
+            .log-error {
+                color: #f87171;
+                background: rgba(239, 68, 68, 0.05);
+                border-left: 2px solid #f87171;
+            }
         </style>
     </head>
     <body>
@@ -498,13 +892,65 @@
                         color: var(--text-muted);
                     "
                 >
-                    Enter this linking code on Plex, or copy/paste the link below:
+                    Enter this linking code on Plex, or copy/paste the link
+                    below:
                 </p>
                 <div id="pin-code" class="pin-display">----</div>
-                <div id="auth-link-container" style="margin: 20px 0; text-align: left; width: 100%;">
-                    <label for="auth-link-text" style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 6px;">Authorization URL</label>
-                    <input type="text" id="auth-link-text" readonly style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: #1a1a1a; border: 1px solid #444; color: #fff; border-radius: 8px; font-family: monospace; font-size: 0.85em; outline: none; margin-bottom: 8px;" onclick="this.select()" />
-                    <button id="copy-auth-link-btn" style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: var(--accent); color: #fff; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95em; transition: background 0.2s;" onmouseover="this.style.background='#ffb71c'" onmouseout="this.style.background='var(--accent)'">Copy Link to Clipboard</button>
+                <div
+                    id="auth-link-container"
+                    style="margin: 20px 0; text-align: left; width: 100%"
+                >
+                    <label
+                        for="auth-link-text"
+                        style="
+                            display: block;
+                            font-size: 0.85rem;
+                            color: var(--text-muted);
+                            margin-bottom: 6px;
+                        "
+                        >Authorization URL</label
+                    >
+                    <input
+                        type="text"
+                        id="auth-link-text"
+                        readonly
+                        style="
+                            display: block;
+                            width: 100%;
+                            box-sizing: border-box;
+                            padding: 12px;
+                            background: #1a1a1a;
+                            border: 1px solid #444;
+                            color: #fff;
+                            border-radius: 8px;
+                            font-family: monospace;
+                            font-size: 0.85em;
+                            outline: none;
+                            margin-bottom: 8px;
+                        "
+                        onclick="this.select()"
+                    />
+                    <button
+                        id="copy-auth-link-btn"
+                        style="
+                            display: block;
+                            width: 100%;
+                            box-sizing: border-box;
+                            padding: 12px;
+                            background: var(--accent);
+                            color: #fff;
+                            font-weight: bold;
+                            border: none;
+                            border-radius: 8px;
+                            cursor: pointer;
+                            font-size: 0.95em;
+                            transition: background 0.2s;
+                        "
+                        onmouseover="this.style.background = '#ffb71c'"
+                        onmouseout="this.style.background = 'var(--accent)'"
+                    >
+                        Copy Link to Clipboard
+                    </button>
                 </div>
                 <div id="auth-status">Waiting for validation...</div>
             </div>
@@ -657,6 +1103,144 @@
                     <span id="time-display">00:00 / 00:00</span>
                 </div>
             </div>
+            <!-- Image Adjustments Settings panel -->
+            <div
+                id="image-settings-panel"
+                style="
+                    margin-top: 25px;
+                    padding: 20px;
+                    background: rgba(10, 11, 15, 0.6);
+                    border: 1px solid var(--card-border);
+                    border-radius: 12px;
+                "
+            >
+                <h4
+                    style="
+                        color: var(--primary);
+                        margin-top: 0;
+                        margin-bottom: 15px;
+                        font-size: 1rem;
+                        text-transform: uppercase;
+                        letter-spacing: 0.05em;
+                    "
+                >
+                    Glasses Image Adjustments
+                </h4>
+
+                <div
+                    style="
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 15px;
+                        margin-bottom: 15px;
+                    "
+                >
+                    <div>
+                        <label
+                            for="img-brightness"
+                            style="margin-bottom: 4px; font-size: 0.75rem"
+                            >Brightness:
+                            <span id="val-brightness">0</span></label
+                        >
+                        <input
+                            type="range"
+                            id="img-brightness"
+                            min="-100"
+                            max="100"
+                            value="0"
+                            style="padding: 0; height: 6px"
+                        />
+                    </div>
+                    <div>
+                        <label
+                            for="img-contrast"
+                            style="margin-bottom: 4px; font-size: 0.75rem"
+                            >Contrast: <span id="val-contrast">0</span></label
+                        >
+                        <input
+                            type="range"
+                            id="img-contrast"
+                            min="-100"
+                            max="100"
+                            value="0"
+                            style="padding: 0; height: 6px"
+                        />
+                    </div>
+                </div>
+
+                <div
+                    style="
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 15px;
+                        margin-bottom: 15px;
+                    "
+                >
+                    <div>
+                        <label
+                            for="img-gamma"
+                            style="margin-bottom: 4px; font-size: 0.75rem"
+                            >Gamma: <span id="val-gamma">1.0</span></label
+                        >
+                        <input
+                            type="range"
+                            id="img-gamma"
+                            min="0.5"
+                            max="3.0"
+                            step="0.1"
+                            value="1.0"
+                            style="padding: 0; height: 6px"
+                        />
+                    </div>
+                    <div>
+                        <label
+                            for="img-dither"
+                            style="margin-bottom: 4px; font-size: 0.75rem"
+                            >Dithering Method</label
+                        >
+                        <select
+                            id="img-dither"
+                            style="
+                                padding: 8px 12px;
+                                font-size: 0.85rem;
+                                border-radius: 6px;
+                                background: #1a1a1a;
+                                border: 1px solid var(--card-border);
+                                color: #fff;
+                            "
+                        >
+                            <option value="floyd-steinberg">
+                                Floyd-Steinberg (Standard)
+                            </option>
+                            <option value="atkinson">
+                                Atkinson (Crisp Detail)
+                            </option>
+                            <option value="ordered-4x4">
+                                Ordered Bayer (Patterned)
+                            </option>
+                            <option value="threshold">
+                                High Contrast (No Dither)
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: flex-end">
+                    <button
+                        id="reset-img-btn"
+                        class="btn-secondary"
+                        style="
+                            width: auto;
+                            padding: 6px 15px;
+                            font-size: 0.8rem;
+                            margin: 0;
+                        "
+                    >
+                        Reset Settings
+                    </button>
+                </div>
+            </div>
+
             <button
                 id="close-player-btn"
                 class="btn-secondary"
@@ -678,8 +1262,7 @@
         <script type="module">
             import {
                 waitForEvenAppBridge,
-                TextContainerProperty,
-                ImageContainerProperty,
+                ImageRawDataUpdate,
             } from "@evenrealities/even_hub_sdk";
 
             // --- APPLICATION METADATA FOR HEADERS ---
@@ -699,6 +1282,12 @@
             let pollIntervalId = null;
             let plexServers = [];
             let libraryTypes = {};
+
+            // --- ADVANCED IMAGE PREVIEW STATE ---
+            let brightnessValue = 0;
+            let contrastValue = 0;
+            let gammaValue = 1.0;
+            let ditherAlgorithm = "floyd-steinberg";
 
             // --- EVEN HARDWARE STATE WRAPPERS ---
             let bridgeInstance = null;
@@ -748,11 +1337,8 @@
                     statusDiv.textContent =
                         "Searching for active G2 Webview Environment Hook...";
                     bridgeInstance = await waitForEvenAppBridge();
-                    statusDiv.textContent =
-                        "G2 Glass Engine Connected via BLE!";
-                    if (indicator) indicator.classList.add("active");
 
-                    glassesSubtitleContainer = new TextContainerProperty({
+                    glassesSubtitleContainer = {
                         xPosition: 0,
                         yPosition: 200,
                         width: 576,
@@ -761,27 +1347,34 @@
                         containerID: 1,
                         containerName: "g2_subs",
                         content: "Awaiting Sign-In...",
-                        isEventCapture: 0,
-                    });
+                        isEventCapture: 1, // designates subtitle container as primary event receiver
+                    };
 
-                    glassesImageContainer = new ImageContainerProperty({
-                        xPosition: 168,
+                    glassesImageContainer = {
+                        xPosition: 144,
                         yPosition: 20,
-                        width: 240,
-                        height: 135,
+                        width: 288,
+                        height: 144,
                         containerID: 2,
                         containerName: "g2_bif",
-                        isEventCapture: 0,
-                    });
+                    };
 
-                    await bridgeInstance.callEvenApp(
-                        "createContainer",
-                        glassesImageContainer,
-                    );
-                    await bridgeInstance.callEvenApp(
-                        "createContainer",
-                        glassesSubtitleContainer,
-                    );
+                    const result =
+                        await bridgeInstance.createStartUpPageContainer({
+                            containerTotalNum: 2,
+                            textObject: [glassesSubtitleContainer],
+                            imageObject: [glassesImageContainer],
+                        });
+
+                    if (result === 0) {
+                        statusDiv.textContent =
+                            "G2 Glass Engine Connected via BLE!";
+                        if (indicator) indicator.classList.add("active");
+                    } else {
+                        throw new Error(
+                            `Startup container creation failed with result ${result}`,
+                        );
+                    }
                 } catch (err) {
                     statusDiv.textContent =
                         "G2 App Bridge Offline (Browser Preview Loop Active)";
@@ -817,39 +1410,50 @@
                     document.getElementById("pin-code").textContent = pinCode;
 
                     const authUrl = `https://app.plex.tv/auth#?clientID=${CLIENT_ID}&code=${pinCode}&context%5Bdevice%5D%5Bproduct%5D=${encodeURIComponent(APP_NAME)}&forwardURL=${location.href}`;
-                    
-                    const authLinkText = document.getElementById("auth-link-text");
+
+                    const authLinkText =
+                        document.getElementById("auth-link-text");
                     if (authLinkText) {
                         authLinkText.value = authUrl;
                         authLinkText.setAttribute("value", authUrl);
-                        
-                        const copyBtn = document.getElementById("copy-auth-link-btn");
+
+                        const copyBtn =
+                            document.getElementById("copy-auth-link-btn");
                         if (copyBtn) {
                             copyBtn.onclick = () => {
                                 const urlToCopy = authUrl;
-                                
-                                if (navigator.clipboard && window.isSecureContext) {
-                                    navigator.clipboard.writeText(urlToCopy).then(() => {
-                                        showCopied();
-                                    }).catch(err => {
-                                        fallbackCopy(urlToCopy);
-                                    });
+
+                                if (
+                                    navigator.clipboard &&
+                                    window.isSecureContext
+                                ) {
+                                    navigator.clipboard
+                                        .writeText(urlToCopy)
+                                        .then(() => {
+                                            showCopied();
+                                        })
+                                        .catch((err) => {
+                                            fallbackCopy(urlToCopy);
+                                        });
                                 } else {
                                     fallbackCopy(urlToCopy);
                                 }
-                                
+
                                 function showCopied() {
                                     copyBtn.textContent = "Copied!";
                                     copyBtn.style.background = "#2ecc71";
                                     setTimeout(() => {
-                                        copyBtn.textContent = "Copy Link to Clipboard";
-                                        copyBtn.style.background = "var(--accent)";
+                                        copyBtn.textContent =
+                                            "Copy Link to Clipboard";
+                                        copyBtn.style.background =
+                                            "var(--accent)";
                                     }, 2000);
                                 }
-                                
+
                                 function fallbackCopy(text) {
                                     try {
-                                        const textArea = document.createElement("textarea");
+                                        const textArea =
+                                            document.createElement("textarea");
                                         textArea.value = text;
                                         textArea.style.top = "0";
                                         textArea.style.left = "0";
@@ -858,57 +1462,80 @@
                                         document.body.appendChild(textArea);
                                         textArea.focus();
                                         textArea.select();
-                                        const successful = document.execCommand("copy");
+                                        const successful =
+                                            document.execCommand("copy");
                                         document.body.removeChild(textArea);
                                         if (successful) {
                                             showCopied();
                                         } else {
-                                            alert("Failed to copy automatically. Please select the URL and copy manually.");
+                                            alert(
+                                                "Failed to copy automatically. Please select the URL and copy manually.",
+                                            );
                                         }
                                     } catch (err) {
-                                        console.error("Fallback copy failed:", err);
-                                        alert("Failed to copy automatically. Please select the URL and copy manually.");
+                                        console.error(
+                                            "Fallback copy failed:",
+                                            err,
+                                        );
+                                        alert(
+                                            "Failed to copy automatically. Please select the URL and copy manually.",
+                                        );
                                     }
                                 }
                             };
                         }
                     } else {
                         // Safe fallback dynamic self-healing container injection (with new block structure)
-                        const container = document.getElementById("auth-link-container");
+                        const container = document.getElementById(
+                            "auth-link-container",
+                        );
                         if (container) {
                             container.innerHTML = `
                                 <label for="auth-link-text" style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 6px;">Authorization URL</label>
                                 <input type="text" id="auth-link-text" readonly value="${authUrl}" style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: #1a1a1a; border: 1px solid #444; color: #fff; border-radius: 8px; font-family: monospace; font-size: 0.85em; outline: none; margin-bottom: 8px;" onclick="this.select()" />
                                 <button id="copy-auth-link-btn" style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: var(--accent); color: #fff; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95em; transition: background 0.2s;" onmouseover="this.style.background='#ffb71c'" onmouseout="this.style.background='var(--accent)'">Copy Link to Clipboard</button>
                             `;
-                            const newCopyBtn = document.getElementById("copy-auth-link-btn");
-                            const newAuthLinkText = document.getElementById("auth-link-text");
+                            const newCopyBtn =
+                                document.getElementById("copy-auth-link-btn");
+                            const newAuthLinkText =
+                                document.getElementById("auth-link-text");
                             if (newCopyBtn && newAuthLinkText) {
                                 newCopyBtn.onclick = () => {
                                     const urlToCopy = authUrl;
-                                    
-                                    if (navigator.clipboard && window.isSecureContext) {
-                                        navigator.clipboard.writeText(urlToCopy).then(() => {
-                                            showCopied();
-                                        }).catch(err => {
-                                            fallbackCopy(urlToCopy);
-                                        });
+
+                                    if (
+                                        navigator.clipboard &&
+                                        window.isSecureContext
+                                    ) {
+                                        navigator.clipboard
+                                            .writeText(urlToCopy)
+                                            .then(() => {
+                                                showCopied();
+                                            })
+                                            .catch((err) => {
+                                                fallbackCopy(urlToCopy);
+                                            });
                                     } else {
                                         fallbackCopy(urlToCopy);
                                     }
-                                    
+
                                     function showCopied() {
                                         newCopyBtn.textContent = "Copied!";
                                         newCopyBtn.style.background = "#2ecc71";
                                         setTimeout(() => {
-                                            newCopyBtn.textContent = "Copy Link to Clipboard";
-                                            newCopyBtn.style.background = "var(--accent)";
+                                            newCopyBtn.textContent =
+                                                "Copy Link to Clipboard";
+                                            newCopyBtn.style.background =
+                                                "var(--accent)";
                                         }, 2000);
                                     }
-                                    
+
                                     function fallbackCopy(text) {
                                         try {
-                                            const textArea = document.createElement("textarea");
+                                            const textArea =
+                                                document.createElement(
+                                                    "textarea",
+                                                );
                                             textArea.value = text;
                                             textArea.style.top = "0";
                                             textArea.style.left = "0";
@@ -917,16 +1544,24 @@
                                             document.body.appendChild(textArea);
                                             textArea.focus();
                                             textArea.select();
-                                            const successful = document.execCommand("copy");
+                                            const successful =
+                                                document.execCommand("copy");
                                             document.body.removeChild(textArea);
                                             if (successful) {
                                                 showCopied();
                                             } else {
-                                                alert("Failed to copy automatically. Please select the URL and copy manually.");
+                                                alert(
+                                                    "Failed to copy automatically. Please select the URL and copy manually.",
+                                                );
                                             }
                                         } catch (err) {
-                                            console.error("Fallback copy failed:", err);
-                                            alert("Failed to copy automatically. Please select the URL and copy manually.");
+                                            console.error(
+                                                "Fallback copy failed:",
+                                                err,
+                                            );
+                                            alert(
+                                                "Failed to copy automatically. Please select the URL and copy manually.",
+                                            );
                                         }
                                     }
                                 };
@@ -1522,12 +2157,13 @@
                     media.title;
 
                 if (bridgeInstance) {
-                    glassesSubtitleContainer.content =
-                        "Unpacking streaming matrix...";
-                    await bridgeInstance.callEvenApp(
-                        "updateContainer",
-                        glassesSubtitleContainer,
-                    );
+                    await bridgeInstance.textContainerUpgrade({
+                        containerID: 1,
+                        containerName: "g2_subs",
+                        contentOffset: 0,
+                        contentLength: 0,
+                        content: "Unpacking streaming matrix...",
+                    });
                 }
 
                 const bifUrl = `${SERVER_URL}/library/parts/${media.partId}/indexes/sd?X-Plex-Token=${TOKEN}`;
@@ -1631,24 +2267,247 @@
                 return subs;
             }
 
+            function resizeAndPrepareImage(blob, targetWidth, targetHeight) {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    const objectUrl = URL.createObjectURL(blob);
+                    img.onload = () => {
+                        URL.revokeObjectURL(objectUrl);
+                        try {
+                            const canvas = document.createElement("canvas");
+                            canvas.width = targetWidth;
+                            canvas.height = targetHeight;
+                            const ctx = canvas.getContext("2d");
+                            ctx.clearRect(0, 0, targetWidth, targetHeight);
+                            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+                            const imgData = ctx.getImageData(
+                                0,
+                                0,
+                                targetWidth,
+                                targetHeight,
+                            );
+                            const data = imgData.data;
+                            const w = targetWidth;
+                            const h = targetHeight;
+
+                            const gray = new Float32Array(w * h);
+                            // Precalculate contrast factor
+                            const contrastFactor =
+                                (259 * (contrastValue + 255)) /
+                                (255 * (259 - contrastValue));
+
+                            for (let i = 0; i < w * h; i++) {
+                                const r = data[i * 4];
+                                const g = data[i * 4 + 1];
+                                const b = data[i * 4 + 2];
+
+                                // Convert to luminance greyscale
+                                let v = 0.299 * r + 0.587 * g + 0.114 * b;
+
+                                // 1. Apply Brightness
+                                v += brightnessValue;
+
+                                // 2. Apply Contrast
+                                v = contrastFactor * (v - 128) + 128;
+
+                                // 3. Apply Gamma
+                                if (gammaValue !== 1.0) {
+                                    v =
+                                        255 *
+                                        Math.pow(
+                                            Math.max(0, v) / 255,
+                                            1 / gammaValue,
+                                        );
+                                }
+
+                                // Clamp intermediate values
+                                gray[i] = Math.max(0, Math.min(255, v));
+                            }
+
+                            // Apply selected dithering algorithm
+                            if (ditherAlgorithm === "floyd-steinberg") {
+                                for (let y = 0; y < h; y++) {
+                                    for (let x = 0; x < w; x++) {
+                                        const idx = y * w + x;
+                                        const oldVal = gray[idx];
+
+                                        // Quantize to 16 levels (0-15, mapped to 0-255)
+                                        let level = Math.round(oldVal / 17);
+                                        if (level < 0) level = 0;
+                                        if (level > 15) level = 15;
+                                        const newVal = level * 17;
+                                        gray[idx] = newVal;
+
+                                        const err = oldVal - newVal;
+
+                                        // Diffuse error
+                                        if (x + 1 < w) {
+                                            gray[idx + 1] += (err * 7) / 16;
+                                        }
+                                        if (y + 1 < h) {
+                                            if (x - 1 >= 0) {
+                                                gray[idx + w - 1] +=
+                                                    (err * 3) / 16;
+                                            }
+                                            gray[idx + w] += (err * 5) / 16;
+                                            if (x + 1 < w) {
+                                                gray[idx + w + 1] +=
+                                                    (err * 1) / 16;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (ditherAlgorithm === "atkinson") {
+                                for (let y = 0; y < h; y++) {
+                                    for (let x = 0; x < w; x++) {
+                                        const idx = y * w + x;
+                                        const oldVal = gray[idx];
+
+                                        let level = Math.round(oldVal / 17);
+                                        if (level < 0) level = 0;
+                                        if (level > 15) level = 15;
+                                        const newVal = level * 17;
+                                        gray[idx] = newVal;
+
+                                        const err = oldVal - newVal;
+                                        const errPart = err / 8;
+
+                                        // Atkinson diffuses only 3/8ths of the total error to immediate neighbors
+                                        if (x + 1 < w) gray[idx + 1] += errPart;
+                                        if (x + 2 < w) gray[idx + 2] += errPart;
+                                        if (y + 1 < h) {
+                                            if (x - 1 >= 0)
+                                                gray[idx + w - 1] += errPart;
+                                            gray[idx + w] += errPart;
+                                            if (x + 1 < w)
+                                                gray[idx + w + 1] += errPart;
+                                        }
+                                        if (y + 2 < h) {
+                                            gray[idx + 2 * w] += errPart;
+                                        }
+                                    }
+                                }
+                            } else if (ditherAlgorithm === "ordered-4x4") {
+                                const BAYER_4X4 = [
+                                    [0, 8, 2, 10],
+                                    [12, 4, 14, 6],
+                                    [3, 11, 1, 9],
+                                    [15, 7, 13, 5],
+                                ];
+                                for (let y = 0; y < h; y++) {
+                                    for (let x = 0; x < w; x++) {
+                                        const idx = y * w + x;
+                                        const oldVal = gray[idx];
+
+                                        const level = Math.floor(oldVal / 17);
+                                        const remainder = (oldVal % 17) / 17;
+                                        const threshold =
+                                            (BAYER_4X4[y % 4][x % 4] + 0.5) /
+                                            16;
+
+                                        const newVal =
+                                            (remainder > threshold
+                                                ? level + 1
+                                                : level) * 17;
+                                        gray[idx] = Math.min(255, newVal);
+                                    }
+                                }
+                            } else {
+                                // Threshold / High Contrast (No Dither)
+                                for (let i = 0; i < w * h; i++) {
+                                    let level = Math.round(gray[i] / 17);
+                                    if (level < 0) level = 0;
+                                    if (level > 15) level = 15;
+                                    gray[i] = level * 17;
+                                }
+                            }
+
+                            // Write the dithered greyscale values back to image data array
+                            for (let i = 0; i < w * h; i++) {
+                                const val = Math.min(
+                                    255,
+                                    Math.max(0, Math.round(gray[i])),
+                                );
+                                data[i * 4] = val;
+                                data[i * 4 + 1] = val;
+                                data[i * 4 + 2] = val;
+                                data[i * 4 + 3] = 255; // fully opaque
+                            }
+                            ctx.putImageData(imgData, 0, 0);
+
+                            canvas.toBlob(async (blob) => {
+                                if (!blob) {
+                                    reject(new Error("Canvas toBlob failed"));
+                                    return;
+                                }
+                                try {
+                                    const buffer = await blob.arrayBuffer();
+                                    resolve(new Uint8Array(buffer));
+                                } catch (e) {
+                                    reject(e);
+                                }
+                            }, "image/png");
+                        } catch (err) {
+                            reject(err);
+                        }
+                    };
+                    img.onerror = (err) => {
+                        URL.revokeObjectURL(objectUrl);
+                        reject(err);
+                    };
+                    img.src = objectUrl;
+                });
+            }
+
+            let rendering = Promise.resolve();
             let lastPushedSubText = "";
             async function pushUpdateToGlasses(text, rawBlob) {
                 if (!bridgeInstance) return;
                 try {
                     if (text !== lastPushedSubText) {
                         lastPushedSubText = text;
-                        glassesSubtitleContainer.content = text || " ";
-                        await bridgeInstance.callEvenApp(
-                            "updateContainer",
-                            glassesSubtitleContainer,
-                        );
+                        await bridgeInstance.textContainerUpgrade({
+                            containerID: 1,
+                            containerName: "g2_subs",
+                            contentOffset: 0,
+                            contentLength: 0,
+                            content: text || " ",
+                        });
                     }
                     if (rawBlob) {
-                        const bufferSlice = await rawBlob.arrayBuffer();
-                        await bridgeInstance.callEvenApp("updateImageSource", {
-                            containerID: glassesImageContainer.containerID,
-                            data: bufferSlice,
+                        const preparedBytes = await resizeAndPrepareImage(
+                            rawBlob,
+                            288,
+                            144,
+                        );
+
+                        // Queue the rendering promises sequentially to prevent overlapping BLE writes
+                        rendering = rendering.then(async () => {
+                            const payload =
+                                typeof ImageRawDataUpdate !== "undefined"
+                                    ? new ImageRawDataUpdate({
+                                          containerID: 2,
+                                          containerName: "g2_bif",
+                                          imageData: preparedBytes,
+                                      })
+                                    : {
+                                          containerID: 2,
+                                          containerName: "g2_bif",
+                                          imageData: preparedBytes,
+                                      };
+                            const result =
+                                await bridgeInstance.updateImageRawData(
+                                    payload,
+                                );
+                            console.log("updateImageRawData result:", result);
+                            if (result !== "success") {
+                                console.warn(
+                                    `updateImageRawData failed with status: ${result}`,
+                                );
+                            }
                         });
+                        await rendering;
                     }
                 } catch (e) {
                     console.error("BLE drop frame: ", e);
@@ -1669,9 +2528,13 @@
                 let cleanSubText = sub ? sub.text.replace(/<[^>]*>/g, "") : "";
                 let newImageBlobPushed = null;
 
-                if (frame && imgTag.src !== frame.url) {
-                    imgTag.src = frame.url;
-                    newImageBlobPushed = frame.rawBlobData;
+                if (frame) {
+                    if (imgTag.src !== frame.url) {
+                        imgTag.src = frame.url;
+                        newImageBlobPushed = frame.rawBlobData;
+                    } else if (forcePushGlasses) {
+                        newImageBlobPushed = frame.rawBlobData;
+                    }
                 }
 
                 if (subDiv.innerHTML !== (sub ? sub.text : "")) {
@@ -1790,8 +2653,85 @@
 
             document.getElementById("close-player-btn").onclick = resetPlayer;
 
+            // --- IMAGE ADJUSTMENTS HANDLERS ---
+            const brightnessSlider = document.getElementById("img-brightness");
+            const contrastSlider = document.getElementById("img-contrast");
+            const gammaSlider = document.getElementById("img-gamma");
+            const ditherSelect = document.getElementById("img-dither");
+
+            const valBrightness = document.getElementById("val-brightness");
+            const valContrast = document.getElementById("val-contrast");
+            const valGamma = document.getElementById("val-gamma");
+
+            brightnessSlider.oninput = (e) => {
+                brightnessValue = Number(e.target.value);
+                valBrightness.textContent =
+                    brightnessValue > 0
+                        ? `+${brightnessValue}`
+                        : brightnessValue;
+                updateUI(true);
+            };
+
+            contrastSlider.oninput = (e) => {
+                contrastValue = Number(e.target.value);
+                valContrast.textContent =
+                    contrastValue > 0 ? `+${contrastValue}` : contrastValue;
+                updateUI(true);
+            };
+
+            gammaSlider.oninput = (e) => {
+                gammaValue = Number(e.target.value);
+                valGamma.textContent = gammaValue.toFixed(1);
+                updateUI(true);
+            };
+
+            ditherSelect.onchange = (e) => {
+                ditherAlgorithm = e.target.value;
+                updateUI(true);
+            };
+
+            document.getElementById("reset-img-btn").onclick = () => {
+                brightnessValue = 0;
+                contrastValue = 0;
+                gammaValue = 1.0;
+                ditherAlgorithm = "floyd-steinberg";
+
+                brightnessSlider.value = 0;
+                contrastSlider.value = 0;
+                gammaSlider.value = 1.0;
+                ditherSelect.value = "floyd-steinberg";
+
+                valBrightness.textContent = "0";
+                valContrast.textContent = "0";
+                valGamma.textContent = "1.0";
+
+                updateUI(true);
+            };
+
             // Run startup authentication and layout initializations
             initApp();
         </script>
+
+        <!-- Collapsible On-Page Debug Drawer -->
+        <div id="debug-panel" class="debug-panel collapsed">
+            <div id="debug-header" class="debug-header">
+                <div class="debug-title">
+                    <span class="debug-dot"></span>
+                    Debug Console (<span id="debug-log-count">0</span>)
+                </div>
+                <div class="debug-actions">
+                    <button id="debug-copy-btn" class="debug-action-btn">
+                        Copy
+                    </button>
+                    <button id="debug-clear-btn" class="debug-action-btn">
+                        Clear
+                    </button>
+                    <button id="debug-toggle-btn" class="debug-action-btn">
+                        Expand
+                    </button>
+                </div>
+            </div>
+            <div id="debug-log-output" class="debug-log-output"></div>
+        </div>
     </body>
 </html>
