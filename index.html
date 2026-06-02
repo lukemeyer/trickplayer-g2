@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plex JWT G2 Sync Bridge</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+
+    :root {
+      --primary: #e5a00d;
+      --primary-hover: #ffb822;
+      --primary-glow: rgba(229, 160, 13, 0.15);
+      --bg-gradient: radial-gradient(circle at top, #1a1c23 0%, #0d0e12 100%);
+      --card-bg: rgba(26, 28, 36, 0.65);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --danger: #ef4444;
+      --danger-hover: #f87171;
+      --success: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 40px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow-x: hidden;
+    }
+
+    /* --- HEADER --- */
+    .header {
+      text-align: center;
+      margin-bottom: 35px;
+    }
+
+    .header h1 {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 2.25rem;
+      color: #fff;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #fff 40%, var(--primary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header p {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+    }
+
+    /* --- GLASS PANEL --- */
+    .section {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      padding: 30px;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 600px;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .section::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, transparent, var(--primary), transparent);
+    }
+
+    h2, h3 {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    h2 {
+      font-size: 1.4rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h2::before {
+      content: '';
+      display: inline-block;
+      width: 4px;
+      height: 20px;
+      background: var(--primary);
+      border-radius: 2px;
+    }
+
+    .hidden {
+      display: none !important;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* --- INPUT GROUPS --- */
+    .input-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(10, 11, 15, 0.8);
+      border: 1px solid var(--card-border);
+      color: #fff;
+      font-size: 0.95rem;
+      border-radius: 10px;
+      outline: none;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
+    /* --- BUTTONS --- */
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--primary) 0%, #cc7b19 100%);
+      color: #0d0e12;
+      border: none;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 0.95rem;
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(229, 160, 13, 0.25);
+      transform: translateY(0);
+      margin-bottom: 12px;
+    }
+
+    button:hover {
+      background: linear-gradient(135deg, var(--primary-hover) 0%, var(--primary) 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(229, 160, 13, 0.35);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button:disabled {
+      background: #27272a;
+      color: #71717a;
+      box-shadow: none;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);
+      margin-top: 8px;
+    }
+
+    .btn-danger:hover {
+      background: linear-gradient(135deg, var(--danger-hover) 0%, var(--danger) 100%);
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: none;
+      margin-top: 8px;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    }
+
+    /* --- MEDIA LISTS --- */
+    #results-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid var(--card-border);
+      background: rgba(10, 11, 15, 0.8);
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    /* Custom scrollbar styling */
+    #results-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    #results-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #results-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+    }
+    #results-list::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .media-item {
+      padding: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .media-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      padding-left: 20px;
+    }
+
+    .media-item:last-child {
+      border-bottom: none;
+    }
+
+    .tags {
+      display: flex;
+      gap: 6px;
+    }
+
+    .tag-badge {
+      background: rgba(229, 160, 13, 0.10);
+      color: var(--primary);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      border: 1px solid rgba(229, 160, 13, 0.2);
+      text-transform: uppercase;
+    }
+
+    /* --- HTML VIDEO PREVIEW / LOCAL MONITOR --- */
+    #player-container {
+      position: relative;
+      width: 100%;
+      background: #000;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 15px;
+      box-shadow: inset 0 0 40px rgba(0,0,0,0.8);
+    }
+
+    #seek-image {
+      width: 100%;
+      height: auto;
+      display: block;
+      aspect-ratio: 16/9;
+      background: #050505;
+      object-fit: contain;
+    }
+
+    #subtitle-overlay {
+      position: absolute;
+      bottom: 24px;
+      left: 20px;
+      right: 20px;
+      text-align: center;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9);
+      pointer-events: none;
+      min-height: 1.6em;
+      line-height: 1.4;
+    }
+
+    #controls {
+      margin-top: 20px;
+      width: 100%;
+    }
+
+    .control-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+    }
+
+    /* Custom range slider styling */
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+      outline: none;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 10px rgba(229, 160, 13, 0.5);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    #time-display {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    /* --- HARDWARE / STATUS BAR --- */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 20px !important;
+      border-left: 4px solid var(--primary);
+    }
+
+    .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 8px var(--primary);
+      position: relative;
+    }
+
+    .status-indicator.active {
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    #even-status {
+      font-size: 0.85rem;
+      font-weight: 550;
+      color: var(--text);
+    }
+
+    #auth-status {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      text-align: center;
+      margin-top: 12px;
+    }
+
+    /* --- PIN EXCHANGE AREA --- */
+    .pin-container {
+      background: rgba(10, 11, 15, 0.9);
+      border: 1px dashed var(--primary);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .pin-display {
+      font-size: 2.75rem;
+      letter-spacing: 8px;
+      font-weight: 800;
+      text-align: center;
+      color: var(--primary);
+      margin: 15px 0;
+      font-family: 'JetBrains Mono', monospace;
+      text-shadow: 0 0 15px rgba(229, 160, 13, 0.35);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER BRANDING -->
+  <div class="header">
+    <h1>Plex JWT G2 Sync Bridge</h1>
+    <p>Even Realities G2 Smart Glasses Media &amp; Subtitle Connector</p>
+  </div>
+
+  <!-- STATUS MONITOR: HARDWARE ATTACHMENT -->
+  <div class="section status-bar">
+    <div id="status-indicator" class="status-indicator"></div>
+    <div id="even-status">Initializing Even Realities G2 SDK Environment...</div>
+  </div>
+
+  <!-- STEP 1: AUTHENTICATION VIA JWT PIN EXCHANGE -->
+  <div id="auth-panel" class="section">
+    <h2>1. Connect via Plex Account</h2>
+    <div class="input-group">
+      <label for="server-url">Server URL Target (e.g., http://192.168.1.50:32400)</label>
+      <input type="text" id="server-url" value="http://localhost:32400">
+    </div>
+    <button id="login-btn">Sign In with Plex</button>
+    
+    <div id="pin-area" class="hidden pin-container">
+      <p style="text-align:center; font-size:0.9em; color: var(--text-muted);">Enter this linking code if prompted, or use the authentication popup window:</p>
+      <div id="pin-code" class="pin-display">----</div>
+      <div id="auth-status">Waiting for validation...</div>
+    </div>
+  </div>
+
+  <!-- STEP 2: DIRECTORY SELECTION -->
+  <div id="library-panel" class="section hidden">
+    <h2>2. Select Library</h2>
+    <div class="input-group">
+      <label for="library-select">Available TV / Movie Sections</label>
+      <select id="library-select"></select>
+    </div>
+    <button id="scan-media-btn">Find Compatible Media (BIF + Subs)</button>
+    <div id="scan-status" style="font-size: 0.85em; color: var(--text-muted); text-align: center; margin-top: 10px;"></div>
+    <button id="logout-btn-1" class="btn-danger">Disconnect Plex Account</button>
+  </div>
+
+  <!-- STEP 3: CONTENT ITEM MATCH SELECTION -->
+  <div id="media-panel" class="section hidden">
+    <h2>3. Select Track For Playback Only</h2>
+    <div id="results-list"></div>
+    <button id="back-to-lib-btn" class="btn-secondary">Back to Libraries</button>
+    <button id="logout-btn-2" class="btn-danger">Disconnect Plex Account</button>
+  </div>
+
+  <!-- STEP 4: MONITOR & HARDWARE SYNC CONTROLS -->
+  <div id="player-panel" class="section hidden">
+    <h3>Playing: <span id="playing-title" style="color:var(--primary); font-weight:600"></span></h3>
+    <div id="player-container">
+      <img id="seek-image" alt="Pre-loading frame index buffers..." />
+      <div id="subtitle-overlay"></div>
+    </div>
+    <div id="controls">
+      <input type="range" id="timeline" min="0" max="100" value="0">
+      <div class="control-row">
+        <button id="play-btn" style="width: auto; padding: 10px 30px; margin-bottom: 0;">Play</button>
+        <span id="time-display">00:00 / 00:00</span>
+      </div>
+    </div>
+    <button id="close-player-btn" class="btn-secondary" style="margin-top: 20px;">Close Stream and Reset Layout</button>
+  </div>
+
+  <!-- Import Map Configuration to Bind Even Realities Web Ecosystem Libraries -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@evenrealities/even_hub_sdk": "https://cdn.jsdelivr.net/npm/@evenrealities/even_hub_sdk/+esm"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import { waitForEvenAppBridge, TextContainerProperty, ImageContainerProperty } from '@evenrealities/even_hub_sdk';
+
+    // --- APPLICATION METADATA FOR HEADERS ---
+    const CLIENT_ID = "EvenG2PlexBridgeClient2026"; 
+    const APP_NAME = "Even G2 Plex Media Bridge";
+
+    // --- APPLICATION RUNTIME STATE ---
+    let SERVER_URL = "";
+    let TOKEN = ""; 
+    let bifs = [];
+    let subtitles = [];
+    let durationMs = 0;
+    let currentTimeMs = 0;
+    let isPlaying = false;
+    let lastFrameTime = 0;
+    let animationFrameId = null;
+    let pollIntervalId = null;
+
+    // --- EVEN HARDWARE STATE WRAPPERS ---
+    let bridgeInstance = null;
+    let glassesSubtitleContainer = null;
+    let glassesImageContainer = null;
+
+    // --- DOM ELEMENT OBJECT CACHES ---
+    const statusDiv = document.getElementById('even-status');
+    const indicator = document.getElementById('status-indicator');
+    const authStatus = document.getElementById('auth-status');
+    const imgTag = document.getElementById('seek-image');
+    const subDiv = document.getElementById('subtitle-overlay');
+    const timeline = document.getElementById('timeline');
+    const playBtn = document.getElementById('play-btn');
+    const timeDisplay = document.getElementById('time-display');
+
+    // --- SYSTEM INITIALIZATION: HARDWARE & TOKEN CHECK ---
+    async function initApp() {
+      // 1. Initialize Glasses Frame Bridge
+      await initEvenBridge();
+
+      // 2. Check for existing session token in localStorage
+      const cachedToken = localStorage.getItem('plex_jwt_token');
+      const cachedUrl = localStorage.getItem('plex_server_url');
+
+      if (cachedToken && cachedUrl) {
+        TOKEN = cachedToken;
+        SERVER_URL = cachedUrl;
+        
+        // Inject values back into form fields for visibility
+        document.getElementById('server-url').value = SERVER_URL;
+        
+        statusDiv.textContent = "Active Plex session restored from storage.";
+        if (indicator) indicator.classList.add('active');
+        document.getElementById('auth-panel').classList.add('hidden');
+        
+        // Auto-advance directly to the library selection menu
+        fetchLibraries();
+      }
+    }
+
+    async function initEvenBridge() {
+      try {
+        statusDiv.textContent = "Searching for active G2 Webview Environment Hook...";
+        bridgeInstance = await waitForEvenAppBridge();
+        statusDiv.textContent = "G2 Glass Engine Connected via BLE!";
+        if (indicator) indicator.classList.add('active');
+
+        glassesSubtitleContainer = new TextContainerProperty({
+          xPosition: 0, yPosition: 200, width: 576, height: 88, borderWidth: 0,
+          containerID: 1, containerName: 'g2_subs', content: 'Awaiting Sign-In...', isEventCapture: 0
+        });
+
+        glassesImageContainer = new ImageContainerProperty({
+          xPosition: 168, yPosition: 20, width: 240, height: 135,
+          containerID: 2, containerName: 'g2_bif', isEventCapture: 0
+        });
+
+        await bridgeInstance.callEvenApp('createContainer', glassesImageContainer);
+        await bridgeInstance.callEvenApp('createContainer', glassesSubtitleContainer);
+      } catch (err) {
+        statusDiv.textContent = "G2 App Bridge Offline (Browser Preview Loop Active)";
+        // Leave indicator orange to signify local sandbox / emulator mode
+      }
+    }
+
+    // --- STEP 1: PIN AUTHENTICATION ENGINE ---
+    async function beginPlexAuthExchange() {
+      SERVER_URL = document.getElementById('server-url').value;
+      if (!SERVER_URL) return alert("Please specify a valid Target Server URL.");
+
+      document.getElementById('pin-area').classList.remove('hidden');
+      authStatus.textContent = "Requesting verification codes from Plex...";
+
+      try {
+        const res = await fetch('https://plex.tv/api/v2/pins', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-Plex-Product': APP_NAME,
+            'X-Plex-Client-Identifier': CLIENT_ID
+          },
+          body: JSON.stringify({ strong: true }) 
+        });
+
+        if (!res.ok) throw new Error("Could not initialize Pin validation handshake.");
+        const data = await res.json();
+        const pinId = data.id;
+        const pinCode = data.code;
+        document.getElementById('pin-code').textContent = pinCode;
+        
+        const authUrl = `https://app.plex.tv/auth#?clientID=${CLIENT_ID}&code=${pinCode}&context%5Bdevice%5D%5Bproduct%5D=${encodeURIComponent(APP_NAME)}`;
+        const authPopup = window.open(authUrl, 'PlexAuthPopup', 'width=600,height=700');
+        authStatus.textContent = "Awaiting authorization confirmation...";
+        
+        pollIntervalId = setInterval(() => {
+          checkPinVerificationStatus(pinId, authPopup);
+        }, 3000);
+      } catch (e) {
+        authStatus.textContent = `Authentication Initialization Failure: ${e.message}`;
+      }
+    }
+
+    async function checkPinVerificationStatus(pinId, popupRef) {
+      try {
+        const res = await fetch(`https://plex.tv/api/v2/pins/${pinId}`, {
+          headers: {
+            'Accept': 'application/json',
+            'X-Plex-Client-Identifier': CLIENT_ID
+          }
+        });
+        const data = await res.json();
+        if (data.authToken) {
+          clearInterval(pollIntervalId);
+          TOKEN = data.authToken;
+          
+          // Save credentials permanently to local storage strings
+          localStorage.setItem('plex_jwt_token', TOKEN);
+          localStorage.setItem('plex_server_url', SERVER_URL);
+          authStatus.textContent = "Login verified and session saved!";
+          
+          if (popupRef && !popupRef.closed) popupRef.close();
+          document.getElementById('auth-panel').classList.add('hidden');
+          fetchLibraries();
+        }
+      } catch (e) {
+        console.error("Polling resolution tracking update anomaly:", e);
+      }
+    }
+
+    // --- SESSION REVOCATION / DISCONNECT ---
+    function disconnectAccount() {
+      // Clear variable references
+      TOKEN = "";
+      SERVER_URL = "";
+      // Wipe persistent browser cache records
+      localStorage.removeItem('plex_jwt_token');
+      localStorage.removeItem('plex_server_url');
+      // Reset UI layouts
+      document.getElementById('library-panel').classList.add('hidden');
+      document.getElementById('media-panel').classList.add('hidden');
+      document.getElementById('player-panel').classList.add('hidden');
+      document.getElementById('pin-area').classList.add('hidden');
+      document.getElementById('auth-panel').classList.remove('hidden');
+      if (bridgeInstance) {
+        pushUpdateToGlasses("Account Disconnected.", null);
+      }
+      alert("Logged out successfully. Local storage credentials dropped.");
+    }
+
+    // --- STEP 2 & 3: MEDIA EXPLORATION VIA TOKEN ---
+    async function plexFetch(endpoint) {
+      const cleanUrl = SERVER_URL.replace(/\/$/, "");
+      const url = `${cleanUrl}${endpoint}${endpoint.includes('?') ? '&' : '?'}X-Plex-Token=${TOKEN}`;
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error(`Plex Server Error ${res.status}`);
+      return await res.json();
+    }
+
+    async function fetchLibraries() {
+      try {
+        const data = await plexFetch('/library/sections');
+        const dirs = data.MediaContainer.Directory || [];
+        const select = document.getElementById('library-select');
+        select.innerHTML = '';
+        dirs.forEach(lib => {
+          if (['movie', 'show'].includes(lib.type)) {
+            const opt = document.createElement('option');
+            opt.value = lib.key;
+            opt.text = `${lib.title} (${lib.type})`;
+            select.appendChild(opt);
+          }
+        });
+        document.getElementById('library-panel').classList.remove('hidden');
+      } catch (e) {
+        alert("Failed to view server libraries: " + e.message);
+        disconnectAccount();
+      }
+    }
+
+    async function scanForValidMedia() {
+      const libId = document.getElementById('library-select').value;
+      const scanStatus = document.getElementById('scan-status');
+      const results = document.getElementById('results-list');
+      
+      if (scanStatus) scanStatus.textContent = "Scanning directory trees...";
+      results.innerHTML = '';
+      
+      try {
+        const data = await plexFetch(`/library/sections/${libId}/all`);
+        const items = data.MediaContainer.Metadata || [];
+        const validItems = [];
+        
+        items.forEach(item => {
+          if (!item.Media) return;
+          item.Media.forEach(media => {
+            media.Part.forEach(part => {
+              const hasBif = part.indexes && part.indexes.includes('sd');
+              const subStream = part.Stream ? part.Stream.find(s => s.streamType === 3) : null;
+              if (hasBif && subStream) {
+                validItems.push({ title: item.title, partId: part.id, subId: subStream.id, subCodec: subStream.codec, res: media.videoResolution });
+              }
+            });
+          });
+        });
+        
+        if (validItems.length === 0) {
+          results.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted)">No compatible items containing both BIF and internal Subtitles were found in this library.</div>';
+        } else {
+          validItems.forEach(match => {
+            const div = document.createElement('div');
+            div.className = 'media-item';
+            div.innerHTML = `<span>${match.title}</span><span class="tags"><span class="tag-badge">${match.res}p</span><span class="tag-badge">${match.subCodec}</span></span>`;
+            div.onclick = () => loadPlayer(match);
+            results.appendChild(div);
+          });
+        }
+        
+        if (scanStatus) scanStatus.textContent = "";
+        document.getElementById('library-panel').classList.add('hidden');
+        document.getElementById('media-panel').classList.remove('hidden');
+      } catch (e) {
+        if (scanStatus) scanStatus.textContent = "Error scanning file tree: " + e.message;
+        else alert("Error scanning file tree: " + e.message);
+      }
+    }
+
+    // --- STEP 4: MOUNT PLAYER RUNTIME & TRANSMIT OVER BLE ---
+    async function loadPlayer(media) {
+      document.getElementById('media-panel').classList.add('hidden');
+      document.getElementById('player-panel').classList.remove('hidden');
+      document.getElementById('playing-title').textContent = media.title;
+      
+      const bifUrl = `${SERVER_URL}/library/parts/${media.partId}/indexes/sd?X-Plex-Token=${TOKEN}`;
+      const subUrl = `${SERVER_URL}/library/streams/${media.subId}?X-Plex-Token=${TOKEN}`;
+      
+      try {
+        if (bridgeInstance) {
+          glassesSubtitleContainer.content = "Unpacking streaming matrix...";
+          await bridgeInstance.callEvenApp('updateContainer', glassesSubtitleContainer);
+        }
+        
+        const [bifRes, subRes] = await Promise.all([fetch(bifUrl), fetch(subUrl)]);
+        bifs = decodeBif(await bifRes.arrayBuffer());
+        subtitles = parseSubtitles(await subRes.text());
+        
+        durationMs = bifs[bifs.length - 1].timestampMs;
+        timeline.max = durationMs;
+        currentTimeMs = 0;
+        updateUI(true);
+      } catch (e) {
+        alert("Failed to decode requested data structures: " + e.message);
+        resetPlayer();
+      }
+    }
+
+    function decodeBif(buffer) {
+      const view = new DataView(buffer);
+      const count = view.getUint32(12, true);
+      const frames = [];
+      let offset = 64;
+      
+      for (let i = 0; i < count; i++) {
+        const ts = view.getUint32(offset, true) * 1000;
+        const start = view.getUint32(offset + 4, true);
+        const end = (i === count - 1) ? buffer.byteLength : view.getUint32(offset + 12, true);
+        const segment = buffer.slice(start, end);
+        const rawBlobData = new Blob([segment], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(rawBlobData);
+        frames.push({ timestampMs: ts, url, rawBlobData });
+        offset += 8;
+      }
+      return frames;
+    }
+
+    function parseSubtitles(text) {
+      const subs = [];
+      const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const blocks = cleanText.split('\n\n');
+
+      const timeRegex = /(\d{1,2})?:?(\d{2}):(\d{2})[,.](\d{3})/;
+
+      function timeToMs(timeStr) {
+        if (!timeStr) return 0;
+        const match = timeStr.trim().match(timeRegex);
+        if (!match) return 0;
+        const hours = match[1] ? parseInt(match[1], 10) : 0;
+        const minutes = parseInt(match[2], 10);
+        const seconds = parseInt(match[3], 10);
+        const ms = parseInt(match[4], 10);
+        return ((hours * 3600) + (minutes * 60) + seconds) * 1000 + ms;
+      }
+
+      for (const block of blocks) {
+        const lines = block.trim().split('\n');
+        const timeLineIndex = lines.findIndex(l => l.includes('-->'));
+        if (timeLineIndex !== -1) {
+          const timeLine = lines[timeLineIndex];
+          const [startStr, endStr] = timeLine.split('-->');
+          const textLines = lines.slice(timeLineIndex + 1);
+          
+          const startMs = timeToMs(startStr);
+          const endMs = timeToMs(endStr);
+          const subText = textLines.join('<br>');
+          
+          if (subText) {
+            subs.push({ startMs, endMs, text: subText });
+          }
+        }
+      }
+      return subs;
+    }
+
+    let lastPushedSubText = "";
+    async function pushUpdateToGlasses(text, rawBlob) {
+      if (!bridgeInstance) return;
+      try {
+        if (text !== lastPushedSubText) {
+          lastPushedSubText = text;
+          glassesSubtitleContainer.content = text || " ";
+          await bridgeInstance.callEvenApp('updateContainer', glassesSubtitleContainer);
+        }
+        if (rawBlob) {
+          const bufferSlice = await rawBlob.arrayBuffer();
+          await bridgeInstance.callEvenApp('updateImageSource', {
+            containerID: glassesImageContainer.containerID,
+            data: bufferSlice
+          });
+        }
+      } catch (e) {
+        console.error("BLE drop frame: ", e);
+      }
+    }
+
+    function updateUI(forcePushGlasses = false) {
+      const frame = bifs.find((f, i) => f.timestampMs <= currentTimeMs && (bifs[i+1]?.timestampMs > currentTimeMs || !bifs[i+1]));
+      const sub = subtitles.find(s => currentTimeMs >= s.startMs && currentTimeMs <= s.endMs);
+      let cleanSubText = sub ? sub.text.replace(/<[^>]*>/g, '') : "";
+      let newImageBlobPushed = null;
+      
+      if (frame && imgTag.src !== frame.url) {
+        imgTag.src = frame.url;
+        newImageBlobPushed = frame.rawBlobData;
+      }
+      
+      if (subDiv.innerHTML !== (sub ? sub.text : "")) {
+        subDiv.innerHTML = sub ? sub.text : "";
+      }
+      
+      timeline.value = currentTimeMs;
+      
+      const fmt = (ms) => {
+        const s = Math.floor(ms / 1000);
+        const m = Math.floor(s / 60);
+        const formattedM = String(m).padStart(2, '0');
+        const formattedS = String(s % 60).padStart(2, '0');
+        return `${formattedM}:${formattedS}`;
+      };
+      
+      timeDisplay.textContent = `${fmt(currentTimeMs)} / ${fmt(durationMs)}`;
+      
+      if (forcePushGlasses || cleanSubText !== lastPushedSubText || newImageBlobPushed) {
+        pushUpdateToGlasses(cleanSubText, newImageBlobPushed);
+      }
+    }
+
+    function syncClockLoop(now) {
+      if (!isPlaying) return;
+      const dt = now - lastFrameTime;
+      lastFrameTime = now;
+      currentTimeMs += dt;
+      
+      if (currentTimeMs >= durationMs) {
+        isPlaying = false;
+        currentTimeMs = 0;
+        playBtn.innerText = "Play";
+        updateUI();
+        return;
+      }
+      
+      updateUI();
+      animationFrameId = requestAnimationFrame(syncClockLoop);
+    }
+
+    // --- ATTACH HANDLERS ---
+    document.getElementById('login-btn').onclick = beginPlexAuthExchange;
+    document.getElementById('scan-media-btn').onclick = scanForValidMedia;
+    document.getElementById('logout-btn-1').onclick = disconnectAccount;
+    document.getElementById('logout-btn-2').onclick = disconnectAccount;
+    document.getElementById('back-to-lib-btn').onclick = () => {
+      document.getElementById('media-panel').classList.add('hidden');
+      document.getElementById('library-panel').classList.remove('hidden');
+    };
+    
+    playBtn.onclick = () => {
+      isPlaying = !isPlaying;
+      playBtn.innerText = isPlaying ? "Pause" : "Play";
+      if (isPlaying) {
+        lastFrameTime = performance.now();
+        animationFrameId = requestAnimationFrame(syncClockLoop);
+      } else {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+    
+    timeline.oninput = (e) => {
+      currentTimeMs = Number(e.target.value);
+      updateUI();
+    };
+
+    function resetPlayer() {
+      isPlaying = false;
+      cancelAnimationFrame(animationFrameId);
+      if (bridgeInstance) pushUpdateToGlasses("Stream terminated.", null);
+      document.getElementById('player-panel').classList.add('hidden');
+      document.getElementById('media-panel').classList.remove('hidden');
+    }
+    
+    document.getElementById('close-player-btn').onclick = resetPlayer;
+
+    // Run startup authentication and layout initializations
+    initApp();
+  </script>
+</body>
+</html>
