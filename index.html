@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Plex JWT G2 Sync Bridge</title>
+        <title>Plex Player</title>
 
         <!-- Intercept and mirror all console logs before any other scripts run -->
         <script>
@@ -695,6 +695,21 @@
                 text-shadow: 0 0 15px rgba(229, 160, 13, 0.35);
             }
 
+            /* --- COLLAPSIBLE DETAILS STYLING --- */
+            details#image-settings-panel {
+                transition: all 0.25s ease;
+                overflow: hidden;
+            }
+            details#image-settings-panel summary {
+                list-style: none;
+            }
+            details#image-settings-panel summary::-webkit-details-marker {
+                display: none;
+            }
+            details#image-settings-panel[open] .toggle-arrow {
+                transform: rotate(180deg);
+            }
+
             /* --- COLLAPSIBLE DEBUG PANEL --- */
             .debug-panel {
                 position: fixed;
@@ -855,7 +870,7 @@
     <body>
         <!-- HEADER BRANDING -->
         <div class="header">
-            <h1>Plex JWT G2 Sync Bridge</h1>
+            <h1>Plex Player</h1>
             <p>
                 Even Realities G2 Smart Glasses Media &amp; Subtitle Connector
             </p>
@@ -872,16 +887,6 @@
         <!-- STEP 1: AUTHENTICATION VIA JWT PIN EXCHANGE -->
         <div id="auth-panel" class="section">
             <h2>1. Connect via Plex Account</h2>
-            <div class="input-group">
-                <label for="server-url"
-                    >Server URL Target (e.g., http://192.168.1.50:32400)</label
-                >
-                <input
-                    type="text"
-                    id="server-url"
-                    value="http://localhost:32400"
-                />
-            </div>
             <button id="login-btn">Sign In with Plex</button>
 
             <div id="pin-area" class="hidden pin-container">
@@ -1104,7 +1109,7 @@
                 </div>
             </div>
             <!-- Image Adjustments Settings panel -->
-            <div
+            <details
                 id="image-settings-panel"
                 style="
                     margin-top: 25px;
@@ -1114,18 +1119,27 @@
                     border-radius: 12px;
                 "
             >
-                <h4
+                <summary
                     style="
                         color: var(--primary);
-                        margin-top: 0;
-                        margin-bottom: 15px;
+                        margin: 0;
+                        font-family: 'Outfit', sans-serif;
+                        font-weight: 700;
                         font-size: 1rem;
                         text-transform: uppercase;
                         letter-spacing: 0.05em;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        user-select: none;
+                        cursor: pointer;
+                        outline: none;
                     "
                 >
-                    Glasses Image Adjustments
-                </h4>
+                    <span>Glasses Image Adjustments</span>
+                    <span class="toggle-arrow" style="transition: transform 0.25s; font-size: 0.8rem; color: var(--text-muted);">▼</span>
+                </summary>
+                <div style="margin-top: 20px;" onclick="event.stopPropagation()">
 
                 <div
                     style="
@@ -1239,7 +1253,8 @@
                         Reset Settings
                     </button>
                 </div>
-            </div>
+                </div>
+            </details>
 
             <button
                 id="close-player-btn"
@@ -1269,6 +1284,10 @@
             const CLIENT_ID = "plex-bif-viewer";
             const APP_NAME = "plex-bif-viewer";
 
+            // Silent audio loop to prevent WebView suspension in background/screen-off states
+            const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==");
+            silentAudio.loop = true;
+
             // --- APPLICATION RUNTIME STATE ---
             let SERVER_URL = "";
             let TOKEN = "";
@@ -1278,10 +1297,21 @@
             let currentTimeMs = 0;
             let isPlaying = false;
             let lastFrameTime = 0;
-            let animationFrameId = null;
+            let clockIntervalId = null;
             let pollIntervalId = null;
             let plexServers = [];
             let libraryTypes = {};
+
+            // --- IMAGE SYNCHRONIZATION AND THROTTLING STATE ---
+            let isImageRenderInProgress = false;
+            let isTextUpdateInProgress = false;
+            let averageRenderDuration = 1500; // in ms
+            let totalRenders = 0;
+            let sumRenderDuration = 0;
+            let lastImageSendStartTime = 0;
+            let lastSentImageTimestampMs = 0;
+            let lastAttemptedImageTimestampMs = -1;
+            let currentRenderingImageTimestampMs = 0;
 
             // --- ADVANCED IMAGE PREVIEW STATE ---
             let brightnessValue = 0;
@@ -1317,8 +1347,7 @@
                     TOKEN = cachedToken;
                     SERVER_URL = cachedUrl;
 
-                    // Inject values back into form fields for visibility
-                    document.getElementById("server-url").value = SERVER_URL;
+                    // Inject values back into form fields for visibility (server-url removed)
 
                     statusDiv.textContent =
                         "Active Plex session restored from storage.";
@@ -1339,10 +1368,10 @@
                     bridgeInstance = await waitForEvenAppBridge();
 
                     glassesSubtitleContainer = {
-                        xPosition: 0,
-                        yPosition: 200,
-                        width: 576,
-                        height: 88,
+                        xPosition: 72, // Centered horizontally: (576 - 432) / 2
+                        yPosition: 156, // Top = image bottom (144) + 12px padding (half text line)
+                        width: 432, // 75% of 576 screen width
+                        height: 132, // Fill remaining space: 288 - 156 = 132
                         borderWidth: 0,
                         containerID: 1,
                         containerName: "g2_subs",
@@ -1351,8 +1380,8 @@
                     };
 
                     glassesImageContainer = {
-                        xPosition: 144,
-                        yPosition: 20,
+                        xPosition: 144, // Centered horizontally: (576 - 288) / 2
+                        yPosition: 0, // Put at y=0 (no padding on top)
                         width: 288,
                         height: 144,
                         containerID: 2,
@@ -2194,6 +2223,20 @@
                     durationMs = bifs[bifs.length - 1].timestampMs;
                     timeline.max = durationMs;
                     currentTimeMs = 0;
+
+                    // Reset image sync/throttling states
+                    isImageRenderInProgress = false;
+                    isTextUpdateInProgress = false;
+                    lastPushedSubText = "";
+                    averageRenderDuration = 1500;
+                    totalRenders = 0;
+                    sumRenderDuration = 0;
+                    lastImageSendStartTime = 0;
+                    lastSentImageTimestampMs = 0;
+                    lastAttemptedImageTimestampMs = -1;
+                    currentRenderingImageTimestampMs = 0;
+                    rendering = Promise.resolve();
+
                     updateUI(true);
                 } catch (e) {
                     alert("Failed to load stream: " + e.message);
@@ -2443,7 +2486,7 @@
                                 }
                                 try {
                                     const buffer = await blob.arrayBuffer();
-                                    resolve(new Uint8Array(buffer));
+                                    resolve(buffer);
                                 } catch (e) {
                                     reject(e);
                                 }
@@ -2458,87 +2501,160 @@
                     };
                     img.src = objectUrl;
                 });
-            }
-
-            let rendering = Promise.resolve();
+            }            let rendering = Promise.resolve();
             let lastPushedSubText = "";
-            async function pushUpdateToGlasses(text, rawBlob) {
-                if (!bridgeInstance) return;
+
+            async function pushUpdateToGlasses(text, rawBlob, rawBlobTimestampMs, force = false) {
+                if (!bridgeInstance) {
+                    if (rawBlob) {
+                        isImageRenderInProgress = false;
+                    }
+                    return;
+                }
                 try {
                     if (text !== lastPushedSubText) {
-                        lastPushedSubText = text;
-                        await bridgeInstance.textContainerUpgrade({
-                            containerID: 1,
-                            containerName: "g2_subs",
-                            contentOffset: 0,
-                            contentLength: 0,
-                            content: text || " ",
-                        });
+                        if (isTextUpdateInProgress) {
+                            console.log("[Sync Engine] Text upgrade in progress, deferring text update.");
+                        } else {
+                            isTextUpdateInProgress = true;
+                            const runTextUpgrade = async () => {
+                                try {
+                                    const timeoutPromise = new Promise((_, reject) =>
+                                        setTimeout(() => reject(new Error("Timeout")), 1000)
+                                    );
+                                    await Promise.race([
+                                        bridgeInstance.textContainerUpgrade({
+                                            containerID: 1,
+                                            containerName: "g2_subs",
+                                            contentOffset: 0,
+                                            contentLength: 0,
+                                            content: text || " ",
+                                        }),
+                                        timeoutPromise
+                                    ]);
+                                    lastPushedSubText = text;
+                                } catch (err) {
+                                    console.error("[Sync Engine] Text upgrade failed:", err);
+                                } finally {
+                                    isTextUpdateInProgress = false;
+                                    updateUI();
+                                }
+                            };
+                            runTextUpgrade();
+                        }
                     }
                     if (rawBlob) {
-                        const preparedBytes = await resizeAndPrepareImage(
-                            rawBlob,
-                            288,
-                            144,
-                        );
+                        // Prepare the resized/dithered image
+                        const preparedBytes = await resizeAndPrepareImage(rawBlob, 288, 144);
+                        
+                        lastImageSendStartTime = performance.now();
+                        const start = performance.now();
 
-                        // Queue the rendering promises sequentially to prevent overlapping BLE writes
-                        rendering = rendering.then(async () => {
-                            const payload =
-                                typeof ImageRawDataUpdate !== "undefined"
-                                    ? new ImageRawDataUpdate({
-                                          containerID: 2,
-                                          containerName: "g2_bif",
-                                          imageData: preparedBytes,
-                                      })
-                                    : {
-                                          containerID: 2,
-                                          containerName: "g2_bif",
-                                          imageData: preparedBytes,
-                                      };
-                            const result =
-                                await bridgeInstance.updateImageRawData(
-                                    payload,
-                                );
-                            console.log("updateImageRawData result:", result);
-                            if (result !== "success") {
-                                console.warn(
-                                    `updateImageRawData failed with status: ${result}`,
-                                );
+                        const payload = typeof ImageRawDataUpdate !== 'undefined'
+                            ? new ImageRawDataUpdate({
+                                containerID: 2,
+                                containerName: "g2_bif",
+                                imageData: preparedBytes,
+                              })
+                            : {
+                                containerID: 2,
+                                containerName: "g2_bif",
+                                imageData: preparedBytes,
+                              };
+
+                        bridgeInstance.updateImageRawData(payload).then((result) => {
+                            const duration = performance.now() - start;
+                            sumRenderDuration += duration;
+                            totalRenders++;
+                            averageRenderDuration = sumRenderDuration / totalRenders;
+                            // Sane bounds for average duration (1.5s default, minimum 1.0s, maximum 8.0s)
+                            averageRenderDuration = Math.max(1000, Math.min(8000, averageRenderDuration));
+                            
+                            console.log(`[Sync Engine] Rendered frame for ${rawBlobTimestampMs}ms on glasses: ${result} (took ${duration.toFixed(0)}ms, new average: ${averageRenderDuration.toFixed(0)}ms)`);
+                            
+                            if (result === "success") {
+                                lastSentImageTimestampMs = rawBlobTimestampMs;
                             }
+                            isImageRenderInProgress = false;
+                            updateUI();
+                        }).catch((err) => {
+                            console.error("[Sync Engine] updateImageRawData failed:", err);
+                            isImageRenderInProgress = false;
+                            updateUI();
                         });
-                        await rendering;
                     }
                 } catch (e) {
                     console.error("BLE drop frame: ", e);
+                    if (rawBlob) {
+                        isImageRenderInProgress = false;
+                        updateUI();
+                    }
                 }
             }
 
             function updateUI(forcePushGlasses = false) {
+                // Find BIF frame corresponding to current playback time for local preview monitor
                 const frame = bifs.find(
                     (f, i) =>
                         f.timestampMs <= currentTimeMs &&
                         (bifs[i + 1]?.timestampMs > currentTimeMs ||
                             !bifs[i + 1]),
                 );
+                
+                // Update local monitor image src
+                if (frame && imgTag.src !== frame.url) {
+                    imgTag.src = frame.url;
+                }
+
+                // Predict/look-ahead: Find frame we should be sending to the glasses
+                // If playing, we target currentTimeMs + averageRenderDuration * 1.5
+                // If paused/seeking, we target currentTimeMs
+                let glassesFrame = null;
+                if (bifs.length > 0) {
+                    const targetTime = isPlaying 
+                        ? (currentTimeMs + averageRenderDuration * 1.5) 
+                        : currentTimeMs;
+                    
+                    glassesFrame = bifs.find(
+                        (f, i) =>
+                            f.timestampMs <= targetTime &&
+                            (bifs[i + 1]?.timestampMs > targetTime ||
+                                !bifs[i + 1]),
+                    );
+                }
+
+                // Find subtitle matching currentTimeMs
                 const sub = subtitles.find(
                     (s) =>
                         currentTimeMs >= s.startMs && currentTimeMs <= s.endMs,
                 );
-                let cleanSubText = sub ? sub.text.replace(/<[^>]*>/g, "") : "";
-                let newImageBlobPushed = null;
-
-                if (frame) {
-                    if (imgTag.src !== frame.url) {
-                        imgTag.src = frame.url;
-                        newImageBlobPushed = frame.rawBlobData;
-                    } else if (forcePushGlasses) {
-                        newImageBlobPushed = frame.rawBlobData;
-                    }
-                }
 
                 if (subDiv.innerHTML !== (sub ? sub.text : "")) {
                     subDiv.innerHTML = sub ? sub.text : "";
+                }
+
+                // Enforce strict subtitle sequence synchronization:
+                // - If playing:
+                //   - Allow subtitles if their startMs <= currentRenderingImageTimestampMs (or Infinity if not rendering).
+                //   - Else, hold them back (send " ").
+                // - If paused/seeking:
+                //   - Always allow the subtitle at currentTimeMs.
+                let cleanSubText = "";
+                if (sub) {
+                    if (!isPlaying) {
+                        cleanSubText = sub.text
+                            .replace(/<br\s*\/?>/gi, "\n")
+                            .replace(/<[^>]*>/g, "");
+                    } else {
+                        const allowedThreshold = isImageRenderInProgress ? currentRenderingImageTimestampMs : Infinity;
+                        if (sub.startMs <= allowedThreshold) {
+                            cleanSubText = sub.text
+                                .replace(/<br\s*\/?>/gi, "\n")
+                                .replace(/<[^>]*>/g, "");
+                        } else {
+                            cleanSubText = " ";
+                        }
+                    }
                 }
 
                 timeline.value = currentTimeMs;
@@ -2553,31 +2669,73 @@
 
                 timeDisplay.textContent = `${fmt(currentTimeMs)} / ${fmt(durationMs)}`;
 
+                // Determine if we should push a new image frame or text update
+                let glassesBlob = glassesFrame ? glassesFrame.rawBlobData : null;
+                let glassesBlobTimestamp = glassesFrame ? glassesFrame.timestampMs : 0;
+                let shouldPushImage = false;
+                
+                if (glassesFrame) {
+                    // Check if it's different from the last sent image timestamp
+                    // and we are not currently rendering anything.
+                    if (!isImageRenderInProgress) {
+                        if (forcePushGlasses || (glassesFrame.timestampMs !== lastSentImageTimestampMs && glassesFrame.timestampMs !== lastAttemptedImageTimestampMs)) {
+                            shouldPushImage = true;
+                            // Mark rendering start immediately to block subsequent checks on this/other ticks
+                            isImageRenderInProgress = true;
+                            currentRenderingImageTimestampMs = glassesFrame.timestampMs;
+                            lastAttemptedImageTimestampMs = glassesFrame.timestampMs;
+                        }
+                    }
+                }
+
                 if (
                     forcePushGlasses ||
                     cleanSubText !== lastPushedSubText ||
-                    newImageBlobPushed
+                    shouldPushImage
                 ) {
-                    pushUpdateToGlasses(cleanSubText, newImageBlobPushed);
+                    pushUpdateToGlasses(
+                        cleanSubText,
+                        shouldPushImage ? glassesBlob : null,
+                        glassesBlobTimestamp,
+                        forcePushGlasses
+                    );
                 }
             }
 
-            function syncClockLoop(now) {
-                if (!isPlaying) return;
-                const dt = now - lastFrameTime;
-                lastFrameTime = now;
-                currentTimeMs += dt;
+            function startClock() {
+                if (clockIntervalId) clearInterval(clockIntervalId);
+                lastFrameTime = performance.now();
+                clockIntervalId = setInterval(() => {
+                    if (!isPlaying) {
+                        stopClock();
+                        return;
+                    }
+                    const now = performance.now();
+                    const dt = now - lastFrameTime;
+                    lastFrameTime = now;
+                    currentTimeMs += dt;
 
-                if (currentTimeMs >= durationMs) {
-                    isPlaying = false;
-                    currentTimeMs = 0;
-                    playBtn.innerText = "Play";
+                    if (currentTimeMs >= durationMs) {
+                        isPlaying = false;
+                        currentTimeMs = 0;
+                        playBtn.innerText = "Play";
+                        stopClock();
+                        try {
+                            silentAudio.pause();
+                        } catch (e) {}
+                        updateUI();
+                        return;
+                    }
+
                     updateUI();
-                    return;
-                }
+                }, 50);
+            }
 
-                updateUI();
-                animationFrameId = requestAnimationFrame(syncClockLoop);
+            function stopClock() {
+                if (clockIntervalId) {
+                    clearInterval(clockIntervalId);
+                    clockIntervalId = null;
+                }
             }
 
             // --- ATTACH HANDLERS ---
@@ -2628,10 +2786,17 @@
                 isPlaying = !isPlaying;
                 playBtn.innerText = isPlaying ? "Pause" : "Play";
                 if (isPlaying) {
-                    lastFrameTime = performance.now();
-                    animationFrameId = requestAnimationFrame(syncClockLoop);
+                    try {
+                        silentAudio.play();
+                    } catch (e) {
+                        console.warn("Silent audio play failed:", e);
+                    }
+                    startClock();
                 } else {
-                    cancelAnimationFrame(animationFrameId);
+                    try {
+                        silentAudio.pause();
+                    } catch (e) {}
+                    stopClock();
                 }
             };
 
@@ -2642,13 +2807,29 @@
 
             function resetPlayer() {
                 isPlaying = false;
-                cancelAnimationFrame(animationFrameId);
+                stopClock();
+                try {
+                    silentAudio.pause();
+                } catch (e) {}
                 if (bridgeInstance)
                     pushUpdateToGlasses("Stream terminated.", null);
                 document.getElementById("player-panel").classList.add("hidden");
                 document
                     .getElementById("media-panel")
                     .classList.remove("hidden");
+
+                // Reset image sync/throttling states
+                isImageRenderInProgress = false;
+                isTextUpdateInProgress = false;
+                lastPushedSubText = "";
+                averageRenderDuration = 1500;
+                totalRenders = 0;
+                sumRenderDuration = 0;
+                lastImageSendStartTime = 0;
+                lastSentImageTimestampMs = 0;
+                lastAttemptedImageTimestampMs = -1;
+                currentRenderingImageTimestampMs = 0;
+                rendering = Promise.resolve();
             }
 
             document.getElementById("close-player-btn").onclick = resetPlayer;
