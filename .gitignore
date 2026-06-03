@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.ehpk
+extract.cjs
+make_assets.cjs
+old_index.html
+.DS_Store
