@@ -1123,7 +1123,7 @@
                     style="
                         color: var(--primary);
                         margin: 0;
-                        font-family: 'Outfit', sans-serif;
+                        font-family: &quot;Outfit&quot;, sans-serif;
                         font-weight: 700;
                         font-size: 1rem;
                         text-transform: uppercase;
@@ -1137,122 +1137,130 @@
                     "
                 >
                     <span>Glasses Image Adjustments</span>
-                    <span class="toggle-arrow" style="transition: transform 0.25s; font-size: 0.8rem; color: var(--text-muted);">▼</span>
-                </summary>
-                <div style="margin-top: 20px;" onclick="event.stopPropagation()">
-
-                <div
-                    style="
-                        display: grid;
-                        grid-template-columns: 1fr 1fr;
-                        gap: 15px;
-                        margin-bottom: 15px;
-                    "
-                >
-                    <div>
-                        <label
-                            for="img-brightness"
-                            style="margin-bottom: 4px; font-size: 0.75rem"
-                            >Brightness:
-                            <span id="val-brightness">0</span></label
-                        >
-                        <input
-                            type="range"
-                            id="img-brightness"
-                            min="-100"
-                            max="100"
-                            value="0"
-                            style="padding: 0; height: 6px"
-                        />
-                    </div>
-                    <div>
-                        <label
-                            for="img-contrast"
-                            style="margin-bottom: 4px; font-size: 0.75rem"
-                            >Contrast: <span id="val-contrast">0</span></label
-                        >
-                        <input
-                            type="range"
-                            id="img-contrast"
-                            min="-100"
-                            max="100"
-                            value="0"
-                            style="padding: 0; height: 6px"
-                        />
-                    </div>
-                </div>
-
-                <div
-                    style="
-                        display: grid;
-                        grid-template-columns: 1fr 1fr;
-                        gap: 15px;
-                        margin-bottom: 15px;
-                    "
-                >
-                    <div>
-                        <label
-                            for="img-gamma"
-                            style="margin-bottom: 4px; font-size: 0.75rem"
-                            >Gamma: <span id="val-gamma">1.0</span></label
-                        >
-                        <input
-                            type="range"
-                            id="img-gamma"
-                            min="0.5"
-                            max="3.0"
-                            step="0.1"
-                            value="1.0"
-                            style="padding: 0; height: 6px"
-                        />
-                    </div>
-                    <div>
-                        <label
-                            for="img-dither"
-                            style="margin-bottom: 4px; font-size: 0.75rem"
-                            >Dithering Method</label
-                        >
-                        <select
-                            id="img-dither"
-                            style="
-                                padding: 8px 12px;
-                                font-size: 0.85rem;
-                                border-radius: 6px;
-                                background: #1a1a1a;
-                                border: 1px solid var(--card-border);
-                                color: #fff;
-                            "
-                        >
-                            <option value="floyd-steinberg">
-                                Floyd-Steinberg (Standard)
-                            </option>
-                            <option value="atkinson">
-                                Atkinson (Crisp Detail)
-                            </option>
-                            <option value="ordered-4x4">
-                                Ordered Bayer (Patterned)
-                            </option>
-                            <option value="threshold">
-                                High Contrast (No Dither)
-                            </option>
-                        </select>
-                    </div>
-                </div>
-
-                <div style="display: flex; justify-content: flex-end">
-                    <button
-                        id="reset-img-btn"
-                        class="btn-secondary"
+                    <span
+                        class="toggle-arrow"
                         style="
-                            width: auto;
-                            padding: 6px 15px;
+                            transition: transform 0.25s;
                             font-size: 0.8rem;
-                            margin: 0;
+                            color: var(--text-muted);
+                        "
+                        >▼</span
+                    >
+                </summary>
+                <div style="margin-top: 20px" onclick="event.stopPropagation()">
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 15px;
+                            margin-bottom: 15px;
                         "
                     >
-                        Reset Settings
-                    </button>
-                </div>
+                        <div>
+                            <label
+                                for="img-brightness"
+                                style="margin-bottom: 4px; font-size: 0.75rem"
+                                >Brightness:
+                                <span id="val-brightness">0</span></label
+                            >
+                            <input
+                                type="range"
+                                id="img-brightness"
+                                min="-100"
+                                max="100"
+                                value="0"
+                                style="padding: 0; height: 6px"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                for="img-contrast"
+                                style="margin-bottom: 4px; font-size: 0.75rem"
+                                >Contrast:
+                                <span id="val-contrast">0</span></label
+                            >
+                            <input
+                                type="range"
+                                id="img-contrast"
+                                min="-100"
+                                max="100"
+                                value="0"
+                                style="padding: 0; height: 6px"
+                            />
+                        </div>
+                    </div>
+
+                    <div
+                        style="
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            gap: 15px;
+                            margin-bottom: 15px;
+                        "
+                    >
+                        <div>
+                            <label
+                                for="img-gamma"
+                                style="margin-bottom: 4px; font-size: 0.75rem"
+                                >Gamma: <span id="val-gamma">1.0</span></label
+                            >
+                            <input
+                                type="range"
+                                id="img-gamma"
+                                min="0.5"
+                                max="3.0"
+                                step="0.1"
+                                value="1.0"
+                                style="padding: 0; height: 6px"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                for="img-dither"
+                                style="margin-bottom: 4px; font-size: 0.75rem"
+                                >Dithering Method</label
+                            >
+                            <select
+                                id="img-dither"
+                                style="
+                                    padding: 8px 12px;
+                                    font-size: 0.85rem;
+                                    border-radius: 6px;
+                                    background: #1a1a1a;
+                                    border: 1px solid var(--card-border);
+                                    color: #fff;
+                                "
+                            >
+                                <option value="floyd-steinberg">
+                                    Floyd-Steinberg (Standard)
+                                </option>
+                                <option value="atkinson">
+                                    Atkinson (Crisp Detail)
+                                </option>
+                                <option value="ordered-4x4">
+                                    Ordered Bayer (Patterned)
+                                </option>
+                                <option value="threshold">
+                                    High Contrast (No Dither)
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end">
+                        <button
+                            id="reset-img-btn"
+                            class="btn-secondary"
+                            style="
+                                width: auto;
+                                padding: 6px 15px;
+                                font-size: 0.8rem;
+                                margin: 0;
+                            "
+                        >
+                            Reset Settings
+                        </button>
+                    </div>
                 </div>
             </details>
 
@@ -1285,7 +1293,9 @@
             const APP_NAME = "plex-bif-viewer";
 
             // Silent audio loop to prevent WebView suspension in background/screen-off states
-            const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==");
+            const silentAudio = new Audio(
+                "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==",
+            );
             silentAudio.loop = true;
 
             // --- APPLICATION RUNTIME STATE ---
@@ -1304,8 +1314,8 @@
 
             // --- CHUNK PIPELINE STATE ---
             let chunkPipelineRunning = false;
-            let chunkAbortController = null;  // AbortController to cancel pipeline on pause/seek
-            let renderDurations = [];         // last 5 image render durations (ms)
+            let chunkAbortController = null; // AbortController to cancel pipeline on pause/seek
+            let renderDurations = []; // last 5 image render durations (ms)
             let averageRenderDuration = 1500; // moving avg, clamped 1000–8000ms
             let lastSentImageTimestampMs = 0;
             let lastPushedSubText = "";
@@ -1944,7 +1954,9 @@
                     .getElementById("auth-panel")
                     .classList.remove("hidden");
                 if (bridgeInstance) {
-                    sendSubtitleToGlasses("Account Disconnected.").catch(() => {});
+                    sendSubtitleToGlasses("Account Disconnected.").catch(
+                        () => {},
+                    );
                 }
                 alert(
                     "Logged out successfully. Local storage credentials dropped.",
@@ -2494,41 +2506,55 @@
                     };
                     img.src = objectUrl;
                 });
-            }            // --- CHUNK PIPELINE HELPERS ---
+            } // --- CHUNK PIPELINE HELPERS ---
 
             function sleep(ms, signal) {
                 return new Promise((resolve) => {
-                    if (signal?.aborted) { resolve(); return; }
+                    if (signal?.aborted) {
+                        resolve();
+                        return;
+                    }
                     const timeout = setTimeout(resolve, ms);
                     if (signal) {
-                        signal.addEventListener('abort', () => {
-                            clearTimeout(timeout);
-                            resolve();
-                        }, { once: true });
+                        signal.addEventListener(
+                            "abort",
+                            () => {
+                                clearTimeout(timeout);
+                                resolve();
+                            },
+                            { once: true },
+                        );
                     }
                 });
             }
 
             function getChunkDuration() {
-                if (renderDurations.length === 0) return 1500;
+                if (renderDurations.length === 0) return 5000;
                 const sum = renderDurations.reduce((a, b) => a + b, 0);
                 const avg = sum / renderDurations.length;
-                return Math.max(1000, Math.min(8000, avg));
+                return Math.max(5000, Math.min(15000, avg));
             }
 
             function buildChunk(startMs) {
-                const duration = getChunkDuration();
-                const endMs = startMs + duration;
+                const baseDuration = getChunkDuration();
+                const targetEndMs = startMs + baseDuration;
 
                 // Find BIF frame at startMs
                 const frame = bifs.find(
-                    (f, i) => f.timestampMs <= startMs &&
-                              (bifs[i + 1]?.timestampMs > startMs || !bifs[i + 1])
+                    (f, i) =>
+                        f.timestampMs <= startMs &&
+                        (bifs[i + 1]?.timestampMs > startMs || !bifs[i + 1]),
                 );
+
+                // Ensure chunk extends to the NEXT image's exact timestamp
+                // so we never send the same image twice
+                const nextFrame = bifs.find(f => f.timestampMs >= targetEndMs);
+                const endMs = nextFrame ? nextFrame.timestampMs : targetEndMs;
+                const duration = endMs - startMs;
 
                 // Collect subtitles that overlap [startMs, endMs)
                 const chunkSubs = subtitles.filter(
-                    s => s.endMs > startMs && s.startMs < endMs
+                    (s) => s.endMs > startMs && s.startMs < endMs,
                 );
 
                 return {
@@ -2536,21 +2562,32 @@
                     subtitles: chunkSubs,
                     startMs,
                     endMs,
-                    duration
+                    duration,
                 };
             }
 
             async function sendImageToGlasses(frame) {
                 if (!bridgeInstance || !frame?.rawBlobData) return 0;
 
-                const preparedBytes = await resizeAndPrepareImage(frame.rawBlobData, 288, 144);
+                const preparedBytes = await resizeAndPrepareImage(
+                    frame.rawBlobData,
+                    288,
+                    144,
+                );
                 const start = performance.now();
 
-                const payload = typeof ImageRawDataUpdate !== 'undefined'
-                    ? new ImageRawDataUpdate({
-                        containerID: 2, containerName: "g2_bif", imageData: preparedBytes
-                      })
-                    : { containerID: 2, containerName: "g2_bif", imageData: preparedBytes };
+                const payload =
+                    typeof ImageRawDataUpdate !== "undefined"
+                        ? new ImageRawDataUpdate({
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          })
+                        : {
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          };
 
                 const result = await bridgeInstance.updateImageRawData(payload);
                 const duration = performance.now() - start;
@@ -2560,7 +2597,9 @@
                 if (renderDurations.length > 5) renderDurations.shift();
                 averageRenderDuration = getChunkDuration();
 
-                console.log(`[Chunk Engine] Image rendered for ${frame.timestampMs}ms: ${result} (${duration.toFixed(0)}ms, avg: ${averageRenderDuration.toFixed(0)}ms)`);
+                console.log(
+                    `[Chunk Engine] Image rendered for ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, avg: ${averageRenderDuration.toFixed(0)}ms)`,
+                );
 
                 if (result === "success") {
                     lastSentImageTimestampMs = frame.timestampMs;
@@ -2574,15 +2613,17 @@
                 if (displayText === lastPushedSubText) return;
 
                 const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("Timeout")), 1000)
+                    setTimeout(() => reject(new Error("Timeout")), 1000),
                 );
                 await Promise.race([
                     bridgeInstance.textContainerUpgrade({
-                        containerID: 1, containerName: "g2_subs",
-                        contentOffset: 0, contentLength: 0,
+                        containerID: 1,
+                        containerName: "g2_subs",
+                        contentOffset: 0,
+                        contentLength: 0,
                         content: displayText,
                     }),
-                    timeoutPromise
+                    timeoutPromise,
                 ]);
                 lastPushedSubText = displayText;
             }
@@ -2601,12 +2642,20 @@
                 // Pipeline drives the timeline — stop the clock
                 stopClock();
 
-                console.log("[Chunk Engine] Pipeline started at " + currentTimeMs + "ms");
+                console.log(
+                    "[Chunk Engine] Pipeline started at " +
+                        currentTimeMs +
+                        "ms",
+                );
 
                 try {
                     let pipelinePos = currentTimeMs;
 
-                    while (isPlaying && !signal.aborted && pipelinePos < durationMs) {
+                    while (
+                        isPlaying &&
+                        !signal.aborted &&
+                        pipelinePos < durationMs
+                    ) {
                         // 1. Build current chunk
                         const chunk = buildChunk(pipelinePos);
                         if (!chunk.image) {
@@ -2620,11 +2669,16 @@
                         updateUI();
 
                         // 3. Send chunk image to glasses (blocks until BLE render completes)
-                        console.log(`[Chunk Engine] Sending image at ${chunk.startMs}ms (chunk: ${chunk.duration.toFixed(0)}ms, subs: ${chunk.subtitles.length})`);
+                        console.log(
+                            `[Chunk Engine] Sending image at ${chunk.startMs}ms (chunk: ${chunk.duration.toFixed(0)}ms, subs: ${chunk.subtitles.length})`,
+                        );
                         try {
                             await sendImageToGlasses(chunk.image);
                         } catch (e) {
-                            console.error("[Chunk Engine] Image send failed:", e);
+                            console.error(
+                                "[Chunk Engine] Image send failed:",
+                                e,
+                            );
                             await sleep(100, signal);
                             pipelinePos = chunk.endMs;
                             continue;
@@ -2639,28 +2693,39 @@
                             const cleanText = sub.text
                                 .replace(/<br\s*\/?>/gi, "\n")
                                 .replace(/<[^>]*>/g, "");
-                            const displayDuration = sub.endMs - sub.startMs;
+                                
+                            // Only wait for the portion of the subtitle that is within THIS chunk
+                            const startTimeInChunk = Math.max(sub.startMs, chunk.startMs);
+                            const endTimeInChunk = Math.min(sub.endMs, chunk.endMs);
+                            const displayDuration = endTimeInChunk - startTimeInChunk;
+
+                            if (displayDuration <= 0) continue;
 
                             // Update HTML to show this subtitle
                             currentTimeMs = sub.startMs;
                             updateUI();
 
-                            // Send to glasses
+                            // Send to glasses (sendSubtitleToGlasses will deduplicate automatically)
                             try {
                                 await sendSubtitleToGlasses(cleanText);
                             } catch (e) {
-                                console.error("[Chunk Engine] Subtitle send failed:", e);
+                                console.error(
+                                    "[Chunk Engine] Subtitle send failed:",
+                                    e,
+                                );
                             }
 
-                            // Hold subtitle on screen for its natural duration
+                            // Hold subtitle on screen for its duration within this chunk
                             if (!signal.aborted && displayDuration > 0) {
                                 await sleep(displayDuration, signal);
                             }
-                        }
-
-                        // 5. Clear subtitle after chunk's subtitles are done
-                        if (!signal.aborted) {
-                            try { await sendSubtitleToGlasses(" "); } catch (e) {}
+                            
+                            // 5. Clear subtitle ONLY if it actually ends within this chunk
+                            if (!signal.aborted && sub.endMs <= chunk.endMs) {
+                                try {
+                                    await sendSubtitleToGlasses(" ");
+                                } catch (e) {}
+                            }
                         }
 
                         // 6. Advance pipeline position to next chunk
@@ -2674,7 +2739,9 @@
                         isPlaying = false;
                         currentTimeMs = 0;
                         playBtn.innerText = "Play";
-                        try { silentAudio.pause(); } catch (e) {}
+                        try {
+                            silentAudio.pause();
+                        } catch (e) {}
                         updateUI();
                     }
                 } catch (e) {
@@ -2697,29 +2764,40 @@
                 if (!bridgeInstance) return;
 
                 const frame = bifs.find(
-                    (f, i) => f.timestampMs <= currentTimeMs &&
-                              (bifs[i + 1]?.timestampMs > currentTimeMs || !bifs[i + 1])
+                    (f, i) =>
+                        f.timestampMs <= currentTimeMs &&
+                        (bifs[i + 1]?.timestampMs > currentTimeMs ||
+                            !bifs[i + 1]),
                 );
 
                 const sub = subtitles.find(
-                    (s) => currentTimeMs >= s.startMs && currentTimeMs <= s.endMs
+                    (s) =>
+                        currentTimeMs >= s.startMs && currentTimeMs <= s.endMs,
                 );
 
                 const cleanText = sub
-                    ? sub.text.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "")
+                    ? sub.text
+                          .replace(/<br\s*\/?>/gi, "\n")
+                          .replace(/<[^>]*>/g, "")
                     : " ";
 
                 try {
                     await sendSubtitleToGlasses(cleanText);
                 } catch (e) {
-                    console.error("[Chunk Engine] One-shot subtitle failed:", e);
+                    console.error(
+                        "[Chunk Engine] One-shot subtitle failed:",
+                        e,
+                    );
                 }
 
                 if (frame) {
                     try {
                         await sendImageToGlasses(frame);
                     } catch (e) {
-                        console.error("[Chunk Engine] One-shot image failed:", e);
+                        console.error(
+                            "[Chunk Engine] One-shot image failed:",
+                            e,
+                        );
                     }
                 }
             }
@@ -2732,7 +2810,7 @@
                         (bifs[i + 1]?.timestampMs > currentTimeMs ||
                             !bifs[i + 1]),
                 );
-                
+
                 // Update local monitor image src
                 if (frame && imgTag.src !== frame.url) {
                     imgTag.src = frame.url;
@@ -2916,25 +2994,29 @@
                     brightnessValue > 0
                         ? `+${brightnessValue}`
                         : brightnessValue;
-                updateUI(); sendOneShotUpdate();
+                updateUI();
+                sendOneShotUpdate();
             };
 
             contrastSlider.oninput = (e) => {
                 contrastValue = Number(e.target.value);
                 valContrast.textContent =
                     contrastValue > 0 ? `+${contrastValue}` : contrastValue;
-                updateUI(); sendOneShotUpdate();
+                updateUI();
+                sendOneShotUpdate();
             };
 
             gammaSlider.oninput = (e) => {
                 gammaValue = Number(e.target.value);
                 valGamma.textContent = gammaValue.toFixed(1);
-                updateUI(); sendOneShotUpdate();
+                updateUI();
+                sendOneShotUpdate();
             };
 
             ditherSelect.onchange = (e) => {
                 ditherAlgorithm = e.target.value;
-                updateUI(); sendOneShotUpdate();
+                updateUI();
+                sendOneShotUpdate();
             };
 
             document.getElementById("reset-img-btn").onclick = () => {
@@ -2952,7 +3034,8 @@
                 valContrast.textContent = "0";
                 valGamma.textContent = "1.0";
 
-                updateUI(); sendOneShotUpdate();
+                updateUI();
+                sendOneShotUpdate();
             };
 
             // Run startup authentication and layout initializations
