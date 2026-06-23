@@ -31,6 +31,14 @@ import { parseSubtitles } from "./subtitles";
             let plexServers = [];
             let libraryTypes = {};
 
+            // --- BLE SERIAL QUEUE ---
+            // All BLE writes go through here so they never overlap on the channel.
+            let bleQueue = Promise.resolve();
+            function bleEnqueue(fn) {
+                bleQueue = bleQueue.then(() => fn()).catch(() => {});
+                return bleQueue;
+            }
+
             // --- CHUNK PIPELINE STATE ---
             let chunkPipelineRunning = false;
             let chunkAbortController = null; // AbortController to cancel pipeline on pause/seek
@@ -1227,37 +1235,42 @@ import { parseSubtitles } from "./subtitles";
                     288,
                     144,
                 );
-                const start = performance.now();
 
-                const payload =
-                    typeof ImageRawDataUpdate !== "undefined"
-                        ? new ImageRawDataUpdate({
-                              containerID: 2,
-                              containerName: "g2_bif",
-                              imageData: preparedBytes,
-                          })
-                        : {
-                              containerID: 2,
-                              containerName: "g2_bif",
-                              imageData: preparedBytes,
-                          };
+                return new Promise((resolve) => {
+                    bleEnqueue(async () => {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({
+                                      containerID: 2,
+                                      containerName: "g2_bif",
+                                      imageData: preparedBytes,
+                                  })
+                                : {
+                                      containerID: 2,
+                                      containerName: "g2_bif",
+                                      imageData: preparedBytes,
+                                  };
 
-                const result = await bridgeInstance.updateImageRawData(payload);
-                const duration = performance.now() - start;
+                        // Measure only the actual BLE render, not time spent
+                        // waiting behind other writes in the serial queue.
+                        const start = performance.now();
+                        const result = await bridgeInstance.updateImageRawData(payload);
+                        const duration = performance.now() - start;
 
-                // Update moving average (keep last 5)
-                renderDurations.push(duration);
-                if (renderDurations.length > 5) renderDurations.shift();
-                averageRenderDuration = getChunkDuration();
+                        renderDurations.push(duration);
+                        if (renderDurations.length > 5) renderDurations.shift();
+                        averageRenderDuration = getChunkDuration();
 
-                console.log(
-                    `[Chunk Engine] Image rendered for ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, avg: ${averageRenderDuration.toFixed(0)}ms)`,
-                );
+                        console.log(
+                            `[Chunk Engine] Image rendered for ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, avg: ${averageRenderDuration.toFixed(0)}ms)`,
+                        );
 
-                if (result === "success") {
-                    lastSentImageTimestampMs = frame.timestampMs;
-                }
-                return duration;
+                        if (result === "success") {
+                            lastSentImageTimestampMs = frame.timestampMs;
+                        }
+                        resolve(duration);
+                    });
+                });
             }
 
             async function sendSubtitleToGlasses(text) {
@@ -1265,20 +1278,19 @@ import { parseSubtitles } from "./subtitles";
                 const displayText = text || " ";
                 if (displayText === lastPushedSubText) return;
 
-                const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("Timeout")), 1000),
-                );
-                await Promise.race([
-                    bridgeInstance.textContainerUpgrade({
-                        containerID: 1,
-                        containerName: "g2_subs",
-                        contentOffset: 0,
-                        contentLength: 0,
-                        content: displayText,
-                    }),
-                    timeoutPromise,
-                ]);
                 lastPushedSubText = displayText;
+                return new Promise((resolve) => {
+                    bleEnqueue(async () => {
+                        await bridgeInstance.textContainerUpgrade({
+                            containerID: 1,
+                            containerName: "g2_subs",
+                            contentOffset: 0,
+                            contentLength: 0,
+                            content: displayText,
+                        });
+                        resolve();
+                    });
+                });
             }
 
             async function runChunkPipeline() {
@@ -1304,49 +1316,73 @@ import { parseSubtitles } from "./subtitles";
                 try {
                     let pipelinePos = currentTimeMs;
 
+                    // Build the first chunk and kick off its image send. There is
+                    // nothing to overlap with yet, so it just starts immediately.
+                    let chunk = buildChunk(pipelinePos);
+                    let imageSend =
+                        chunk.image
+                            ? sendImageToGlasses(chunk.image)
+                            : Promise.resolve(0);
+
                     while (
                         isPlaying &&
                         !signal.aborted &&
                         pipelinePos < durationMs
                     ) {
-                        // 1. Build current chunk
-                        const chunk = buildChunk(pipelinePos);
+                        // No BIF frame at this position — nudge forward and retry.
                         if (!chunk.image) {
                             await sleep(50, signal);
                             pipelinePos += 50;
+                            chunk = buildChunk(pipelinePos);
+                            imageSend = chunk.image
+                                ? sendImageToGlasses(chunk.image)
+                                : Promise.resolve(0);
                             continue;
                         }
 
-                        // 2. Update HTML to show chunk's image
+                        // 1. Show this chunk's image locally and wait for its BLE
+                        //    render. The send was issued at the END of the previous
+                        //    iteration (prefetched while the last subtitle showed),
+                        //    so by now it is usually already complete.
                         currentTimeMs = chunk.startMs;
                         updateUI();
-
-                        // 3. Send chunk image to glasses (blocks until BLE render completes)
                         console.log(
-                            `[Chunk Engine] Sending image at ${chunk.startMs}ms (chunk: ${chunk.duration.toFixed(0)}ms, subs: ${chunk.subtitles.length})`,
+                            `[Chunk Engine] Awaiting image at ${chunk.startMs}ms (chunk: ${chunk.duration.toFixed(0)}ms, subs: ${chunk.subtitles.length})`,
                         );
                         try {
-                            await sendImageToGlasses(chunk.image);
+                            await imageSend;
                         } catch (e) {
                             console.error(
                                 "[Chunk Engine] Image send failed:",
                                 e,
                             );
-                            await sleep(100, signal);
-                            pipelinePos = chunk.endMs;
-                            continue;
                         }
-
                         if (signal.aborted) break;
 
-                        // 4. Stream subtitles for this chunk with natural display duration
-                        for (const sub of chunk.subtitles) {
+                        // Pre-build the next chunk so its image can be prefetched
+                        // while this chunk's last subtitle is still being read.
+                        const nextPos = chunk.endMs;
+                        const nextChunk =
+                            nextPos < durationMs ? buildChunk(nextPos) : null;
+                        let nextImageSend = null;
+                        const startNextImage = () => {
+                            if (nextImageSend) return;
+                            nextImageSend =
+                                nextChunk && nextChunk.image
+                                    ? sendImageToGlasses(nextChunk.image)
+                                    : Promise.resolve(0);
+                        };
+
+                        // 2. Stream subtitles for this chunk with natural display duration
+                        const subs = chunk.subtitles;
+                        for (let i = 0; i < subs.length; i++) {
+                            const sub = subs[i];
                             if (signal.aborted) break;
 
                             const cleanText = sub.text
                                 .replace(/<br\s*\/?>/gi, "\n")
                                 .replace(/<[^>]*>/g, "");
-                                
+
                             // Only wait for the portion of the subtitle that is within THIS chunk
                             const startTimeInChunk = Math.max(sub.startMs, chunk.startMs);
                             const endTimeInChunk = Math.min(sub.endMs, chunk.endMs);
@@ -1368,12 +1404,18 @@ import { parseSubtitles } from "./subtitles";
                                 );
                             }
 
+                            // 3. Once the LAST subtitle is on screen, start sending
+                            //    the next image while the user reads it. The serial
+                            //    BLE queue holds it behind this subtitle write, so
+                            //    the two never transmit at the same time.
+                            if (i === subs.length - 1) startNextImage();
+
                             // Hold subtitle on screen for its duration within this chunk
                             if (!signal.aborted && displayDuration > 0) {
                                 await sleep(displayDuration, signal);
                             }
-                            
-                            // 5. Clear subtitle ONLY if it actually ends within this chunk
+
+                            // 4. Clear subtitle ONLY if it actually ends within this chunk
                             if (!signal.aborted && sub.endMs <= chunk.endMs) {
                                 try {
                                     await sendSubtitleToGlasses(" ");
@@ -1381,10 +1423,19 @@ import { parseSubtitles } from "./subtitles";
                             }
                         }
 
-                        // 6. Advance pipeline position to next chunk
+                        if (signal.aborted) break;
+
+                        // 5. Chunk had no (displayable) subtitles to piggyback on —
+                        //    issue the next image now so it is in flight.
+                        startNextImage();
+
+                        // 6. Advance to the next chunk; its image is already sending.
                         pipelinePos = chunk.endMs;
                         currentTimeMs = pipelinePos;
                         updateUI();
+
+                        chunk = nextChunk || buildChunk(pipelinePos);
+                        imageSend = nextImageSend || Promise.resolve(0);
                     }
 
                     // End of playback
