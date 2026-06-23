@@ -34,10 +34,30 @@ import { parseSubtitles } from "./subtitles";
             // --- BLE SERIAL QUEUE ---
             // All BLE writes go through here so they never overlap on the channel.
             let bleQueue = Promise.resolve();
+            let bleQueueDepth = 0; // pending BLE ops — a backpressure / saturation gauge
             function bleEnqueue(fn) {
-                bleQueue = bleQueue.then(() => fn()).catch(() => {});
+                bleQueueDepth++;
+                bleQueue = bleQueue
+                    .then(() => fn())
+                    .catch(() => {})
+                    .finally(() => {
+                        bleQueueDepth--;
+                    });
                 return bleQueue;
             }
+
+            // --- BLE / DEVICE DIAGNOSTICS ---
+            // Tracked so every send can be annotated with the link state, which
+            // is what tells transient saturation apart from a real disconnect.
+            let deviceConnectType = "unknown";
+            let deviceBatteryLevel = null;
+            let deviceIsWearing = null;
+            let consecutiveImageFailures = 0; // length of the current image freeze
+            let lastImageSuccessWall = 0; // performance.now() of last good image
+            let imageSuccessCount = 0;
+            let imageFailureCount = 0;
+            let subtitleFailureCount = 0;
+            let statsHeartbeatId = null;
 
             // --- CHUNK PIPELINE STATE ---
             let chunkPipelineRunning = false;
@@ -46,6 +66,28 @@ import { parseSubtitles } from "./subtitles";
             let averageRenderDuration = 1500; // moving avg, clamped 1000–8000ms
             let lastSentImageTimestampMs = 0;
             let lastPushedSubText = "";
+
+            // --- GLASSES SUBTITLE DISPLAY CONSTRAINTS ---
+            // The G2 subtitle container is 432×132 px. We merge consecutive SRT
+            // cues into one on-screen block so the user has more to read while
+            // the (slow) next image transfers — without overflowing the box.
+            // Tune these against the simulator / real hardware if text clips.
+            const GLASSES_MAX_LINES = 5; // ~26px line height into a 132px tall container
+            const GLASSES_CHARS_PER_LINE = 32; // ~432px wide; conservative wrap estimate
+            const GLASSES_MAX_BLOCK_GAP_MS = 4000; // don't merge cues separated by a longer silence
+            const SUBTITLE_CLEAR_GAP_MS = 1500; // only blank the screen if the next text is this far off
+            const IMAGE_SEND_MAX_ATTEMPTS = 3; // retry a failed BLE image send before giving up on the frame
+            const IMAGE_SEND_RETRY_DELAY_MS = 350; // backoff between image-send retries
+            const IMAGE_SEND_RETRY_BUDGET_MS = 5000; // stop retrying past this so a bad frame can't starve subtitles
+
+            // --- GLASSES IMAGE SIZE ---
+            // Smaller than the 288x144 container max => fewer bytes per BLE
+            // transfer, which is bandwidth-bound (~2-3s for ~20KB). Smaller
+            // images transfer faster and fail less on the flaky image channel.
+            // Lower these further to trade image size for more reliability.
+            const GLASSES_IMAGE_WIDTH = 256;
+            const GLASSES_IMAGE_HEIGHT = 128;
+            const GLASSES_IMAGE_X = Math.round((576 - GLASSES_IMAGE_WIDTH) / 2); // keep centered
 
             // --- ADVANCED IMAGE PREVIEW STATE ---
             let brightnessValue = 0;
@@ -67,6 +109,156 @@ import { parseSubtitles } from "./subtitles";
             const timeline = document.getElementById("timeline");
             const playBtn = document.getElementById("play-btn");
             const timeDisplay = document.getElementById("time-display");
+
+            // --- ON-PAGE DEBUG CONSOLE ---
+            // Mirrors console.{log,info,warn,error} into the collapsible panel
+            // at the bottom of the page so logs are visible on the phone without
+            // a remote inspector. Set up first so it captures everything after.
+            const DEBUG_MAX_LINES = 500;
+            const debugLogBuffer = [];
+            const debugPanel = document.getElementById("debug-panel");
+            const debugLogOutput = document.getElementById("debug-log-output");
+            const debugCount = document.getElementById("debug-count");
+
+            function escapeHtml(str) {
+                return String(str)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
+
+            function formatLogArg(arg) {
+                if (typeof arg === "string") return arg;
+                if (arg instanceof Error) return arg.stack || arg.message;
+                try {
+                    return JSON.stringify(arg);
+                } catch (e) {
+                    return String(arg);
+                }
+            }
+
+            function appendDebugLog(level, args) {
+                const time = new Date().toLocaleTimeString("en-US", {
+                    hour12: false,
+                });
+                const text = Array.from(args).map(formatLogArg).join(" ");
+                debugLogBuffer.push({ time, level, text });
+                if (debugLogBuffer.length > DEBUG_MAX_LINES) {
+                    debugLogBuffer.shift();
+                }
+                if (debugCount) debugCount.textContent = debugLogBuffer.length;
+
+                if (debugLogOutput) {
+                    const line = document.createElement("div");
+                    line.className = `log-line log-${level}`;
+                    line.innerHTML = `<span class="log-time">${time}</span><span class="log-text">${escapeHtml(text)}</span>`;
+                    debugLogOutput.appendChild(line);
+                    while (
+                        debugLogOutput.childElementCount > DEBUG_MAX_LINES
+                    ) {
+                        debugLogOutput.removeChild(debugLogOutput.firstChild);
+                    }
+                    // Keep the latest line in view when expanded
+                    debugLogOutput.scrollTop = debugLogOutput.scrollHeight;
+                }
+            }
+
+            // Wrap the native console so logs reach both devtools and the panel.
+            ["log", "info", "warn", "error"].forEach((level) => {
+                const original = console[level].bind(console);
+                console[level] = (...args) => {
+                    original(...args);
+                    try {
+                        appendDebugLog(level, args);
+                    } catch (e) {
+                        /* never let logging break the app */
+                    }
+                };
+            });
+
+            function setDebugExpanded(expanded) {
+                if (!debugPanel) return;
+                debugPanel.classList.toggle("expanded", expanded);
+                debugPanel.classList.toggle("collapsed", !expanded);
+                const toggleBtn =
+                    document.getElementById("debug-toggle-btn");
+                if (toggleBtn) {
+                    toggleBtn.textContent = expanded ? "Collapse" : "Expand";
+                }
+                if (expanded && debugLogOutput) {
+                    debugLogOutput.scrollTop = debugLogOutput.scrollHeight;
+                }
+            }
+
+            document
+                .getElementById("debug-header")
+                ?.addEventListener("click", () => {
+                    setDebugExpanded(
+                        debugPanel.classList.contains("collapsed"),
+                    );
+                });
+
+            document
+                .getElementById("debug-toggle-btn")
+                ?.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    setDebugExpanded(
+                        debugPanel.classList.contains("collapsed"),
+                    );
+                });
+
+            document
+                .getElementById("debug-clear-btn")
+                ?.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    debugLogBuffer.length = 0;
+                    if (debugLogOutput) debugLogOutput.innerHTML = "";
+                    if (debugCount) debugCount.textContent = "0";
+                });
+
+            document
+                .getElementById("debug-copy-btn")
+                ?.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    const copyBtn =
+                        document.getElementById("debug-copy-btn");
+                    const allText = debugLogBuffer
+                        .map((l) => `[${l.time}] ${l.text}`)
+                        .join("\n");
+
+                    const flash = (msg) => {
+                        if (!copyBtn) return;
+                        const prev = copyBtn.textContent;
+                        copyBtn.textContent = msg;
+                        setTimeout(() => {
+                            copyBtn.textContent = prev;
+                        }, 1500);
+                    };
+
+                    try {
+                        if (
+                            navigator.clipboard &&
+                            window.isSecureContext
+                        ) {
+                            await navigator.clipboard.writeText(allText);
+                        } else {
+                            const ta = document.createElement("textarea");
+                            ta.value = allText;
+                            ta.style.position = "fixed";
+                            ta.style.top = "0";
+                            ta.style.left = "0";
+                            ta.style.opacity = "0";
+                            document.body.appendChild(ta);
+                            ta.focus();
+                            ta.select();
+                            document.execCommand("copy");
+                            document.body.removeChild(ta);
+                        }
+                        flash("Copied!");
+                    } catch (err) {
+                        flash("Copy failed");
+                    }
+                });
 
             // --- SYSTEM INITIALIZATION: HARDWARE & TOKEN CHECK ---
             async function initApp() {
@@ -101,6 +293,21 @@ import { parseSubtitles } from "./subtitles";
                         "Searching for active G2 Webview Environment Hook...";
                     bridgeInstance = await waitForEvenAppBridge();
 
+                    // Track link/device state so sends can be annotated with it.
+                    if (typeof bridgeInstance.onDeviceStatusChanged === "function") {
+                        bridgeInstance.onDeviceStatusChanged((status) => {
+                            const prev = deviceConnectType;
+                            deviceConnectType = status?.connectType ?? "unknown";
+                            deviceBatteryLevel = status?.batteryLevel ?? null;
+                            deviceIsWearing = status?.isWearing ?? null;
+                            if (deviceConnectType !== prev) {
+                                console.warn(
+                                    `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepth})`,
+                                );
+                            }
+                        });
+                    }
+
                     glassesSubtitleContainer = {
                         xPosition: 72, // Centered horizontally: (576 - 432) / 2
                         yPosition: 156, // Top = image bottom (144) + 12px padding (half text line)
@@ -114,10 +321,10 @@ import { parseSubtitles } from "./subtitles";
                     };
 
                     glassesImageContainer = {
-                        xPosition: 144, // Centered horizontally: (576 - 288) / 2
+                        xPosition: GLASSES_IMAGE_X, // centered: (576 - width) / 2
                         yPosition: 0, // Put at y=0 (no padding on top)
-                        width: 288,
-                        height: 144,
+                        width: GLASSES_IMAGE_WIDTH,
+                        height: GLASSES_IMAGE_HEIGHT,
                         containerID: 2,
                         containerName: "g2_bif",
                     };
@@ -1213,9 +1420,12 @@ import { parseSubtitles } from "./subtitles";
                 const endMs = nextFrame ? nextFrame.timestampMs : targetEndMs;
                 const duration = endMs - startMs;
 
-                // Collect subtitles that overlap [startMs, endMs)
+                // Own each cue to the chunk it STARTS in. Chunks tile the
+                // timeline contiguously, so this assigns every cue to exactly
+                // one chunk — a cue straddling a boundary is no longer sent in
+                // both chunks (the source of duplicate subtitles).
                 const chunkSubs = subtitles.filter(
-                    (s) => s.endMs > startMs && s.startMs < endMs,
+                    (s) => s.startMs >= startMs && s.startMs < endMs,
                 );
 
                 return {
@@ -1227,13 +1437,82 @@ import { parseSubtitles } from "./subtitles";
                 };
             }
 
+            // Strip SRT markup down to plain text with real newlines.
+            function cleanSubText(text) {
+                return text
+                    .replace(/<br\s*\/?>/gi, "\n")
+                    .replace(/<[^>]*>/g, "")
+                    .trim();
+            }
+
+            // Estimate how many rendered lines a block of text occupies on the
+            // glasses, accounting for explicit newlines and word-wrap at the
+            // container width.
+            function estimateGlassesLines(text) {
+                let count = 0;
+                for (const line of text.split("\n")) {
+                    const len = line.trim().length;
+                    count += len === 0 ? 1 : Math.ceil(len / GLASSES_CHARS_PER_LINE);
+                }
+                return count;
+            }
+
+            // Merge consecutive SRT cues into multi-line blocks that fit the
+            // glasses' line budget. Each returned block is shown as a single
+            // combined subtitle update, giving the reader more text per send.
+            // Cues keep their natural start/end times (each cue belongs to one
+            // chunk now, so there is no boundary to clip against).
+            function groupChunkSubtitles(subs) {
+                const groups = [];
+                let current = null;
+
+                for (const sub of subs) {
+                    const text = cleanSubText(sub.text);
+                    if (!text) continue;
+                    if (sub.endMs - sub.startMs <= 0) continue;
+
+                    const lines = estimateGlassesLines(text);
+
+                    // Merge into the current block only if it still fits the line
+                    // budget AND follows closely enough that showing it now isn't
+                    // a spoiler for a much later line.
+                    const gap = current ? sub.startMs - current.endMs : 0;
+                    if (
+                        current &&
+                        current.lineCount + lines <= GLASSES_MAX_LINES &&
+                        gap <= GLASSES_MAX_BLOCK_GAP_MS
+                    ) {
+                        // Append to the in-progress block
+                        current.texts.push(text);
+                        current.lineCount += lines;
+                        current.endMs = Math.max(current.endMs, sub.endMs);
+                    } else {
+                        // Flush the previous block and start a new one
+                        if (current) groups.push(current);
+                        current = {
+                            texts: [text],
+                            lineCount: lines,
+                            startMs: sub.startMs,
+                            endMs: sub.endMs,
+                        };
+                    }
+                }
+                if (current) groups.push(current);
+
+                return groups.map((g) => ({
+                    text: g.texts.join("\n"),
+                    startMs: g.startMs,
+                    endMs: g.endMs,
+                }));
+            }
+
             async function sendImageToGlasses(frame) {
                 if (!bridgeInstance || !frame?.rawBlobData) return 0;
 
                 const preparedBytes = await resizeAndPrepareImage(
                     frame.rawBlobData,
-                    288,
-                    144,
+                    GLASSES_IMAGE_WIDTH,
+                    GLASSES_IMAGE_HEIGHT,
                 );
 
                 return new Promise((resolve) => {
@@ -1251,23 +1530,84 @@ import { parseSubtitles } from "./subtitles";
                                       imageData: preparedBytes,
                                   };
 
-                        // Measure only the actual BLE render, not time spent
-                        // waiting behind other writes in the serial queue.
-                        const start = performance.now();
-                        const result = await bridgeInstance.updateImageRawData(payload);
-                        const duration = performance.now() - start;
+                        const payloadKB = (
+                            preparedBytes.byteLength / 1024
+                        ).toFixed(1);
 
-                        renderDurations.push(duration);
-                        if (renderDurations.length > 5) renderDurations.shift();
-                        averageRenderDuration = getChunkDuration();
+                        // The BLE image transfer fails intermittently (the link
+                        // is flaky). Retry the same frame a few times within this
+                        // queue slot so a transient failure recovers in ~1s rather
+                        // than leaving the image frozen until the next chunk.
+                        let result = "sendFailed";
+                        let duration = 0;
+                        const attemptResults = [];
+                        const sendStart = performance.now();
+                        for (
+                            let attempt = 1;
+                            attempt <= IMAGE_SEND_MAX_ATTEMPTS;
+                            attempt++
+                        ) {
+                            // Measure only the actual BLE render, not time spent
+                            // waiting behind other writes in the serial queue.
+                            const start = performance.now();
+                            result = await bridgeInstance.updateImageRawData(payload);
+                            duration = performance.now() - start;
+                            attemptResults.push(`${result}/${duration.toFixed(0)}ms`);
 
+                            if (result === "success") break;
+                            // Cap total retry time. Each failed attempt still takes
+                            // ~2-3s, so without this a bad frame blocks the serial
+                            // queue (and the next chunk's subtitles) for ~10s.
+                            if (
+                                performance.now() - sendStart >=
+                                IMAGE_SEND_RETRY_BUDGET_MS
+                            ) {
+                                break;
+                            }
+                            if (attempt < IMAGE_SEND_MAX_ATTEMPTS) {
+                                await new Promise((r) =>
+                                    setTimeout(r, IMAGE_SEND_RETRY_DELAY_MS),
+                                );
+                            }
+                        }
+
+                        // Only successful renders inform the chunk-size average;
+                        // failed-attempt durations aren't real render times.
+                        if (result === "success") {
+                            renderDurations.push(duration);
+                            if (renderDurations.length > 5) renderDurations.shift();
+                            averageRenderDuration = getChunkDuration();
+                            lastSentImageTimestampMs = frame.timestampMs;
+                            imageSuccessCount++;
+
+                            // Report how long the image had been frozen.
+                            if (consecutiveImageFailures > 0) {
+                                const frozenMs = lastImageSuccessWall
+                                    ? performance.now() - lastImageSuccessWall
+                                    : 0;
+                                console.warn(
+                                    `[Chunk Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
+                                );
+                            }
+                            consecutiveImageFailures = 0;
+                            lastImageSuccessWall = performance.now();
+                        } else {
+                            consecutiveImageFailures++;
+                            imageFailureCount++;
+                        }
+
+                        const attemptsNote =
+                            attemptResults.length > 1
+                                ? ` attempts[${attemptResults.join(", ")}]`
+                                : "";
+                        const stuckNote =
+                            consecutiveImageFailures > 0
+                                ? ` STUCK x${consecutiveImageFailures}`
+                                : "";
                         console.log(
-                            `[Chunk Engine] Image rendered for ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, avg: ${averageRenderDuration.toFixed(0)}ms)`,
+                            `[Chunk Engine] Image ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
                         );
 
-                        if (result === "success") {
-                            lastSentImageTimestampMs = frame.timestampMs;
-                        }
                         resolve(duration);
                     });
                 });
@@ -1281,13 +1621,22 @@ import { parseSubtitles } from "./subtitles";
                 lastPushedSubText = displayText;
                 return new Promise((resolve) => {
                     bleEnqueue(async () => {
-                        await bridgeInstance.textContainerUpgrade({
+                        // textContainerUpgrade resolves to a boolean. Logging text
+                        // failures shows whether a bad patch is the whole BLE link
+                        // or just the image channel.
+                        const ok = await bridgeInstance.textContainerUpgrade({
                             containerID: 1,
                             containerName: "g2_subs",
                             contentOffset: 0,
                             contentLength: 0,
                             content: displayText,
                         });
+                        if (ok === false) {
+                            subtitleFailureCount++;
+                            console.warn(
+                                `[Chunk Engine] Subtitle send failed (conn:${deviceConnectType}, q:${bleQueueDepth})`,
+                            );
+                        }
                         resolve();
                     });
                 });
@@ -1312,6 +1661,7 @@ import { parseSubtitles } from "./subtitles";
                         currentTimeMs +
                         "ms",
                 );
+                startStatsHeartbeat();
 
                 try {
                     let pipelinePos = currentTimeMs;
@@ -1359,6 +1709,10 @@ import { parseSubtitles } from "./subtitles";
                         }
                         if (signal.aborted) break;
 
+                        // Mark when this chunk visually begins (image now shown),
+                        // so we can pace the whole chunk to its content duration.
+                        const chunkWallStart = performance.now();
+
                         // Pre-build the next chunk so its image can be prefetched
                         // while this chunk's last subtitle is still being read.
                         const nextPos = chunk.endMs;
@@ -1373,30 +1727,36 @@ import { parseSubtitles } from "./subtitles";
                                     : Promise.resolve(0);
                         };
 
-                        // 2. Stream subtitles for this chunk with natural display duration
-                        const subs = chunk.subtitles;
-                        for (let i = 0; i < subs.length; i++) {
-                            const sub = subs[i];
+                        // First cue start of the next chunk — used to decide whether
+                        // to blank the screen after this chunk's last block.
+                        const nextChunkFirstSubMs =
+                            nextChunk && nextChunk.subtitles.length
+                                ? nextChunk.subtitles[0].startMs
+                                : Infinity;
+
+                        // 2. Merge this chunk's cues into multi-line blocks so the
+                        //    reader gets a fuller screen of text per BLE update.
+                        const blocks = groupChunkSubtitles(chunk.subtitles);
+                        if (blocks.length) {
+                            console.log(
+                                `[Chunk Engine] ${chunk.subtitles.length} cue(s) -> ${blocks.length} block(s) for ${chunk.startMs}ms`,
+                            );
+                        }
+
+                        for (let i = 0; i < blocks.length; i++) {
+                            const block = blocks[i];
                             if (signal.aborted) break;
 
-                            const cleanText = sub.text
-                                .replace(/<br\s*\/?>/gi, "\n")
-                                .replace(/<[^>]*>/g, "");
-
-                            // Only wait for the portion of the subtitle that is within THIS chunk
-                            const startTimeInChunk = Math.max(sub.startMs, chunk.startMs);
-                            const endTimeInChunk = Math.min(sub.endMs, chunk.endMs);
-                            const displayDuration = endTimeInChunk - startTimeInChunk;
-
+                            const displayDuration = block.endMs - block.startMs;
                             if (displayDuration <= 0) continue;
 
-                            // Update HTML to show this subtitle
-                            currentTimeMs = sub.startMs;
+                            // Update HTML to track this block's start time
+                            currentTimeMs = block.startMs;
                             updateUI();
 
-                            // Send to glasses (sendSubtitleToGlasses will deduplicate automatically)
+                            // Send to glasses (sendSubtitleToGlasses deduplicates automatically)
                             try {
-                                await sendSubtitleToGlasses(cleanText);
+                                await sendSubtitleToGlasses(block.text);
                             } catch (e) {
                                 console.error(
                                     "[Chunk Engine] Subtitle send failed:",
@@ -1404,19 +1764,28 @@ import { parseSubtitles } from "./subtitles";
                                 );
                             }
 
-                            // 3. Once the LAST subtitle is on screen, start sending
-                            //    the next image while the user reads it. The serial
-                            //    BLE queue holds it behind this subtitle write, so
-                            //    the two never transmit at the same time.
-                            if (i === subs.length - 1) startNextImage();
+                            // 3. Once the LAST block is on screen, start sending the
+                            //    next image while the user reads it. The serial BLE
+                            //    queue holds it behind this subtitle write, so the
+                            //    two never transmit at the same time.
+                            if (i === blocks.length - 1) startNextImage();
 
-                            // Hold subtitle on screen for its duration within this chunk
+                            // Hold the block on screen for its combined duration
                             if (!signal.aborted && displayDuration > 0) {
                                 await sleep(displayDuration, signal);
                             }
 
-                            // 4. Clear subtitle ONLY if it actually ends within this chunk
-                            if (!signal.aborted && sub.endMs <= chunk.endMs) {
+                            // 4. Blank the screen only if the next on-screen text is a
+                            //    real pause away; if it follows closely, leave this
+                            //    block up so the next one simply overwrites it (no
+                            //    flicker through an empty frame).
+                            const nextStartMs = blocks[i + 1]
+                                ? blocks[i + 1].startMs
+                                : nextChunkFirstSubMs;
+                            if (
+                                !signal.aborted &&
+                                nextStartMs - block.endMs > SUBTITLE_CLEAR_GAP_MS
+                            ) {
                                 try {
                                     await sendSubtitleToGlasses(" ");
                                 } catch (e) {}
@@ -1429,7 +1798,17 @@ import { parseSubtitles } from "./subtitles";
                         //    issue the next image now so it is in flight.
                         startNextImage();
 
-                        // 6. Advance to the next chunk; its image is already sending.
+                        // 6. Pace the chunk to its content duration. Without this,
+                        //    subtitle-sparse stretches race ahead and fire image
+                        //    sends back-to-back, saturating the BLE link until the
+                        //    device rejects them (sendFailed) and the image freezes.
+                        const chunkElapsed = performance.now() - chunkWallStart;
+                        const remainder = chunk.duration - chunkElapsed;
+                        if (!signal.aborted && remainder > 0) {
+                            await sleep(remainder, signal);
+                        }
+
+                        // 7. Advance to the next chunk; its image is already sending.
                         pipelinePos = chunk.endMs;
                         currentTimeMs = pipelinePos;
                         updateUI();
@@ -1453,6 +1832,7 @@ import { parseSubtitles } from "./subtitles";
                 } finally {
                     chunkPipelineRunning = false;
                     chunkAbortController = null;
+                    stopStatsHeartbeat();
                     console.log("[Chunk Engine] Pipeline stopped");
                 }
             }
@@ -1460,6 +1840,31 @@ import { parseSubtitles } from "./subtitles";
             function stopChunkPipeline() {
                 if (chunkAbortController) {
                     chunkAbortController.abort();
+                }
+            }
+
+            // Periodic one-line health summary while playing, so link state and
+            // image-freeze trends can be correlated without scrolling the log.
+            function startStatsHeartbeat() {
+                if (statsHeartbeatId) return;
+                statsHeartbeatId = setInterval(() => {
+                    const total = imageSuccessCount + imageFailureCount;
+                    const failPct = total
+                        ? Math.round((imageFailureCount / total) * 100)
+                        : 0;
+                    const sinceGood = lastImageSuccessWall
+                        ? ((performance.now() - lastImageSuccessWall) / 1000).toFixed(1)
+                        : "?";
+                    console.log(
+                        `[Stats] pos:${(currentTimeMs / 1000).toFixed(0)}s conn:${deviceConnectType} battery:${deviceBatteryLevel ?? "?"}% wearing:${deviceIsWearing} queue:${bleQueueDepth} img:${imageSuccessCount}ok/${imageFailureCount}fail(${failPct}%) subFail:${subtitleFailureCount} lastGoodImg:${sinceGood}s ago${consecutiveImageFailures > 0 ? ` FROZEN x${consecutiveImageFailures}` : ""}`,
+                    );
+                }, 10000);
+            }
+
+            function stopStatsHeartbeat() {
+                if (statsHeartbeatId) {
+                    clearInterval(statsHeartbeatId);
+                    statsHeartbeatId = null;
                 }
             }
 
@@ -1479,11 +1884,7 @@ import { parseSubtitles } from "./subtitles";
                         currentTimeMs >= s.startMs && currentTimeMs <= s.endMs,
                 );
 
-                const cleanText = sub
-                    ? sub.text
-                          .replace(/<br\s*\/?>/gi, "\n")
-                          .replace(/<[^>]*>/g, "")
-                    : " ";
+                const cleanText = sub ? cleanSubText(sub.text) : " ";
 
                 try {
                     await sendSubtitleToGlasses(cleanText);

@@ -412,6 +412,29 @@
             </button>
         </div>
 
+        <!-- DEBUG CONSOLE (collapsible, fixed to bottom of viewport) -->
+        <div id="debug-panel" class="debug-panel collapsed">
+            <div class="debug-header" id="debug-header">
+                <div class="debug-title">
+                    <span class="debug-dot"></span>
+                    Debug Console
+                    <span id="debug-count" style="color: var(--primary)">0</span>
+                </div>
+                <div class="debug-actions">
+                    <button id="debug-copy-btn" class="debug-action-btn">
+                        Copy
+                    </button>
+                    <button id="debug-clear-btn" class="debug-action-btn">
+                        Clear
+                    </button>
+                    <button id="debug-toggle-btn" class="debug-action-btn">
+                        Expand
+                    </button>
+                </div>
+            </div>
+            <div class="debug-log-output" id="debug-log-output"></div>
+        </div>
+
         <!-- Import Map Configuration to Bind Even Realities Web Ecosystem Libraries -->
         <script type="importmap">
             {
