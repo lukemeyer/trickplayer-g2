@@ -110,6 +110,91 @@ import { parseSubtitles } from "./subtitles";
             const playBtn = document.getElementById("play-btn");
             const timeDisplay = document.getElementById("time-display");
 
+            // --- BIF/SUBTITLE LOAD PROGRESS BAR ---
+            const loadProgressContainer = document.getElementById(
+                "load-progress-container",
+            );
+            const loadProgressLabel = document.getElementById(
+                "load-progress-label",
+            );
+            const loadProgressFill = document.getElementById(
+                "load-progress-fill",
+            );
+
+            function showLoadProgress(label) {
+                if (!loadProgressContainer) return;
+                loadProgressContainer.classList.remove("hidden");
+                setLoadProgress(0, label);
+            }
+
+            // Pass fraction=null for an indeterminate bar (unknown total size).
+            function setLoadProgress(fraction, label) {
+                if (!loadProgressContainer) return;
+                if (label && loadProgressLabel)
+                    loadProgressLabel.textContent = label;
+                if (fraction == null) {
+                    loadProgressContainer.classList.add("indeterminate");
+                    return;
+                }
+                loadProgressContainer.classList.remove("indeterminate");
+                if (loadProgressFill)
+                    loadProgressFill.style.width = `${Math.max(0, Math.min(100, fraction * 100))}%`;
+            }
+
+            function hideLoadProgress() {
+                if (!loadProgressContainer) return;
+                loadProgressContainer.classList.add("hidden");
+                loadProgressContainer.classList.remove("indeterminate");
+            }
+
+            // Reads a fetch Response's body via a streaming reader so download
+            // progress can be reported without buffering blind, and without
+            // blocking the main thread on one giant arrayBuffer() resolve.
+            async function readResponseWithProgress(res, onProgress) {
+                const contentLengthHeader =
+                    res.headers.get("Content-Length");
+                const total = contentLengthHeader
+                    ? parseInt(contentLengthHeader, 10)
+                    : 0;
+
+                if (!res.body || !res.body.getReader) {
+                    const buf = await res.arrayBuffer();
+                    if (onProgress)
+                        onProgress(buf.byteLength, total || buf.byteLength);
+                    return buf;
+                }
+
+                const reader = res.body.getReader();
+                const chunks = [];
+                let received = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.byteLength;
+                    if (onProgress) onProgress(received, total);
+                }
+                const combined = new Uint8Array(received);
+                let writeOffset = 0;
+                for (const chunk of chunks) {
+                    combined.set(chunk, writeOffset);
+                    writeOffset += chunk.byteLength;
+                }
+                return combined.buffer;
+            }
+
+            // --- STATUS BAR ---
+            // Single choke point for the top status line so it can never go
+            // stale: every state transition in the app should route through
+            // here instead of touching statusDiv/indicator directly.
+            function setStatus(text, state = "neutral") {
+                if (statusDiv) statusDiv.textContent = text;
+                if (!indicator) return;
+                indicator.classList.remove("active", "error");
+                if (state === "active") indicator.classList.add("active");
+                else if (state === "error") indicator.classList.add("error");
+            }
+
             // --- ON-PAGE DEBUG CONSOLE ---
             // Mirrors console.{log,info,warn,error} into the collapsible panel
             // at the bottom of the page so logs are visible on the phone without
@@ -275,9 +360,10 @@ import { parseSubtitles } from "./subtitles";
 
                     // Inject values back into form fields for visibility (server-url removed)
 
-                    statusDiv.textContent =
-                        "Active Plex session restored from storage.";
-                    if (indicator) indicator.classList.add("active");
+                    setStatus(
+                        "Active Plex session restored from storage.",
+                        "active",
+                    );
                     document
                         .getElementById("auth-panel")
                         .classList.add("hidden");
@@ -289,8 +375,9 @@ import { parseSubtitles } from "./subtitles";
 
             async function initEvenBridge() {
                 try {
-                    statusDiv.textContent =
-                        "Searching for active G2 Webview Environment Hook...";
+                    setStatus(
+                        "Searching for active G2 Webview Environment Hook...",
+                    );
                     bridgeInstance = await waitForEvenAppBridge();
 
                     // Track link/device state so sends can be annotated with it.
@@ -316,7 +403,7 @@ import { parseSubtitles } from "./subtitles";
                         borderWidth: 0,
                         containerID: 1,
                         containerName: "g2_subs",
-                        content: "Awaiting Sign-In...",
+                        content: "Sign in to Plex",
                         isEventCapture: 1, // designates subtitle container as primary event receiver
                     };
 
@@ -337,18 +424,17 @@ import { parseSubtitles } from "./subtitles";
                         });
 
                     if (result === 0) {
-                        statusDiv.textContent =
-                            "G2 Glass Engine Connected via BLE!";
-                        if (indicator) indicator.classList.add("active");
+                        setStatus("G2 Glass Engine Connected via BLE!", "active");
                     } else {
                         throw new Error(
                             `Startup container creation failed with result ${result}`,
                         );
                     }
                 } catch (err) {
-                    statusDiv.textContent =
-                        "G2 App Bridge Offline (Browser Preview Loop Active)";
-                    // Leave indicator orange to signify local sandbox / emulator mode
+                    setStatus(
+                        "G2 App Bridge Offline (Browser Preview Loop Active)",
+                        "error",
+                    );
                 }
             }
 
@@ -570,6 +656,7 @@ import { parseSubtitles } from "./subtitles";
                         localStorage.setItem("plex_jwt_token", TOKEN);
                         authStatus.textContent =
                             "Login verified and session saved!";
+                        setStatus("Plex login verified — fetching servers...");
 
                         if (popupRef && !popupRef.closed) popupRef.close();
                         document
@@ -589,8 +676,7 @@ import { parseSubtitles } from "./subtitles";
 
             // --- STEP 1.5: SERVER ROUTING & API DISCOVERY ---
             async function fetchServers(skipToLibraries = false) {
-                if (statusDiv)
-                    statusDiv.textContent = "Fetching Plex servers...";
+                setStatus("Fetching Plex servers...");
                 try {
                     const url = `https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&X-Plex-Token=${TOKEN}&X-Plex-Client-Identifier=${CLIENT_ID}`;
                     const res = await fetch(url, {
@@ -649,6 +735,7 @@ import { parseSubtitles } from "./subtitles";
                         document
                             .getElementById("server-panel")
                             .classList.remove("hidden");
+                        setStatus("No Plex servers found on this account.", "error");
                         return;
                     }
 
@@ -725,9 +812,14 @@ import { parseSubtitles } from "./subtitles";
                         document
                             .getElementById("server-panel")
                             .classList.remove("hidden");
+                        setStatus("Select a Plex server to continue.");
+                        sendSubtitleToGlasses("Select a server").catch(
+                            () => {},
+                        );
                     }
                 } catch (e) {
                     console.error("Failed to fetch servers:", e);
+                    setStatus("Failed to fetch Plex servers.", "error");
                     if (skipToLibraries) {
                         document
                             .getElementById("auth-panel")
@@ -799,8 +891,10 @@ import { parseSubtitles } from "./subtitles";
                 localStorage.setItem("plex_server_url", SERVER_URL);
                 localStorage.setItem("plex_jwt_token", TOKEN);
 
-                statusDiv.textContent = `Connected to ${server.name} (${connection.local ? "Local" : "Remote"})`;
-                if (indicator) indicator.classList.add("active");
+                setStatus(
+                    `Connected to ${server.name} (${connection.local ? "Local" : "Remote"})`,
+                    "active",
+                );
 
                 document.getElementById("server-panel").classList.add("hidden");
                 fetchLibraries();
@@ -887,10 +981,9 @@ import { parseSubtitles } from "./subtitles";
                 document
                     .getElementById("auth-panel")
                     .classList.remove("hidden");
+                setStatus("Signed out. Sign in to continue.");
                 if (bridgeInstance) {
-                    sendSubtitleToGlasses("Account Disconnected.").catch(
-                        () => {},
-                    );
+                    sendSubtitleToGlasses("Sign in to Plex").catch(() => {});
                 }
                 alert(
                     "Logged out successfully. Local storage credentials dropped.",
@@ -909,6 +1002,7 @@ import { parseSubtitles } from "./subtitles";
             }
 
             async function fetchLibraries() {
+                setStatus("Loading library list...");
                 try {
                     const data = await plexFetch("/library/sections");
                     const dirs = data.MediaContainer.Directory || [];
@@ -934,7 +1028,9 @@ import { parseSubtitles } from "./subtitles";
                     document
                         .getElementById("library-panel")
                         .classList.remove("hidden");
+                    setStatus("Select a library to browse.", "active");
                 } catch (e) {
+                    setStatus("Failed to load libraries.", "error");
                     alert("Failed to view server libraries: " + e.message);
                     disconnectAccount();
                 }
@@ -990,6 +1086,7 @@ import { parseSubtitles } from "./subtitles";
 
                 if (scanStatus)
                     scanStatus.textContent = "Scanning directory trees...";
+                setStatus("Scanning library for compatible media...");
                 results.innerHTML = "";
 
                 try {
@@ -1111,11 +1208,18 @@ import { parseSubtitles } from "./subtitles";
                     document
                         .getElementById("media-panel")
                         .classList.remove("hidden");
+                    setStatus(
+                        validItems.length
+                            ? `Found ${validItems.length} compatible item(s). Select one to play.`
+                            : "No compatible media found in this library.",
+                        "active",
+                    );
                 } catch (e) {
                     if (scanStatus)
                         scanStatus.textContent =
                             "Error scanning file tree: " + e.message;
                     else alert("Error scanning file tree: " + e.message);
+                    setStatus("Error scanning library: " + e.message, "error");
                 }
             }
 
@@ -1128,15 +1232,11 @@ import { parseSubtitles } from "./subtitles";
                 document.getElementById("playing-title").textContent =
                     media.title;
 
-                if (bridgeInstance) {
-                    await bridgeInstance.textContainerUpgrade({
-                        containerID: 1,
-                        containerName: "g2_subs",
-                        contentOffset: 0,
-                        contentLength: 0,
-                        content: "Unpacking streaming matrix...",
-                    });
-                }
+                setStatus(`Loading "${media.title}"...`);
+                showLoadProgress("Connecting to server...");
+                sendSubtitleToGlasses(`Loading ${media.title}`).catch(
+                    () => {},
+                );
 
                 const bifUrl = `${SERVER_URL}/library/parts/${media.partId}/indexes/sd?X-Plex-Token=${TOKEN}`;
                 const cleanServerUrl = SERVER_URL.replace(/\/$/, "");
@@ -1160,8 +1260,57 @@ import { parseSubtitles } from "./subtitles";
                             `SRT subtitle file download returned HTTP ${subRes.status}`,
                         );
 
-                    bifs = decodeBif(await bifRes.arrayBuffer());
-                    subtitles = parseSubtitles(await subRes.text());
+                    // Download phase (0-70%): real byte progress when both
+                    // responses report Content-Length, indeterminate otherwise.
+                    let bifReceived = 0;
+                    let subReceived = 0;
+                    let bifTotal = 0;
+                    let subTotal = 0;
+                    const reportDownloadProgress = () => {
+                        const knownTotal = bifTotal + subTotal;
+                        if (knownTotal > 0) {
+                            setLoadProgress(
+                                ((bifReceived + subReceived) / knownTotal) *
+                                    0.7,
+                                "Downloading slideshow + subtitles...",
+                            );
+                        } else {
+                            setLoadProgress(
+                                null,
+                                "Downloading slideshow + subtitles...",
+                            );
+                        }
+                    };
+
+                    const [bifBuffer, subBuffer] = await Promise.all([
+                        readResponseWithProgress(bifRes, (received, total) => {
+                            bifReceived = received;
+                            bifTotal = total;
+                            reportDownloadProgress();
+                        }),
+                        readResponseWithProgress(subRes, (received, total) => {
+                            subReceived = received;
+                            subTotal = total;
+                            reportDownloadProgress();
+                        }),
+                    ]);
+                    const subText = new TextDecoder().decode(subBuffer);
+
+                    // Decode phase (70-95%): chunked, yields to the main thread.
+                    bifs = await decodeBif(bifBuffer, (frac) => {
+                        setLoadProgress(
+                            0.7 + frac * 0.25,
+                            "Decoding video slideshow...",
+                        );
+                    });
+
+                    // Parse phase (95-100%): chunked, yields to the main thread.
+                    subtitles = await parseSubtitles(subText, (frac) => {
+                        setLoadProgress(
+                            0.95 + frac * 0.05,
+                            "Parsing subtitles...",
+                        );
+                    });
 
                     durationMs = bifs[bifs.length - 1].timestampMs;
                     timeline.max = durationMs;
@@ -1175,9 +1324,15 @@ import { parseSubtitles } from "./subtitles";
                     lastSentImageTimestampMs = 0;
                     lastPushedSubText = "";
 
+                    setLoadProgress(1, "Ready");
+                    hideLoadProgress();
+                    setStatus(`Now playing: ${media.title}`, "active");
+
                     updateUI();
                     sendOneShotUpdate();
                 } catch (e) {
+                    hideLoadProgress();
+                    setStatus(`Failed to load "${media.title}".`, "error");
                     alert("Failed to load stream: " + e.message);
                     resetPlayer();
                 }
@@ -1826,6 +1981,10 @@ import { parseSubtitles } from "./subtitles";
                             silentAudio.pause();
                         } catch (e) {}
                         updateUI();
+                        const title =
+                            document.getElementById("playing-title")
+                                ?.textContent || "media";
+                        setStatus(`Finished: ${title}`, "active");
                     }
                 } catch (e) {
                     console.error("[Chunk Engine] Pipeline error:", e);
@@ -2027,12 +2186,16 @@ import { parseSubtitles } from "./subtitles";
             playBtn.onclick = () => {
                 isPlaying = !isPlaying;
                 playBtn.innerText = isPlaying ? "Pause" : "Play";
+                const title =
+                    document.getElementById("playing-title")?.textContent ||
+                    "media";
                 if (isPlaying) {
                     try {
                         silentAudio.play();
                     } catch (e) {
                         console.warn("Silent audio play failed:", e);
                     }
+                    setStatus(`Now playing: ${title}`, "active");
                     // Pipeline drives the timeline — no clock needed
                     runChunkPipeline();
                 } else {
@@ -2040,6 +2203,7 @@ import { parseSubtitles } from "./subtitles";
                     try {
                         silentAudio.pause();
                     } catch (e) {}
+                    setStatus(`Paused: ${title}`, "active");
                 }
             };
 
@@ -2061,6 +2225,7 @@ import { parseSubtitles } from "./subtitles";
                 isPlaying = false;
                 stopChunkPipeline();
                 stopClock();
+                hideLoadProgress();
                 try {
                     silentAudio.pause();
                 } catch (e) {}
@@ -2071,6 +2236,7 @@ import { parseSubtitles } from "./subtitles";
                 document
                     .getElementById("media-panel")
                     .classList.remove("hidden");
+                setStatus("Select a title to play.", "active");
 
                 // Reset chunk pipeline state
                 chunkPipelineRunning = false;
@@ -2154,6 +2320,7 @@ import { parseSubtitles } from "./subtitles";
                 cleanedUp = true;
                 if (typeof stopChunkPipeline === 'function') stopChunkPipeline();
                 isPlaying = false;
+                playBtn.innerText = "Play";
                 try { silentAudio.pause(); } catch (e) {}
                 if (bridgeInstance) {
                     bridgeInstance.shutDownPageContainer(1);
@@ -2174,11 +2341,20 @@ import { parseSubtitles } from "./subtitles";
             
                 // Pause / Play toggle on single tap
                 if (sysType === OsEventTypeList.CLICK_EVENT) {
+                    const title =
+                        document.getElementById("playing-title")
+                            ?.textContent || "media";
                     if (isPlaying) {
                         isPlaying = false;
                         if (typeof stopChunkPipeline === 'function') stopChunkPipeline();
+                        try { silentAudio.pause(); } catch (e) {}
+                        playBtn.innerText = "Play";
+                        setStatus(`Paused: ${title}`, "active");
                     } else if (bifs && bifs.length > 0) {
                         isPlaying = true;
+                        try { silentAudio.play(); } catch (e) {}
+                        playBtn.innerText = "Pause";
+                        setStatus(`Now playing: ${title}`, "active");
                         if (typeof runChunkPipeline === 'function') runChunkPipeline();
                     }
                     return;
@@ -2213,6 +2389,11 @@ import { parseSubtitles } from "./subtitles";
                         
                         if (state.isPlaying) {
                             isPlaying = true;
+                            playBtn.innerText = "Pause";
+                            const title =
+                                document.getElementById("playing-title")
+                                    ?.textContent || "media";
+                            setStatus(`Now playing: ${title}`, "active");
                             if (typeof runChunkPipeline === 'function') runChunkPipeline();
                         }
                     } catch (e) {

@@ -1,5 +1,13 @@
 // @ts-nocheck
-export function parseSubtitles(text) {
+const YIELD_EVERY_N_BLOCKS = 200;
+
+function yieldToMain() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// Parses in chunks with a yield back to the main thread every N blocks so a
+// very large SRT file doesn't freeze the UI while it parses.
+export async function parseSubtitles(text, onProgress) {
     const subs = [];
     const cleanText = text
         .replace(/\r\n/g, "\n")
@@ -19,7 +27,8 @@ export function parseSubtitles(text) {
         return (hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
     }
 
-    for (const block of blocks) {
+    for (let bi = 0; bi < blocks.length; bi++) {
+        const block = blocks[bi];
         const lines = block.trim().split("\n");
         const timeLineIndex = lines.findIndex((l) =>
             l.includes("-->"),
@@ -37,6 +46,12 @@ export function parseSubtitles(text) {
                 subs.push({ startMs, endMs, text: subText });
             }
         }
+
+        if (bi % YIELD_EVERY_N_BLOCKS === 0) {
+            if (onProgress) onProgress(bi / blocks.length);
+            await yieldToMain();
+        }
     }
+    if (onProgress) onProgress(1);
     return subs;
 }
