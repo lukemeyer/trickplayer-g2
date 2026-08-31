@@ -79,6 +79,7 @@ import { parseSubtitles } from "./subtitles";
             const IMAGE_SEND_MAX_ATTEMPTS = 3; // retry a failed BLE image send before giving up on the frame
             const IMAGE_SEND_RETRY_DELAY_MS = 350; // backoff between image-send retries
             const IMAGE_SEND_RETRY_BUDGET_MS = 5000; // stop retrying past this so a bad frame can't starve subtitles
+            const RENDER_DURATION_CAP_MS = 4000; // clamp a single slow success before it feeds the pacing average
 
             // --- GLASSES IMAGE SIZE ---
             // Smaller than the 288x144 container max => fewer bytes per BLE
@@ -1731,9 +1732,15 @@ import { parseSubtitles } from "./subtitles";
                         }
 
                         // Only successful renders inform the chunk-size average;
-                        // failed-attempt durations aren't real render times.
+                        // failed-attempt durations aren't real render times. Cap
+                        // any single outlier (e.g. a send that resolved slow
+                        // while the BLE link was congested) so it can't drag
+                        // the pacing average — and therefore chunk size — up
+                        // for the next several iterations.
                         if (result === "success") {
-                            renderDurations.push(duration);
+                            renderDurations.push(
+                                Math.min(duration, RENDER_DURATION_CAP_MS),
+                            );
                             if (renderDurations.length > 5) renderDurations.shift();
                             averageRenderDuration = getChunkDuration();
                             lastSentImageTimestampMs = frame.timestampMs;
@@ -2194,6 +2201,7 @@ import { parseSubtitles } from "./subtitles";
                     document.getElementById("playing-title")?.textContent ||
                     "media";
                 if (isPlaying) {
+                    backgroundedWhilePlaying = false;
                     try {
                         silentAudio.play();
                     } catch (e) {
@@ -2331,6 +2339,56 @@ import { parseSubtitles } from "./subtitles";
                 }
             }
 
+            // --- BACKGROUND / FOREGROUND HANDLING ---
+            // The phone screen locking (or this app losing foreground on the
+            // glasses launcher) can throttle JS timers and/or the BLE radio
+            // without ever fully killing the WebView, so a chunk pipeline
+            // left running just silently degrades — sends queue up, pacing
+            // sleeps fire late — and the glasses are left on a stale frame
+            // for a long stretch once things resume. Stop the pipeline the
+            // moment we go background, and on return push a fresh
+            // frame/subtitle immediately rather than waiting for the next
+            // scheduled chunk boundary, so there's no backlog to work
+            // through.
+            let backgroundedWhilePlaying = false;
+
+            function pauseForBackground() {
+                if (!isPlaying) return;
+                backgroundedWhilePlaying = true;
+                isPlaying = false;
+                stopChunkPipeline();
+                try { silentAudio.pause(); } catch (e) {}
+                console.log("[Lifecycle] Backgrounded — pipeline paused");
+            }
+
+            function resumeFromBackground() {
+                if (!backgroundedWhilePlaying) return;
+                backgroundedWhilePlaying = false;
+                if (!bifs || bifs.length === 0) return;
+                isPlaying = true;
+                playBtn.innerText = "Pause";
+                try { silentAudio.play(); } catch (e) {}
+                const title =
+                    document.getElementById("playing-title")?.textContent ||
+                    "media";
+                setStatus(`Now playing: ${title}`, "active");
+                console.log(
+                    "[Lifecycle] Foregrounded — refreshing and resuming pipeline",
+                );
+                sendOneShotUpdate().catch(() => {});
+                runChunkPipeline();
+            }
+
+            // Defense in depth: the glasses host is expected to fire
+            // FOREGROUND_ENTER/EXIT_EVENT (below), but the generic Page
+            // Visibility API covers the plain-browser GitHub Pages build too
+            // and costs nothing extra — both handlers are idempotent so it's
+            // safe if both fire for the same real transition.
+            document.addEventListener("visibilitychange", () => {
+                if (document.hidden) pauseForBackground();
+                else resumeFromBackground();
+            });
+
             // Event routing for Even Hub.
             // Called from initEvenBridge() once bridgeInstance is actually
             // set — this used to run unconditionally right after firing off
@@ -2360,6 +2418,7 @@ import { parseSubtitles } from "./subtitles";
                         setStatus(`Paused: ${title}`, "active");
                     } else if (bifs && bifs.length > 0) {
                         isPlaying = true;
+                        backgroundedWhilePlaying = false;
                         try { silentAudio.play(); } catch (e) {}
                         playBtn.innerText = "Pause";
                         setStatus(`Now playing: ${title}`, "active");
@@ -2367,7 +2426,19 @@ import { parseSubtitles } from "./subtitles";
                     }
                     return;
                 }
-            
+
+                // The glasses host lost/regained foreground (e.g. the user
+                // switched to another glasses app, or the phone screen
+                // locked) — see pauseForBackground/resumeFromBackground.
+                if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+                    pauseForBackground();
+                    return;
+                }
+                if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+                    resumeFromBackground();
+                    return;
+                }
+
                 if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
                     cleanup();
                 }
@@ -2391,13 +2462,45 @@ import { parseSubtitles } from "./subtitles";
                 if (jsonStr && jsonStr !== '{}') {
                     try {
                         const state = JSON.parse(jsonStr);
-                        currentTimeMs = state.currentTimeMs ?? currentTimeMs;
-                        durationMs = state.durationMs ?? durationMs;
+
+                        // Defensive: a pipeline that's already actively
+                        // running has a far more accurate currentTimeMs than
+                        // whatever snapshot the host just handed back — the
+                        // host has been observed replaying a stale snapshot
+                        // (from an entirely different point in the file)
+                        // into an already-running session across some
+                        // background/foreground cycles, which would
+                        // otherwise yank playback to a random spot. Only
+                        // trust a restore while nothing is actively playing.
+                        if (chunkPipelineRunning) {
+                            console.warn(
+                                "[Lifecycle] Ignoring __restoreState while pipeline is already running",
+                            );
+                            return;
+                        }
+
                         SERVER_URL = state.SERVER_URL ?? SERVER_URL;
                         TOKEN = state.TOKEN ?? TOKEN;
-                        
-                        if (state.isPlaying) {
+                        durationMs = state.durationMs ?? durationMs;
+
+                        // Clamp against the actually-loaded media's real
+                        // duration when we have one, rather than trusting
+                        // the restored durationMs, which comes from the
+                        // same (possibly stale) snapshot.
+                        const knownDurationMs =
+                            bifs.length > 0
+                                ? bifs[bifs.length - 1].timestampMs
+                                : durationMs;
+                        if (typeof state.currentTimeMs === "number") {
+                            currentTimeMs = Math.max(
+                                0,
+                                Math.min(state.currentTimeMs, knownDurationMs),
+                            );
+                        }
+
+                        if (state.isPlaying && bifs.length > 0) {
                             isPlaying = true;
+                            backgroundedWhilePlaying = false;
                             playBtn.innerText = "Pause";
                             const title =
                                 document.getElementById("playing-title")
