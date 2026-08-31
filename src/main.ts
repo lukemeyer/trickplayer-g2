@@ -380,6 +380,10 @@ import { parseSubtitles } from "./subtitles";
                     );
                     bridgeInstance = await waitForEvenAppBridge();
 
+                    // Wire tap/double-tap/exit event routing now that the
+                    // bridge instance actually exists.
+                    setupEvenHubEventRouting();
+
                     // Track link/device state so sends can be annotated with it.
                     if (typeof bridgeInstance.onDeviceStatusChanged === "function") {
                         bridgeInstance.onDeviceStatusChanged((status) => {
@@ -2327,9 +2331,13 @@ import { parseSubtitles } from "./subtitles";
                 }
             }
 
-            // Event routing for Even Hub
-            
-            const unsubscribe = bridgeInstance.onEvenHubEvent(event => {
+            // Event routing for Even Hub.
+            // Called from initEvenBridge() once bridgeInstance is actually
+            // set — this used to run unconditionally right after firing off
+            // initApp() (not awaited), so bridgeInstance was always still
+            // null here and it threw on every load, on-device included.
+            function setupEvenHubEventRouting() {
+                const unsubscribe = bridgeInstance.onEvenHubEvent(event => {
                 const sysType = event.sysEvent?.eventType ?? null;
                 const textType = event.textEvent?.eventType ?? null;
             
@@ -2363,10 +2371,11 @@ import { parseSubtitles } from "./subtitles";
                 if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
                     cleanup();
                 }
-            });
-            
+                });
+            }
+
             window.addEventListener('beforeunload', cleanup);
-            
+
             // 2. Background State Persistence
             window.__getStateSnapshot = () => {
                 return JSON.stringify({
