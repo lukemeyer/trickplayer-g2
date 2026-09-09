@@ -110,6 +110,30 @@ skip("cues", "wrap / paginate",
   "container but estimates lines rather than wrapping, and clips rather " +
   "than paginating.");
 
+// -------------------------------------------------------------------- real
+
+{
+  const dir = path.join(CORPUS, "real");
+  const names = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((f) => f.endsWith(".expected.json"))
+        .map((f) => f.replace(/\.expected\.json$/, ""))
+    : [];
+  if (names.length === 0) {
+    skip("real", "captured fixture", "corpus/real/ is empty — see its README");
+  } else {
+    for (const name of names) {
+      const b = fs.readFileSync(path.join(dir, `${name}.bif`));
+      const a = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+      const e = readJson(`real/${name}.expected.json`);
+      const g = timeline.parseTimelineIndex(a);
+      check("real", `${name}: multiplierMs`, g.multiplierMs, e.multiplierMs);
+      check("real", `${name}: frames`, g.frames.map((f, i) => ({
+        index: i, tsMs: f.tsMs, offset: f.offset, length: f.length,
+      })), e.frames);
+    }
+  }
+}
+
 // -------------------------------------------------------------------- main
 
 console.log("\ncorpus conformance — trickplayer-g2 (src/)\n");
