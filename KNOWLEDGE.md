@@ -37,3 +37,31 @@ different across the three and are not worth unifying.
 Domain terms are standardized across all three repos. `Timeline` (not
 `BifIndex`), `FrameRef`, `timelineRef`, `itemId`, `subtitleRef`, `scene`
 (not `chunk`). See `PLAN.md` §7, Phase 0.
+
+## Conformance corpus
+
+`corpus/` is **vendored** from `trickplayer-knowledge` — never edit it here.
+Refresh it by running that repo's `tools/corpus/sync-corpus.sh`, which also has
+a `--check` mode that reports drift.
+
+```bash
+npm run conformance
+```
+
+**This currently fails, on purpose.** It reports the three divergences already
+documented in `PLAN.md` §3, rather than hiding them:
+
+| Check | Expected | This build |
+|---|---|---|
+| `timeline multiplier` | 500 (the value in the file) | 1000 — hardcoded, so every timestamp is doubled |
+| `timeline trailing` | last frame 70 B (from the sentinel) | 107 B — derived from the buffer length |
+| `subs cues` | `Italic dialogue.` | `<i>Italic dialogue.</i>` — tags and `{\an8}` not stripped |
+
+Fixing them is `PLAN.md` Phase 2, items 11 and 12. Until then a red run here is
+the accurate state of this build, and the runner exists so it is visible rather
+than a note in a document nobody re-reads.
+
+Testing the parser headlessly is possible only because `src/timeline.ts` is
+split into a pure `parseTimelineIndex` and a browser layer that adds Blobs and
+object URLs — `Blob` and `URL.createObjectURL` do not exist under Node, and
+previously they were entangled with the parsing.

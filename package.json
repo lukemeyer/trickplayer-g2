@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "pack": "evenhub pack",
-    "simulate": "evenhub-simulator http://localhost:5173"
+    "simulate": "evenhub-simulator http://localhost:5173",
+    "conformance": "node tools/conformance.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.14"
