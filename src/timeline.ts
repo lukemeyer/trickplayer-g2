@@ -7,7 +7,7 @@ function yieldToMain() {
 
 // Decodes in chunks with a yield back to the main thread every N frames so a
 // large BIF index doesn't freeze the UI while it decodes.
-export async function decodeBif(buffer, onProgress) {
+export async function parseTimeline(buffer, onProgress) {
     const view = new DataView(buffer);
     const count = view.getUint32(12, true);
     const frames = [];

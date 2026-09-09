@@ -47,16 +47,16 @@ Known debt, all tracked in `trickplayer-knowledge/PLAN.md` §3:
 ```
 index.html            webview host, zoom-locked viewport
 src/main.ts           everything else — 2,500 lines, see below
-src/bif.ts            trick-play index parsing
+src/timeline.ts       frame timeline — trick-play index parsing
 src/subtitles.ts      SRT parsing
 app.json              manifest; network permission whitelisted to *.plex.direct
 .github/workflows/    Pages deploy
 ```
 
 `main.ts` is a single file holding sign-in, server discovery, browsing,
-eligibility scanning, the image pipeline, the BLE send queue, the chunk pipeline
+eligibility scanning, the image pipeline, the BLE send queue, the scene pipeline
 and the debug panel. Splitting it is a precondition for testing any of it
-headlessly, which is why the shared conformance corpus needs `bif.ts` separated
+headlessly, which is why the shared conformance corpus needs `timeline.ts` separated
 from its browser Blob layer first.
 
 ## Run
@@ -74,20 +74,20 @@ foreground/background handling depends on.
 
 ## How playback works
 
-A **chunk** is one frame plus every subtitle cue in its window. (The watch faces
-call this a *scene*; the shared vocabulary is `scene` and this repo is the
-outlier — see KNOWLEDGE.md.)
+A **scene** is one frame plus every subtitle cue in its window. (This build
+called it a *chunk* until the vocabulary was standardized across the three
+platforms — see KNOWLEDGE.md.)
 
-Chunks tile the episode, and a cue is owned by the chunk it **starts** in, so a
+Scenes tile the episode, and a cue is owned by the scene it **starts** in, so a
 line straddling a boundary is not shown twice.
 
 Two things make it watchable given how slow the link is:
 
-- **The next chunk's image is prefetched** while the current chunk's subtitles
+- **The next scene's image is prefetched** while the current scene's subtitles
   are still being read out, so the frame is usually ready before it is needed.
 - **Pacing adapts.** A moving average of the last few render durations, clamped
-  to 1–8 s, decides how long a chunk gets. A transfer that takes four seconds on
-  a bad link stretches the chunk rather than desyncing it.
+  to 1–8 s, decides how long a scene gets. A transfer that takes four seconds on
+  a bad link stretches the scene rather than desyncing it.
 
 Consecutive cues are merged into multi-line blocks that fit the subtitle
 container, so there is more to read while the next image transfers. Cues more

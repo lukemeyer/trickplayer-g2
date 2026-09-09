@@ -4,7 +4,7 @@ import {
     ImageRawDataUpdate,
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
-import { decodeBif } from "./bif";
+import { parseTimeline } from "./timeline";
 import { parseSubtitles } from "./subtitles";
 
             // --- APPLICATION METADATA FOR HEADERS ---
@@ -59,9 +59,9 @@ import { parseSubtitles } from "./subtitles";
             let subtitleFailureCount = 0;
             let statsHeartbeatId = null;
 
-            // --- CHUNK PIPELINE STATE ---
-            let chunkPipelineRunning = false;
-            let chunkAbortController = null; // AbortController to cancel pipeline on pause/seek
+            // --- SCENE PIPELINE STATE ---
+            let scenePipelineRunning = false;
+            let sceneAbortController = null; // AbortController to cancel pipeline on pause/seek
             let renderDurations = []; // last 5 image render durations (ms)
             let averageRenderDuration = 1500; // moving avg, clamped 1000–8000ms
             let lastSentImageTimestampMs = 0;
@@ -1174,9 +1174,9 @@ import { parseSubtitles } from "./subtitles";
 
                                                 validItems.push({
                                                     title: displayTitle,
-                                                    partId: part.id,
+                                                    timelineRef: part.id,
                                                     subId: subStream.id,
-                                                    subKey: subStream.key,
+                                                    subtitleRef: subStream.key,
                                                     res: media.videoResolution,
                                                 });
                                             }
@@ -1243,12 +1243,12 @@ import { parseSubtitles } from "./subtitles";
                     () => {},
                 );
 
-                const bifUrl = `${SERVER_URL}/library/parts/${media.partId}/indexes/sd?X-Plex-Token=${TOKEN}`;
+                const bifUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd?X-Plex-Token=${TOKEN}`;
                 const cleanServerUrl = SERVER_URL.replace(/\/$/, "");
-                const cleanSubKey = media.subKey.startsWith("/")
-                    ? media.subKey
-                    : `/${media.subKey}`;
-                const subUrl = `${cleanServerUrl}${cleanSubKey}${cleanSubKey.includes("?") ? "&" : "?"}X-Plex-Token=${TOKEN}`;
+                const cleanSubtitleRef = media.subtitleRef.startsWith("/")
+                    ? media.subtitleRef
+                    : `/${media.subtitleRef}`;
+                const subUrl = `${cleanServerUrl}${cleanSubtitleRef}${cleanSubtitleRef.includes("?") ? "&" : "?"}X-Plex-Token=${TOKEN}`;
 
                 try {
                     const [bifRes, subRes] = await Promise.all([
@@ -1302,7 +1302,7 @@ import { parseSubtitles } from "./subtitles";
                     const subText = new TextDecoder().decode(subBuffer);
 
                     // Decode phase (70-95%): chunked, yields to the main thread.
-                    bifs = await decodeBif(bifBuffer, (frac) => {
+                    bifs = await parseTimeline(bifBuffer, (frac) => {
                         setLoadProgress(
                             0.7 + frac * 0.25,
                             "Decoding video slideshow...",
@@ -1321,9 +1321,9 @@ import { parseSubtitles } from "./subtitles";
                     timeline.max = durationMs;
                     currentTimeMs = 0;
 
-                    // Reset chunk pipeline state
-                    chunkPipelineRunning = false;
-                    chunkAbortController = null;
+                    // Reset scene pipeline state
+                    scenePipelineRunning = false;
+                    sceneAbortController = null;
                     renderDurations = [];
                     averageRenderDuration = 1500;
                     lastSentImageTimestampMs = 0;
@@ -1534,7 +1534,7 @@ import { parseSubtitles } from "./subtitles";
                     };
                     img.src = objectUrl;
                 });
-            } // --- CHUNK PIPELINE HELPERS ---
+            } // --- SCENE PIPELINE HELPERS ---
 
             function sleep(ms, signal) {
                 return new Promise((resolve) => {
@@ -1556,15 +1556,15 @@ import { parseSubtitles } from "./subtitles";
                 });
             }
 
-            function getChunkDuration() {
+            function getSceneDuration() {
                 if (renderDurations.length === 0) return 5000;
                 const sum = renderDurations.reduce((a, b) => a + b, 0);
                 const avg = sum / renderDurations.length;
                 return Math.max(5000, Math.min(15000, avg));
             }
 
-            function buildChunk(startMs) {
-                const baseDuration = getChunkDuration();
+            function buildScene(startMs) {
+                const baseDuration = getSceneDuration();
                 const targetEndMs = startMs + baseDuration;
 
                 // Find BIF frame at startMs
@@ -1574,23 +1574,23 @@ import { parseSubtitles } from "./subtitles";
                         (bifs[i + 1]?.timestampMs > startMs || !bifs[i + 1]),
                 );
 
-                // Ensure chunk extends to the NEXT image's exact timestamp
+                // Ensure scene extends to the NEXT image's exact timestamp
                 // so we never send the same image twice
                 const nextFrame = bifs.find(f => f.timestampMs >= targetEndMs);
                 const endMs = nextFrame ? nextFrame.timestampMs : targetEndMs;
                 const duration = endMs - startMs;
 
-                // Own each cue to the chunk it STARTS in. Chunks tile the
+                // Own each cue to the scene it STARTS in. Scenes tile the
                 // timeline contiguously, so this assigns every cue to exactly
-                // one chunk — a cue straddling a boundary is no longer sent in
-                // both chunks (the source of duplicate subtitles).
-                const chunkSubs = subtitles.filter(
+                // one scene — a cue straddling a boundary is no longer sent in
+                // both scenes (the source of duplicate subtitles).
+                const sceneSubs = subtitles.filter(
                     (s) => s.startMs >= startMs && s.startMs < endMs,
                 );
 
                 return {
                     image: frame,
-                    subtitles: chunkSubs,
+                    subtitles: sceneSubs,
                     startMs,
                     endMs,
                     duration,
@@ -1621,8 +1621,8 @@ import { parseSubtitles } from "./subtitles";
             // glasses' line budget. Each returned block is shown as a single
             // combined subtitle update, giving the reader more text per send.
             // Cues keep their natural start/end times (each cue belongs to one
-            // chunk now, so there is no boundary to clip against).
-            function groupChunkSubtitles(subs) {
+            // scene now, so there is no boundary to clip against).
+            function groupSceneSubtitles(subs) {
                 const groups = [];
                 let current = null;
 
@@ -1697,7 +1697,7 @@ import { parseSubtitles } from "./subtitles";
                         // The BLE image transfer fails intermittently (the link
                         // is flaky). Retry the same frame a few times within this
                         // queue slot so a transient failure recovers in ~1s rather
-                        // than leaving the image frozen until the next chunk.
+                        // than leaving the image frozen until the next scene.
                         let result = "sendFailed";
                         let duration = 0;
                         const attemptResults = [];
@@ -1717,7 +1717,7 @@ import { parseSubtitles } from "./subtitles";
                             if (result === "success") break;
                             // Cap total retry time. Each failed attempt still takes
                             // ~2-3s, so without this a bad frame blocks the serial
-                            // queue (and the next chunk's subtitles) for ~10s.
+                            // queue (and the next scene's subtitles) for ~10s.
                             if (
                                 performance.now() - sendStart >=
                                 IMAGE_SEND_RETRY_BUDGET_MS
@@ -1731,18 +1731,18 @@ import { parseSubtitles } from "./subtitles";
                             }
                         }
 
-                        // Only successful renders inform the chunk-size average;
+                        // Only successful renders inform the scene-size average;
                         // failed-attempt durations aren't real render times. Cap
                         // any single outlier (e.g. a send that resolved slow
                         // while the BLE link was congested) so it can't drag
-                        // the pacing average — and therefore chunk size — up
+                        // the pacing average — and therefore scene size — up
                         // for the next several iterations.
                         if (result === "success") {
                             renderDurations.push(
                                 Math.min(duration, RENDER_DURATION_CAP_MS),
                             );
                             if (renderDurations.length > 5) renderDurations.shift();
-                            averageRenderDuration = getChunkDuration();
+                            averageRenderDuration = getSceneDuration();
                             lastSentImageTimestampMs = frame.timestampMs;
                             imageSuccessCount++;
 
@@ -1752,7 +1752,7 @@ import { parseSubtitles } from "./subtitles";
                                     ? performance.now() - lastImageSuccessWall
                                     : 0;
                                 console.warn(
-                                    `[Chunk Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
+                                    `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
                                 );
                             }
                             consecutiveImageFailures = 0;
@@ -1771,7 +1771,7 @@ import { parseSubtitles } from "./subtitles";
                                 ? ` STUCK x${consecutiveImageFailures}`
                                 : "";
                         console.log(
-                            `[Chunk Engine] Image ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                            `[Scene Engine] Image ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
                         );
 
                         resolve(duration);
@@ -1800,7 +1800,7 @@ import { parseSubtitles } from "./subtitles";
                         if (ok === false) {
                             subtitleFailureCount++;
                             console.warn(
-                                `[Chunk Engine] Subtitle send failed (conn:${deviceConnectType}, q:${bleQueueDepth})`,
+                                `[Scene Engine] Subtitle send failed (conn:${deviceConnectType}, q:${bleQueueDepth})`,
                             );
                         }
                         resolve();
@@ -1808,22 +1808,22 @@ import { parseSubtitles } from "./subtitles";
                 });
             }
 
-            async function runChunkPipeline() {
+            async function runScenePipeline() {
                 // Stop any existing pipeline first
-                stopChunkPipeline();
-                while (chunkPipelineRunning) {
+                stopScenePipeline();
+                while (scenePipelineRunning) {
                     await sleep(10);
                 }
 
-                chunkPipelineRunning = true;
-                chunkAbortController = new AbortController();
-                const signal = chunkAbortController.signal;
+                scenePipelineRunning = true;
+                sceneAbortController = new AbortController();
+                const signal = sceneAbortController.signal;
 
                 // Pipeline drives the timeline — stop the clock
                 stopClock();
 
                 console.log(
-                    "[Chunk Engine] Pipeline started at " +
+                    "[Scene Engine] Pipeline started at " +
                         currentTimeMs +
                         "ms",
                 );
@@ -1832,12 +1832,12 @@ import { parseSubtitles } from "./subtitles";
                 try {
                     let pipelinePos = currentTimeMs;
 
-                    // Build the first chunk and kick off its image send. There is
+                    // Build the first scene and kick off its image send. There is
                     // nothing to overlap with yet, so it just starts immediately.
-                    let chunk = buildChunk(pipelinePos);
+                    let scene = buildScene(pipelinePos);
                     let imageSend =
-                        chunk.image
-                            ? sendImageToGlasses(chunk.image)
+                        scene.image
+                            ? sendImageToGlasses(scene.image)
                             : Promise.resolve(0);
 
                     while (
@@ -1846,66 +1846,66 @@ import { parseSubtitles } from "./subtitles";
                         pipelinePos < durationMs
                     ) {
                         // No BIF frame at this position — nudge forward and retry.
-                        if (!chunk.image) {
+                        if (!scene.image) {
                             await sleep(50, signal);
                             pipelinePos += 50;
-                            chunk = buildChunk(pipelinePos);
-                            imageSend = chunk.image
-                                ? sendImageToGlasses(chunk.image)
+                            scene = buildScene(pipelinePos);
+                            imageSend = scene.image
+                                ? sendImageToGlasses(scene.image)
                                 : Promise.resolve(0);
                             continue;
                         }
 
-                        // 1. Show this chunk's image locally and wait for its BLE
+                        // 1. Show this scene's image locally and wait for its BLE
                         //    render. The send was issued at the END of the previous
                         //    iteration (prefetched while the last subtitle showed),
                         //    so by now it is usually already complete.
-                        currentTimeMs = chunk.startMs;
+                        currentTimeMs = scene.startMs;
                         updateUI();
                         console.log(
-                            `[Chunk Engine] Awaiting image at ${chunk.startMs}ms (chunk: ${chunk.duration.toFixed(0)}ms, subs: ${chunk.subtitles.length})`,
+                            `[Scene Engine] Awaiting image at ${scene.startMs}ms (scene: ${scene.duration.toFixed(0)}ms, subs: ${scene.subtitles.length})`,
                         );
                         try {
                             await imageSend;
                         } catch (e) {
                             console.error(
-                                "[Chunk Engine] Image send failed:",
+                                "[Scene Engine] Image send failed:",
                                 e,
                             );
                         }
                         if (signal.aborted) break;
 
-                        // Mark when this chunk visually begins (image now shown),
-                        // so we can pace the whole chunk to its content duration.
-                        const chunkWallStart = performance.now();
+                        // Mark when this scene visually begins (image now shown),
+                        // so we can pace the whole scene to its content duration.
+                        const sceneWallStart = performance.now();
 
-                        // Pre-build the next chunk so its image can be prefetched
-                        // while this chunk's last subtitle is still being read.
-                        const nextPos = chunk.endMs;
-                        const nextChunk =
-                            nextPos < durationMs ? buildChunk(nextPos) : null;
+                        // Pre-build the next scene so its image can be prefetched
+                        // while this scene's last subtitle is still being read.
+                        const nextPos = scene.endMs;
+                        const nextScene =
+                            nextPos < durationMs ? buildScene(nextPos) : null;
                         let nextImageSend = null;
                         const startNextImage = () => {
                             if (nextImageSend) return;
                             nextImageSend =
-                                nextChunk && nextChunk.image
-                                    ? sendImageToGlasses(nextChunk.image)
+                                nextScene && nextScene.image
+                                    ? sendImageToGlasses(nextScene.image)
                                     : Promise.resolve(0);
                         };
 
-                        // First cue start of the next chunk — used to decide whether
-                        // to blank the screen after this chunk's last block.
-                        const nextChunkFirstSubMs =
-                            nextChunk && nextChunk.subtitles.length
-                                ? nextChunk.subtitles[0].startMs
+                        // First cue start of the next scene — used to decide whether
+                        // to blank the screen after this scene's last block.
+                        const nextSceneFirstSubMs =
+                            nextScene && nextScene.subtitles.length
+                                ? nextScene.subtitles[0].startMs
                                 : Infinity;
 
-                        // 2. Merge this chunk's cues into multi-line blocks so the
+                        // 2. Merge this scene's cues into multi-line blocks so the
                         //    reader gets a fuller screen of text per BLE update.
-                        const blocks = groupChunkSubtitles(chunk.subtitles);
+                        const blocks = groupSceneSubtitles(scene.subtitles);
                         if (blocks.length) {
                             console.log(
-                                `[Chunk Engine] ${chunk.subtitles.length} cue(s) -> ${blocks.length} block(s) for ${chunk.startMs}ms`,
+                                `[Scene Engine] ${scene.subtitles.length} cue(s) -> ${blocks.length} block(s) for ${scene.startMs}ms`,
                             );
                         }
 
@@ -1925,7 +1925,7 @@ import { parseSubtitles } from "./subtitles";
                                 await sendSubtitleToGlasses(block.text);
                             } catch (e) {
                                 console.error(
-                                    "[Chunk Engine] Subtitle send failed:",
+                                    "[Scene Engine] Subtitle send failed:",
                                     e,
                                 );
                             }
@@ -1947,7 +1947,7 @@ import { parseSubtitles } from "./subtitles";
                             //    flicker through an empty frame).
                             const nextStartMs = blocks[i + 1]
                                 ? blocks[i + 1].startMs
-                                : nextChunkFirstSubMs;
+                                : nextSceneFirstSubMs;
                             if (
                                 !signal.aborted &&
                                 nextStartMs - block.endMs > SUBTITLE_CLEAR_GAP_MS
@@ -1960,26 +1960,26 @@ import { parseSubtitles } from "./subtitles";
 
                         if (signal.aborted) break;
 
-                        // 5. Chunk had no (displayable) subtitles to piggyback on —
+                        // 5. Scene had no (displayable) subtitles to piggyback on —
                         //    issue the next image now so it is in flight.
                         startNextImage();
 
-                        // 6. Pace the chunk to its content duration. Without this,
+                        // 6. Pace the scene to its content duration. Without this,
                         //    subtitle-sparse stretches race ahead and fire image
                         //    sends back-to-back, saturating the BLE link until the
                         //    device rejects them (sendFailed) and the image freezes.
-                        const chunkElapsed = performance.now() - chunkWallStart;
-                        const remainder = chunk.duration - chunkElapsed;
+                        const sceneElapsed = performance.now() - sceneWallStart;
+                        const remainder = scene.duration - sceneElapsed;
                         if (!signal.aborted && remainder > 0) {
                             await sleep(remainder, signal);
                         }
 
-                        // 7. Advance to the next chunk; its image is already sending.
-                        pipelinePos = chunk.endMs;
+                        // 7. Advance to the next scene; its image is already sending.
+                        pipelinePos = scene.endMs;
                         currentTimeMs = pipelinePos;
                         updateUI();
 
-                        chunk = nextChunk || buildChunk(pipelinePos);
+                        scene = nextScene || buildScene(pipelinePos);
                         imageSend = nextImageSend || Promise.resolve(0);
                     }
 
@@ -1998,18 +1998,18 @@ import { parseSubtitles } from "./subtitles";
                         setStatus(`Finished: ${title}`, "active");
                     }
                 } catch (e) {
-                    console.error("[Chunk Engine] Pipeline error:", e);
+                    console.error("[Scene Engine] Pipeline error:", e);
                 } finally {
-                    chunkPipelineRunning = false;
-                    chunkAbortController = null;
+                    scenePipelineRunning = false;
+                    sceneAbortController = null;
                     stopStatsHeartbeat();
-                    console.log("[Chunk Engine] Pipeline stopped");
+                    console.log("[Scene Engine] Pipeline stopped");
                 }
             }
 
-            function stopChunkPipeline() {
-                if (chunkAbortController) {
-                    chunkAbortController.abort();
+            function stopScenePipeline() {
+                if (sceneAbortController) {
+                    sceneAbortController.abort();
                 }
             }
 
@@ -2060,7 +2060,7 @@ import { parseSubtitles } from "./subtitles";
                     await sendSubtitleToGlasses(cleanText);
                 } catch (e) {
                     console.error(
-                        "[Chunk Engine] One-shot subtitle failed:",
+                        "[Scene Engine] One-shot subtitle failed:",
                         e,
                     );
                 }
@@ -2070,7 +2070,7 @@ import { parseSubtitles } from "./subtitles";
                         await sendImageToGlasses(frame);
                     } catch (e) {
                         console.error(
-                            "[Chunk Engine] One-shot image failed:",
+                            "[Scene Engine] One-shot image failed:",
                             e,
                         );
                     }
@@ -2209,9 +2209,9 @@ import { parseSubtitles } from "./subtitles";
                     }
                     setStatus(`Now playing: ${title}`, "active");
                     // Pipeline drives the timeline — no clock needed
-                    runChunkPipeline();
+                    runScenePipeline();
                 } else {
-                    stopChunkPipeline();
+                    stopScenePipeline();
                     try {
                         silentAudio.pause();
                     } catch (e) {}
@@ -2222,20 +2222,20 @@ import { parseSubtitles } from "./subtitles";
             timeline.oninput = (e) => {
                 const wasPlaying = isPlaying;
                 if (wasPlaying) {
-                    stopChunkPipeline();
+                    stopScenePipeline();
                 }
                 currentTimeMs = Number(e.target.value);
                 updateUI();
                 sendOneShotUpdate();
                 // Restart pipeline from new position if was playing
                 if (wasPlaying && isPlaying) {
-                    runChunkPipeline();
+                    runScenePipeline();
                 }
             };
 
             function resetPlayer() {
                 isPlaying = false;
-                stopChunkPipeline();
+                stopScenePipeline();
                 stopClock();
                 hideLoadProgress();
                 try {
@@ -2250,9 +2250,9 @@ import { parseSubtitles } from "./subtitles";
                     .classList.remove("hidden");
                 setStatus("Select a title to play.", "active");
 
-                // Reset chunk pipeline state
-                chunkPipelineRunning = false;
-                chunkAbortController = null;
+                // Reset scene pipeline state
+                scenePipelineRunning = false;
+                sceneAbortController = null;
                 renderDurations = [];
                 averageRenderDuration = 1500;
                 lastSentImageTimestampMs = 0;
@@ -2330,7 +2330,7 @@ import { parseSubtitles } from "./subtitles";
             function cleanup() {
                 if (cleanedUp) return;
                 cleanedUp = true;
-                if (typeof stopChunkPipeline === 'function') stopChunkPipeline();
+                if (typeof stopScenePipeline === 'function') stopScenePipeline();
                 isPlaying = false;
                 playBtn.innerText = "Play";
                 try { silentAudio.pause(); } catch (e) {}
@@ -2342,13 +2342,13 @@ import { parseSubtitles } from "./subtitles";
             // --- BACKGROUND / FOREGROUND HANDLING ---
             // The phone screen locking (or this app losing foreground on the
             // glasses launcher) can throttle JS timers and/or the BLE radio
-            // without ever fully killing the WebView, so a chunk pipeline
+            // without ever fully killing the WebView, so a scene pipeline
             // left running just silently degrades — sends queue up, pacing
             // sleeps fire late — and the glasses are left on a stale frame
             // for a long stretch once things resume. Stop the pipeline the
             // moment we go background, and on return push a fresh
             // frame/subtitle immediately rather than waiting for the next
-            // scheduled chunk boundary, so there's no backlog to work
+            // scheduled scene boundary, so there's no backlog to work
             // through.
             let backgroundedWhilePlaying = false;
 
@@ -2356,7 +2356,7 @@ import { parseSubtitles } from "./subtitles";
                 if (!isPlaying) return;
                 backgroundedWhilePlaying = true;
                 isPlaying = false;
-                stopChunkPipeline();
+                stopScenePipeline();
                 try { silentAudio.pause(); } catch (e) {}
                 console.log("[Lifecycle] Backgrounded — pipeline paused");
             }
@@ -2376,7 +2376,7 @@ import { parseSubtitles } from "./subtitles";
                     "[Lifecycle] Foregrounded — refreshing and resuming pipeline",
                 );
                 sendOneShotUpdate().catch(() => {});
-                runChunkPipeline();
+                runScenePipeline();
             }
 
             // Defense in depth: the glasses host is expected to fire
@@ -2412,7 +2412,7 @@ import { parseSubtitles } from "./subtitles";
                             ?.textContent || "media";
                     if (isPlaying) {
                         isPlaying = false;
-                        if (typeof stopChunkPipeline === 'function') stopChunkPipeline();
+                        if (typeof stopScenePipeline === 'function') stopScenePipeline();
                         try { silentAudio.pause(); } catch (e) {}
                         playBtn.innerText = "Play";
                         setStatus(`Paused: ${title}`, "active");
@@ -2422,7 +2422,7 @@ import { parseSubtitles } from "./subtitles";
                         try { silentAudio.play(); } catch (e) {}
                         playBtn.innerText = "Pause";
                         setStatus(`Now playing: ${title}`, "active");
-                        if (typeof runChunkPipeline === 'function') runChunkPipeline();
+                        if (typeof runScenePipeline === 'function') runScenePipeline();
                     }
                     return;
                 }
@@ -2472,7 +2472,7 @@ import { parseSubtitles } from "./subtitles";
                         // background/foreground cycles, which would
                         // otherwise yank playback to a random spot. Only
                         // trust a restore while nothing is actively playing.
-                        if (chunkPipelineRunning) {
+                        if (scenePipelineRunning) {
                             console.warn(
                                 "[Lifecycle] Ignoring __restoreState while pipeline is already running",
                             );
@@ -2506,7 +2506,7 @@ import { parseSubtitles } from "./subtitles";
                                 document.getElementById("playing-title")
                                     ?.textContent || "media";
                             setStatus(`Now playing: ${title}`, "active");
-                            if (typeof runChunkPipeline === 'function') runChunkPipeline();
+                            if (typeof runScenePipeline === 'function') runScenePipeline();
                         }
                     } catch (e) {
                         console.error("Failed to restore state", e);
