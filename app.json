@@ -1,11 +1,11 @@
 {
   "package_id": "com.lukemeyer.plexbifviewer",
   "edition": "202601",
-  "name": "Plex BIF Viewer",
+  "name": "Trickplayer",
   "version": "1.0.0",
   "min_sdk_version": "0.0.10",
   "min_app_version": "0.0.10",
-  "description": "Stream Plex BIF preview images and subtitles to your Even Realities G2 glasses.",
+  "description": "Watch an episode as trick-play frames and subtitles on your Even Realities G2 glasses.",
   "developer_name": "Luke Meyer",
   "entrypoint": "index.html",
   "permissions": [
@@ -21,7 +21,7 @@
     {
       "version": "1.0.0",
       "notes": [
-        "Initial release of Plex BIF Viewer."
+        "Initial release."
       ]
     }
   ],
