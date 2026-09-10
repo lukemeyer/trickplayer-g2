@@ -171,9 +171,12 @@ skip("cues", "wrap / paginate",
 
 {
   const dir = path.join(CORPUS, "real");
+  // Plex captures only: a Jellyfin fixture is tile sheets with no .bif, and
+  // this build has no Jellyfin provider to check it with yet.
   const names = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter((f) => f.endsWith(".expected.json"))
         .map((f) => f.replace(/\.expected\.json$/, ""))
+        .filter((n) => (readJson(`real/${n}.expected.json`).source || {}).provider !== "jellyfin")
     : [];
   if (names.length === 0) {
     skip("real", "captured fixture", "corpus/real/ is empty — see its README");
