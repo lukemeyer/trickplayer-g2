@@ -1168,15 +1168,60 @@ import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
                 }
             }
 
+            // Eligibility for one already-fetched metadata item, or null.
+            //
+            // An item needs BOTH an `sd` trick-play index and a subtitle stream
+            // with a NON-NULL key. Most SRT streams Plex reports are embedded in
+            // the media file and cannot be fetched separately; only sidecars can.
+            // See trickplayer-knowledge findings/F-014.
+            function eligibleFrom(detailedItem, isEpisodeFlow) {
+                if (!detailedItem || !detailedItem.Media) return null;
+                for (const media of detailedItem.Media) {
+                    if (!media.Part) continue;
+                    for (const part of media.Part) {
+                        const hasBif = part.indexes && part.indexes.includes("sd");
+                        if (!hasBif) continue;
+                        const subStream = part.Stream
+                            ? part.Stream.find(
+                                  (st) =>
+                                      st.streamType === 3 &&
+                                      st.codec === "srt" &&
+                                      st.key,
+                              )
+                            : null;
+                        if (!subStream) continue;
+
+                        let displayTitle = detailedItem.title;
+                        if (isEpisodeFlow) {
+                            const sNum = String(detailedItem.parentIndex || 0).padStart(2, "0");
+                            const eNum = String(detailedItem.index || 0).padStart(2, "0");
+                            displayTitle = `${detailedItem.grandparentTitle || ""} - S${sNum}E${eNum} - ${detailedItem.title}`;
+                        }
+                        return {
+                            title: displayTitle,
+                            timelineRef: part.id,
+                            subId: subStream.id,
+                            subtitleRef: subStream.key,
+                            res: media.videoResolution,
+                        };
+                    }
+                }
+                return null;
+            }
+
+            // Bumped whenever a scan starts or the user leaves the panel, so an
+            // in-flight scan knows to stop rather than rendering into a screen
+            // that has moved on.
+            let scanGeneration = 0;
+
             async function scanForValidMedia() {
                 const libId = document.getElementById("library-select").value;
                 const scanStatus = document.getElementById("scan-status");
                 const results = document.getElementById("results-list");
 
-                if (scanStatus)
-                    scanStatus.textContent = "Scanning directory trees...";
-                setStatus("Scanning library for compatible media...");
+                const myGeneration = ++scanGeneration;
                 results.innerHTML = "";
+                setStatus("Scanning library for compatible media...");
 
                 try {
                     const type = libraryTypes[libId];
@@ -1184,129 +1229,90 @@ import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
                     let isEpisodeFlow = false;
 
                     if (type === "show") {
-                        const showId =
-                            document.getElementById("show-select").value;
+                        const showId = document.getElementById("show-select").value;
                         if (!showId) {
                             if (scanStatus) scanStatus.textContent = "";
                             return alert("Please select a show first.");
                         }
-                        // Query leaves (episodes) of the show
-                        const data = await plexFetch(
-                            `/library/metadata/${showId}/allLeaves`,
-                        );
+                        const data = await plexFetch(`/library/metadata/${showId}/allLeaves`);
                         items = data.MediaContainer.Metadata || [];
                         isEpisodeFlow = true;
                     } else {
-                        // Movie section
-                        const data = await plexFetch(
-                            `/library/sections/${libId}/all`,
-                        );
+                        const data = await plexFetch(`/library/sections/${libId}/all`);
                         items = data.MediaContainer.Metadata || [];
                     }
 
-                    const validItems = [];
-                    let processedCount = 0;
-                    const totalItems = items.length;
+                    // Show the list NOW and fill it in as hits are found, rather
+                    // than after the whole library has been swept (F-015).
+                    //
+                    // Eligibility costs one metadata request per item — about
+                    // 23 ms on a LAN, so ~4 s for a 157-episode show either way.
+                    // The difference is not the total: four seconds of blank
+                    // screen is a bad app, four seconds of a list filling in is
+                    // a working one, and the user picks something long before
+                    // the scan ends. The old path fetched everything in batches
+                    // of 20 up front and threw almost all of it away.
+                    document.getElementById("library-panel").classList.add("hidden");
+                    document.getElementById("media-panel").classList.remove("hidden");
 
-                    // Fetch details in batches of 20 to check full streams eligibility
-                    const batchSize = 20;
-                    for (let i = 0; i < items.length; i += batchSize) {
-                        const batch = items.slice(i, i + batchSize);
+                    let found = 0;
+                    for (let i = 0; i < items.length; i++) {
+                        if (myGeneration !== scanGeneration) return; // superseded
                         if (scanStatus) {
-                            scanStatus.textContent = `Verifying eligibility: ${processedCount}/${totalItems} items...`;
+                            scanStatus.textContent =
+                                `Checking ${i + 1}/${items.length}` +
+                                (found ? ` — ${found} playable so far` : "");
                         }
+                        let match = null;
+                        try {
+                            const details = await plexFetch(
+                                `/library/metadata/${items[i].ratingKey}`,
+                            );
+                            match = eligibleFrom(
+                                details.MediaContainer?.Metadata?.[0],
+                                isEpisodeFlow,
+                            );
+                        } catch (err) {
+                            console.warn(
+                                `eligibility check failed for ` +
+                                `${items[i].title || items[i].ratingKey}: ${err.message}`,
+                            );
+                        }
+                        if (!match) continue;
 
-                        await Promise.all(
-                            batch.map(async (item) => {
-                                try {
-                                    const details = await plexFetch(
-                                        `/library/metadata/${item.ratingKey}`,
-                                    );
-                                    const detailedItem =
-                                        details.MediaContainer?.Metadata?.[0];
-                                    if (!detailedItem || !detailedItem.Media)
-                                        return;
-
-                                    detailedItem.Media.forEach((media) => {
-                                        if (!media.Part) return;
-                                        media.Part.forEach((part) => {
-                                            const hasBif =
-                                                part.indexes &&
-                                                part.indexes.includes("sd");
-                                            const subStream = part.Stream
-                                                ? part.Stream.find(
-                                                      (s) =>
-                                                          s.streamType === 3 &&
-                                                          s.codec === "srt" &&
-                                                          s.key,
-                                                  )
-                                                : null;
-
-                                            if (hasBif && subStream) {
-                                                let displayTitle =
-                                                    detailedItem.title;
-                                                if (isEpisodeFlow) {
-                                                    const sNum = String(
-                                                        detailedItem.parentIndex ||
-                                                            0,
-                                                    ).padStart(2, "0");
-                                                    const eNum = String(
-                                                        detailedItem.index || 0,
-                                                    ).padStart(2, "0");
-                                                    displayTitle = `${detailedItem.grandparentTitle || ""} - S${sNum}E${eNum} - ${detailedItem.title}`;
-                                                }
-
-                                                validItems.push({
-                                                    title: displayTitle,
-                                                    timelineRef: part.id,
-                                                    subId: subStream.id,
-                                                    subtitleRef: subStream.key,
-                                                    res: media.videoResolution,
-                                                });
-                                            }
-                                        });
-                                    });
-                                } catch (err) {
-                                    console.error(
-                                        `Failed to verify eligibility for ${item.title || item.ratingKey}:`,
-                                        err,
-                                    );
-                                }
-                            }),
-                        );
-                        processedCount += batch.length;
+                        found++;
+                        const div = document.createElement("div");
+                        div.className = "media-item";
+                        div.innerHTML =
+                            `<span>${escapeHtml(match.title)}</span>` +
+                            `<span class="tags"><span class="tag-badge">${escapeHtml(String(match.res))}p</span>` +
+                            `<span class="tag-badge">SRT</span></span>`;
+                        div.onclick = () => {
+                            scanGeneration++; // stop the scan; we are leaving
+                            loadPlayer(match);
+                        };
+                        results.appendChild(div);
+                        setStatus(`${found} compatible item(s) so far — pick one any time.`, "active");
                     }
 
-                    if (validItems.length === 0) {
-                        results.innerHTML =
-                            '<div style="padding:20px; text-align:center; color:var(--text-muted)">No compatible items containing both BIF and internal SRT Subtitles were found.</div>';
-                    } else {
-                        validItems.forEach((match) => {
-                            const div = document.createElement("div");
-                            div.className = "media-item";
-                            div.innerHTML = `<span>${match.title}</span><span class="tags"><span class="tag-badge">${match.res}p</span><span class="tag-badge">SRT</span></span>`;
-                            div.onclick = () => loadPlayer(match);
-                            results.appendChild(div);
-                        });
-                    }
-
+                    if (myGeneration !== scanGeneration) return;
                     if (scanStatus) scanStatus.textContent = "";
-                    document
-                        .getElementById("library-panel")
-                        .classList.add("hidden");
-                    document
-                        .getElementById("media-panel")
-                        .classList.remove("hidden");
+                    if (found === 0) {
+                        results.innerHTML =
+                            '<div style="padding:20px; text-align:center; color:var(--text-muted)">' +
+                            "No compatible items were found. An item needs both a trick-play " +
+                            "index and an SRT <em>sidecar</em> — subtitles embedded in the media " +
+                            "file cannot be fetched separately.</div>";
+                    }
                     setStatus(
-                        validItems.length
-                            ? `Found ${validItems.length} compatible item(s). Select one to play.`
+                        found
+                            ? `Found ${found} compatible item(s). Select one to play.`
                             : "No compatible media found in this library.",
-                        "active",
+                        found ? "active" : "neutral",
                     );
                 } catch (e) {
-                    if (scanStatus)
-                        scanStatus.textContent =
-                            "Error scanning file tree: " + e.message;
+                    if (myGeneration !== scanGeneration) return;
+                    if (scanStatus) scanStatus.textContent = "Error scanning file tree: " + e.message;
                     else alert("Error scanning file tree: " + e.message);
                     setStatus("Error scanning library: " + e.message, "error");
                 }
