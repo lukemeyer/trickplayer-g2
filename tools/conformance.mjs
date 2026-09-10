@@ -90,8 +90,6 @@ const scenes = await loadTs("src/scenes.ts");
     } catch (e) { threw = true; }
     check("timeline", name, threw, true);
   }
-  skip("timeline", "byte-identical duplicate detection",
-    "F-001 not implemented on G2.");
 }
 
 // -------------------------------------------------------------------- subs
@@ -189,6 +187,17 @@ skip("cues", "wrap / paginate",
       check("real", `${name}: frames`, g.frames.map((f, i) => ({
         index: i, tsMs: f.tsMs, offset: f.offset, length: f.length,
       })), e.frames);
+
+      // The zero-I/O length heuristic against HASHED ground truth from a real
+      // encoder (F-036) — the assertion the whole finding rests on, which a
+      // synthetic fixture cannot make honestly.
+      if (e.duplicateOf) {
+        const truth = e.duplicateOf.map((d) => d !== null);
+        const heur = scenes.lengthRunDuplicates(e.frames);
+        let fp = 0;
+        heur.forEach((d, i) => { if (d && !truth[i]) fp++; });
+        check("real", `${name}: length heuristic flags no distinct frame`, fp, 0);
+      }
     }
   }
 }
