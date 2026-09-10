@@ -12,22 +12,37 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import os from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CORPUS = path.join(ROOT, "corpus");
 
-// The sources are TypeScript with browser globals in one half. Transpile
-// (no type-check) and import, rather than duplicating the logic here — the
-// whole point is to test the SHIPPING code.
+// The sources are TypeScript with browser globals in one half. Transpile them
+// (no type-check) into a temp directory and import from there, rather than
+// duplicating the logic here — the whole point is to test the SHIPPING code.
+//
+// Real files rather than data: URLs, because a provider imports its siblings
+// and a relative specifier cannot resolve from a data: URL.
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "trickplayer-conf-"));
+
+function transpileAll() {
+  for (const f of fs.readdirSync(path.join(ROOT, "src")).filter((f) => f.endsWith(".ts"))) {
+    const src = fs.readFileSync(path.join(ROOT, "src", f), "utf8");
+    const js = ts.transpileModule(src, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+    }).outputText
+      // Point sibling imports at the transpiled files.
+      .replace(/from\s+"\.\/([A-Za-z0-9_-]+)"/g, 'from "./$1.mjs"');
+    fs.writeFileSync(path.join(TMP, f.replace(/\.ts$/, ".mjs")), js);
+  }
+}
+transpileAll();
+
 async function loadTs(rel) {
-  const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
-  const js = ts.transpileModule(src, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  }).outputText;
-  const b64 = Buffer.from(js).toString("base64");
-  return import(`data:text/javascript;base64,${b64}`);
+  const name = path.basename(rel).replace(/\.ts$/, ".mjs");
+  return import(pathToFileURL(path.join(TMP, name)).href);
 }
 
 const readJson = (rel) => JSON.parse(fs.readFileSync(path.join(CORPUS, rel), "utf8"));
@@ -45,6 +60,7 @@ const skip = (group, name, why) => skipped.push({ group, name, why });
 const timeline = await loadTs("src/timeline.ts");
 const subtitles = await loadTs("src/subtitles.ts");
 const scenes = await loadTs("src/scenes.ts");
+const jellyfin = await loadTs("src/jellyfinsource.ts");
 
 // ---------------------------------------------------------------- timeline
 
@@ -215,6 +231,75 @@ skip("cues", "wrap / paginate",
         heur.forEach((d, i) => { if (d && !truth[i]) fp++; });
         check("real", `${name}: length heuristic flags no distinct frame`, fp, 0);
       }
+    }
+  }
+}
+
+// -------------------------------------------------------------- jellyfin
+
+// The tile-sheet provider. Crop geometry is what every platform must implement
+// identically, so it is what the corpus pins — the sheet's pixels are not
+// vendored here because verifying an actual crop needs image decoding.
+{
+  const dir = path.join(CORPUS, "real");
+  const names = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((f) => f.endsWith(".expected.json"))
+        .map((f) => f.replace(/\.expected\.json$/, ""))
+        .filter((n) => (readJson(`real/${n}.expected.json`).source || {}).provider === "jellyfin")
+    : [];
+
+  if (!names.length) {
+    skip("jellyfin", "tile-sheet fixture", "no Jellyfin capture in corpus/real/");
+  } else {
+    for (const name of names) {
+      const e = readJson(`real/${name}.expected.json`);
+      const g = e.geometry;
+      const info = {
+        TileWidth: g.tileWidth, TileHeight: g.tileHeight,
+        Width: g.thumbWidth, Height: g.thumbHeight,
+        Interval: g.intervalMs, ThumbnailCount: g.thumbnailCount,
+      };
+
+      for (const box of e.cropBoxes) {
+        check("jellyfin", `${name}: crop box for thumb ${box.index}`,
+          jellyfin.cropBox(info, box.index),
+          { sheet: box.sheet, x: box.x, y: box.y, w: box.w, h: box.h });
+      }
+
+      // A partial final sheet is normal; a reader assuming full sheets runs
+      // off the end of the last image.
+      const last = jellyfin.cropBox(info, g.thumbnailCount - 1);
+      check("jellyfin", `${name}: last thumb stays inside its sheet`,
+        last.y + last.h <= g.tileHeight * g.thumbHeight, true);
+
+      // A batch source declares no size hints, which is what turns the two
+      // filters off in the scene policy (SEAM.md §4).
+      const src = jellyfin.createJellyfinSource({
+        serverUrl: "http://example", token: "x", itemId: "i",
+        mediaSourceId: "m", width: 320, trickplay: info, subtitleIndex: null,
+      });
+      const caps = src.capabilities();
+      check("jellyfin", `${name}: declares no frame size hints`, caps.hasFrameSizeHints, false);
+      check("jellyfin", `${name}: declares batch granularity`, caps.fetchGranularity, "batch");
+      check("jellyfin", `${name}: needs an address before auth`, caps.needsAddressFirst, true);
+
+      const tl = await src.timeline();
+      check("jellyfin", `${name}: timeline length`, tl.frames.length, g.thumbnailCount);
+      check("jellyfin", `${name}: every size hint is null`,
+        tl.frames.every((f) => f.sizeHint === null), true);
+      check("jellyfin", `${name}: timestamps follow the interval`,
+        tl.frames.slice(0, 3).map((f) => f.tsMs), [0, g.intervalMs, g.intervalMs * 2]);
+
+      // End to end: the real provider's timeline through the real policy,
+      // with the filters off because the provider says they cannot run.
+      const jcues = readJson(`real/${name}.cues.json`).cues.map((c) => ({ ...c, text: "x" }));
+      const built = scenes.buildSceneList(
+        tl.frames, jcues, g.thumbnailCount * g.intervalMs,
+        { hasFrameSizeHints: caps.hasFrameSizeHints },
+      );
+      check("jellyfin", `${name}: scenes are built and non-empty`, built.length > 0, true);
+      check("jellyfin", `${name}: no scene exceeds the timeline`,
+        built.every((sc) => sc.endMs <= g.thumbnailCount * g.intervalMs), true);
     }
   }
 }
