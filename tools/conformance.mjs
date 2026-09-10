@@ -44,6 +44,7 @@ const skip = (group, name, why) => skipped.push({ group, name, why });
 
 const timeline = await loadTs("src/timeline.ts");
 const subtitles = await loadTs("src/subtitles.ts");
+const scenes = await loadTs("src/scenes.ts");
 
 // ---------------------------------------------------------------- timeline
 
@@ -128,9 +129,41 @@ const subtitles = await loadTs("src/subtitles.ts");
 
 // --------------------------------------------------------- scene / cues
 
-skip("scene", "selection policy",
-  "G2 has no scene selection: it walks every frame on a timer. F-001 is what " +
-  "would give it one (PLAN.md §3, 'no scene concept').");
+{
+  // The adopted policy: native frame timings, length-run duplicate skipping,
+  // empty-scene removal (F-001 + F-036).
+  const fx = readJson("scene/episode.frames.json");
+  const cx = readJson("scene/episode.cues.json");
+  const want = readJson("scene/episode.expected.json").cases.adopted.expect;
+
+  // The fixture speaks tsMs; this build's frame records use timestampMs.
+  const frames = fx.frames.map((f) => ({
+    timestampMs: f.tsMs, offset: f.offset, length: f.length,
+  }));
+  const built = scenes.buildSceneList(frames, cx.cues, fx.durationMs);
+  check("scene", "adopted: sceneCount", built.length, want.sceneCount);
+
+  const seen = new Set();
+  let bytes = 0, cueTotal = 0;
+  for (const sc of built) {
+    const f = frames[sc.frameIndex];
+    if (!seen.has(f.offset)) { seen.add(f.offset); bytes += f.length; }
+    cueTotal += cx.cues.filter((c) => c.startMs >= sc.startMs && c.startMs < sc.endMs).length;
+  }
+  check("scene", "adopted: sceneBytes", bytes, want.sceneBytes);
+  check("scene", "adopted: uniqueFramesShipped", seen.size, want.uniqueFramesShipped);
+  check("scene", "adopted: avgCuesPerScene",
+    +(cueTotal / built.length).toFixed(4), want.avgCuesPerScene);
+
+  // The length heuristic is checked against the fixture's hashed ground truth,
+  // so it is measured against reality rather than against itself.
+  const dup = scenes.lengthRunDuplicates(frames);
+  const truth = fx.frames.map((f) => f.duplicateOfIndex !== null);
+  let fp = 0, missed = 0;
+  dup.forEach((d, i) => { if (d && !truth[i]) fp++; if (!d && truth[i]) missed++; });
+  check("scene", "length-run dedup: no false positives", fp, 0);
+  check("scene", "length-run dedup: none missed", missed, 0);
+}
 skip("cues", "wrap / paginate",
   "F-002 not implemented — groupSceneSubtitles merges cues to fill the " +
   "container but estimates lines rather than wrapping, and clips rather " +

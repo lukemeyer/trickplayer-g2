@@ -6,6 +6,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { parseTimelineHeader, parseTimelineIndex } from "./timeline";
 import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
+import { buildSceneList } from "./scenes";
 
             // --- APPLICATION METADATA FOR HEADERS ---
             const CLIENT_ID = "plex-bif-viewer";
@@ -1390,6 +1391,9 @@ import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
                         );
                     });
 
+                    durationMs = bifs[bifs.length - 1].timestampMs;
+                    sceneList = buildSceneList(bifs, subtitles, durationMs);
+
                     const trackBytes = bifs.reduce((n, f) => n + f.length, 0);
                     console.log(
                         `[timeline] ${bifs.length} frames, multiplier ` +
@@ -1398,7 +1402,6 @@ import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
                         `${(trackBytes / 1e6).toFixed(2)} MB of frames NOT downloaded`,
                     );
 
-                    durationMs = bifs[bifs.length - 1].timestampMs;
                     timeline.max = durationMs;
                     currentTimeMs = 0;
 
@@ -1644,37 +1647,39 @@ import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
                 return Math.max(5000, Math.min(15000, avg));
             }
 
+            // --- SCENE SELECTION ---
+            //
+            // The policy itself lives in src/scenes.ts so it can be exercised
+            // headlessly against the shared corpus. See that file for why it
+            // is shaped the way it is (F-001, F-007, F-009, F-036).
+            let sceneList = [];
+
+            /** The selected scene containing startMs, or the first one after it. */
+            function sceneContaining(startMs) {
+                if (!sceneList.length) return null;
+                for (const sc of sceneList) {
+                    if (startMs >= sc.startMs && startMs < sc.endMs) return sc;
+                }
+                return sceneList.find((sc) => sc.startMs >= startMs) || null;
+            }
+
             function buildScene(startMs) {
-                const baseDuration = getSceneDuration();
-                const targetEndMs = startMs + baseDuration;
-
-                // Find BIF frame at startMs
-                const frame = bifs.find(
-                    (f, i) =>
-                        f.timestampMs <= startMs &&
-                        (bifs[i + 1]?.timestampMs > startMs || !bifs[i + 1]),
-                );
-
-                // Ensure scene extends to the NEXT image's exact timestamp
-                // so we never send the same image twice
-                const nextFrame = bifs.find(f => f.timestampMs >= targetEndMs);
-                const endMs = nextFrame ? nextFrame.timestampMs : targetEndMs;
-                const duration = endMs - startMs;
+                const sc = sceneContaining(startMs);
+                if (!sc) return { image: null, subtitles: [], startMs, endMs: startMs, duration: 0 };
 
                 // Own each cue to the scene it STARTS in. Scenes tile the
                 // timeline contiguously, so this assigns every cue to exactly
-                // one scene — a cue straddling a boundary is no longer sent in
-                // both scenes (the source of duplicate subtitles).
+                // one scene — a cue straddling a boundary is not sent twice.
                 const sceneSubs = subtitles.filter(
-                    (s) => s.startMs >= startMs && s.startMs < endMs,
+                    (s) => s.startMs >= sc.startMs && s.startMs < sc.endMs,
                 );
 
                 return {
-                    image: frame,
+                    image: bifs[sc.frameIndex],
                     subtitles: sceneSubs,
-                    startMs,
-                    endMs,
-                    duration,
+                    startMs: sc.startMs,
+                    endMs: sc.endMs,
+                    duration: sc.endMs - sc.startMs,
                 };
             }
 
