@@ -3,458 +3,176 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Plex BIF Viewer</title>
+    <title>Trickplayer</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <!-- HEADER BRANDING -->
-        <div class="header">
-            <h1>Plex Player</h1>
-            <p>
-                Even Realities G2 Smart Glasses Media &amp; Subtitle Connector
-            </p>
+    <!-- The flow is one panel at a time, in the order of
+         trickplayer-knowledge/UI.md:
+             sources -> browse -> list -> item -> player
+         The sources panel is SKIPPED entirely when there is exactly one
+         source; it is not a screen you dismiss. -->
+
+    <div class="status-bar">
+      <span class="status-indicator" id="status-indicator"></span>
+      <span id="even-status">Starting…</span>
+    </div>
+
+    <!-- ============================ SOURCES ============================ -->
+    <div class="section hidden" id="panel-sources">
+      <h2>Your servers</h2>
+      <div id="source-list"></div>
+      <button class="btn-secondary" id="add-source-btn">Add a server</button>
+    </div>
+
+    <!-- ========================== ADD SOURCE =========================== -->
+    <div class="section hidden" id="panel-add-source">
+      <h2>Add a server</h2>
+
+      <div id="add-step-provider">
+        <p class="text-muted">Which kind of server?</p>
+        <button class="btn-secondary" data-provider="plex">Plex</button>
+        <button class="btn-secondary" data-provider="jellyfin">Jellyfin</button>
+      </div>
+
+      <!-- Jellyfin only: the address IS the identity, so it comes before
+           auth and there is no server list to discover. -->
+      <div id="add-step-address" class="hidden">
+        <div class="input-group">
+          <label for="jf-address">Server address</label>
+          <input id="jf-address" type="url" placeholder="http://192.168.1.10:8096" />
         </div>
+        <button class="btn-secondary" id="jf-address-next">Continue</button>
+      </div>
 
-        <!-- STATUS MONITOR: HARDWARE ATTACHMENT -->
-        <div class="section status-bar">
-            <div id="status-indicator" class="status-indicator"></div>
-            <div id="even-status">
-                Initializing Even Realities G2 SDK Environment...
-            </div>
+      <!-- Plex only: the account service lists servers, and there may be
+           several. Jellyfin has nothing to list — the address IS the server. -->
+      <div id="add-step-server" class="hidden">
+        <p class="text-muted">Which server?</p>
+        <div id="server-list"></div>
+      </div>
+
+      <!-- Both providers: mint a short code, show it, poll. -->
+      <div id="add-step-code" class="hidden">
+        <p class="text-muted" id="code-instruction"></p>
+        <div class="pin-container"><div class="pin-display" id="code-display">••••</div></div>
+        <p class="text-muted" id="code-status">Waiting for you to approve it…</p>
+        <button class="btn-secondary" id="code-check-now">I've entered it</button>
+      </div>
+
+      <button class="btn-secondary" id="add-source-cancel">Cancel</button>
+    </div>
+
+    <!-- ============================ BROWSE ============================= -->
+    <div class="section hidden" id="panel-browse">
+      <h2 id="browse-title">Browse</h2>
+      <div id="root-list"></div>
+      <button class="btn-secondary hidden" id="browse-back">Servers</button>
+    </div>
+
+    <!-- ============================= LIST ============================== -->
+    <div class="section hidden" id="panel-list">
+      <h2 id="list-title">…</h2>
+      <p class="text-muted" id="list-status"></p>
+      <div id="results-list"></div>
+      <button class="btn-secondary" id="list-back">Back</button>
+    </div>
+
+    <!-- ============================= ITEM ============================== -->
+    <div class="section hidden" id="panel-item">
+      <h2 id="item-title">…</h2>
+
+      <!-- Preview: loads automatically when it is cheap, and asks first when
+           it is not. The provider supplies the estimate. -->
+      <div id="preview-area">
+        <div id="preview-strip"></div>
+        <p class="text-muted" id="preview-note"></p>
+        <button class="btn-secondary hidden" id="preview-load">Preview</button>
+      </div>
+
+      <h3>Options</h3>
+
+      <div class="control-row">
+        <label for="opt-skip-silent">Skip scenes with no subtitles</label>
+        <input type="checkbox" id="opt-skip-silent" checked />
+      </div>
+      <p class="text-muted" id="skip-silent-note"></p>
+
+      <div class="control-row">
+        <label for="opt-bandwidth">Bandwidth</label>
+        <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
+      </div>
+      <div class="control-row">
+        <span class="text-muted">Fewer images</span>
+        <span class="text-muted">Every scene</span>
+      </div>
+      <p class="text-muted" id="bandwidth-note"></p>
+
+      <h3>Picture</h3>
+      <div class="control-row">
+        <label for="opt-contrast">Contrast</label>
+        <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
+      </div>
+      <div class="control-row">
+        <label>Texture</label>
+        <span class="segmented">
+          <button class="btn-secondary active" data-texture="floyd-steinberg">Smooth</button>
+          <button class="btn-secondary" data-texture="atkinson">Crisp</button>
+          <button class="btn-secondary" data-texture="threshold">Flat</button>
+        </span>
+      </div>
+      <details>
+        <summary class="text-muted">More picture settings</summary>
+        <div class="control-row">
+          <label for="opt-brightness">Brightness</label>
+          <input type="range" id="opt-brightness" min="-100" max="100" step="1" value="0" />
         </div>
-
-        <!-- STEP 1: AUTHENTICATION VIA JWT PIN EXCHANGE -->
-        <div id="auth-panel" class="section">
-            <h2>1. Connect via Plex Account</h2>
-            <button id="login-btn">Sign In with Plex</button>
-
-            <div id="pin-area" class="hidden pin-container">
-                <p
-                    style="
-                        text-align: center;
-                        font-size: 0.9em;
-                        color: var(--text-muted);
-                    "
-                >
-                    Enter this linking code on Plex, or copy/paste the link
-                    below:
-                </p>
-                <div id="pin-code" class="pin-display">----</div>
-                <div
-                    id="auth-link-container"
-                    style="margin: 20px 0; text-align: left; width: 100%"
-                >
-                    <label
-                        for="auth-link-text"
-                        style="
-                            display: block;
-                            font-size: 0.85rem;
-                            color: var(--text-muted);
-                            margin-bottom: 6px;
-                        "
-                        >Authorization URL</label
-                    >
-                    <input
-                        type="text"
-                        id="auth-link-text"
-                        readonly
-                        style="
-                            display: block;
-                            width: 100%;
-                            box-sizing: border-box;
-                            padding: 12px;
-                            background: #1a1a1a;
-                            border: 1px solid #444;
-                            color: #fff;
-                            border-radius: 8px;
-                            font-family: monospace;
-                            font-size: 0.85em;
-                            outline: none;
-                            margin-bottom: 8px;
-                        "
-                        onclick="this.select()"
-                    />
-                    <button
-                        id="copy-auth-link-btn"
-                        style="
-                            display: block;
-                            width: 100%;
-                            box-sizing: border-box;
-                            padding: 12px;
-                            background: var(--accent);
-                            color: #fff;
-                            font-weight: bold;
-                            border: none;
-                            border-radius: 8px;
-                            cursor: pointer;
-                            font-size: 0.95em;
-                            transition: background 0.2s;
-                        "
-                        onmouseover="this.style.background = '#ffb71c'"
-                        onmouseout="this.style.background = 'var(--accent)'"
-                    >
-                        Copy Link to Clipboard
-                    </button>
-                </div>
-                <div id="auth-status">Waiting for validation...</div>
-            </div>
+        <div class="control-row">
+          <label for="opt-gamma">Gamma</label>
+          <input type="range" id="opt-gamma" min="50" max="200" step="5" value="100" />
         </div>
+        <button class="btn-secondary" id="picture-reset">Reset picture</button>
+      </details>
 
-        <!-- STEP 1.5: SERVER & CONNECTION SELECTION -->
-        <div id="server-panel" class="section hidden">
-            <h2>1.5. Select Plex Server</h2>
-            <div class="input-group">
-                <label for="server-select">Available Servers</label>
-                <select id="server-select"></select>
-            </div>
-            <div class="input-group" id="connection-group">
-                <label for="connection-select">Connection Route</label>
-                <select id="connection-select"></select>
-            </div>
-            <button id="connect-server-btn">Connect to Selected Server</button>
+      <button class="btn-secondary" id="item-play">Play on glasses</button>
+      <button class="btn-secondary" id="item-back">Back</button>
+    </div>
 
-            <!-- Query Custom Source Details (Security Resources API) -->
-            <div
-                style="
-                    margin-top: 25px;
-                    padding-top: 20px;
-                    border-top: 1px dashed var(--card-border);
-                "
-            >
-                <h3 style="font-size: 1rem; color: #fff; margin-bottom: 12px">
-                    Query Custom Source Details
-                </h3>
-                <div class="input-group" style="margin-bottom: 12px">
-                    <label for="source-id-input"
-                        >Source Identifier (with prefix)</label
-                    >
-                    <input
-                        type="text"
-                        id="source-id-input"
-                        placeholder="e.g. server://..."
-                    />
-                </div>
-                <button
-                    id="query-source-btn"
-                    class="btn-secondary"
-                    style="margin-bottom: 0"
-                >
-                    Get Connection &amp; Token Info
-                </button>
-                <div
-                    id="source-query-result"
-                    style="
-                        margin-top: 12px;
-                        font-family: &quot;JetBrains Mono&quot;, monospace;
-                        font-size: 0.8rem;
-                        background: rgba(10, 11, 15, 0.9);
-                        padding: 12px;
-                        border-radius: 8px;
-                        max-height: 200px;
-                        overflow-y: auto;
-                        display: none;
-                        color: #a3e635;
-                        border: 1px solid rgba(255, 255, 255, 0.05);
-                        white-space: pre-wrap;
-                        text-align: left;
-                    "
-                ></div>
-            </div>
+    <!-- ============================ PLAYER ============================= -->
+    <div class="section hidden" id="panel-player">
+      <h2 id="playing-title">…</h2>
 
-            <button
-                id="logout-btn-0"
-                class="btn-danger"
-                style="margin-top: 20px"
-            >
-                Disconnect Plex Account
-            </button>
-        </div>
+      <div class="load-progress-container hidden" id="load-progress-container">
+        <div class="load-progress-label" id="load-progress-label"></div>
+        <div class="load-progress-track"><div class="load-progress-fill" id="load-progress-fill"></div></div>
+      </div>
 
-        <!-- STEP 2: DIRECTORY SELECTION -->
-        <div id="library-panel" class="section hidden">
-            <h2>2. Select Library</h2>
-            <div class="input-group">
-                <label for="library-select"
-                    >Available TV / Movie Sections</label
-                >
-                <select id="library-select"></select>
-            </div>
-            <div class="input-group hidden" id="show-select-group">
-                <label for="show-select">Select Show</label>
-                <select id="show-select"></select>
-            </div>
-            <button id="scan-media-btn">
-                Find Compatible Media (BIF + Subs)
-            </button>
-            <div
-                id="scan-status"
-                style="
-                    font-size: 0.85em;
-                    color: var(--text-muted);
-                    text-align: center;
-                    margin-top: 10px;
-                "
-            ></div>
-            <button id="switch-server-btn-1" class="btn-secondary">
-                Switch Plex Server
-            </button>
-            <button id="logout-btn-1" class="btn-danger">
-                Disconnect Plex Account
-            </button>
-        </div>
+      <div id="player-container">
+        <img id="seek-image" alt="" />
+        <div id="subtitle-overlay"></div>
+      </div>
 
-        <!-- STEP 3: CONTENT ITEM MATCH SELECTION -->
-        <div id="media-panel" class="section hidden">
-            <h2>3. Select Track For Playback Only</h2>
-            <div id="results-list"></div>
-            <button id="back-to-lib-btn" class="btn-secondary">
-                Back to Libraries
-            </button>
-            <button id="switch-server-btn-2" class="btn-secondary">
-                Switch Plex Server
-            </button>
-            <button id="logout-btn-2" class="btn-danger">
-                Disconnect Plex Account
-            </button>
-        </div>
+      <div id="controls">
+        <button class="btn-secondary" id="play-btn">Play</button>
+        <input type="range" id="timeline" min="0" max="0" value="0" />
+        <span id="time-display">0:00</span>
+      </div>
 
-        <!-- STEP 4: MONITOR & HARDWARE SYNC CONTROLS -->
-        <div id="player-panel" class="section hidden">
-            <h3>
-                Playing:
-                <span
-                    id="playing-title"
-                    style="color: var(--primary); font-weight: 600"
-                ></span>
-            </h3>
-            <div id="load-progress-container" class="load-progress-container hidden">
-                <div id="load-progress-label" class="load-progress-label">
-                    Loading...
-                </div>
-                <div class="load-progress-track">
-                    <div id="load-progress-fill" class="load-progress-fill"></div>
-                </div>
-            </div>
-            <div id="player-container">
-                <img id="seek-image" alt="Pre-loading frame index buffers..." />
-                <div id="subtitle-overlay"></div>
-            </div>
-            <div id="controls">
-                <input type="range" id="timeline" min="0" max="100" value="0" />
-                <div class="control-row">
-                    <button
-                        id="play-btn"
-                        style="
-                            width: auto;
-                            padding: 10px 30px;
-                            margin-bottom: 0;
-                        "
-                    >
-                        Play
-                    </button>
-                    <span id="time-display">00:00 / 00:00</span>
-                </div>
-            </div>
-            <!-- Image Adjustments Settings panel -->
-            <details
-                id="image-settings-panel"
-                style="
-                    margin-top: 25px;
-                    padding: 20px;
-                    background: rgba(10, 11, 15, 0.6);
-                    border: 1px solid var(--card-border);
-                    border-radius: 12px;
-                "
-            >
-                <summary
-                    style="
-                        color: var(--primary);
-                        margin: 0;
-                        font-family: &quot;Outfit&quot;, sans-serif;
-                        font-weight: 700;
-                        font-size: 1rem;
-                        text-transform: uppercase;
-                        letter-spacing: 0.05em;
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        user-select: none;
-                        cursor: pointer;
-                        outline: none;
-                    "
-                >
-                    <span>Glasses Image Adjustments</span>
-                    <span
-                        class="toggle-arrow"
-                        style="
-                            transition: transform 0.25s;
-                            font-size: 0.8rem;
-                            color: var(--text-muted);
-                        "
-                        >▼</span
-                    >
-                </summary>
-                <div style="margin-top: 20px" onclick="event.stopPropagation()">
-                    <div
-                        style="
-                            display: grid;
-                            grid-template-columns: 1fr 1fr;
-                            gap: 15px;
-                            margin-bottom: 15px;
-                        "
-                    >
-                        <div>
-                            <label
-                                for="img-brightness"
-                                style="margin-bottom: 4px; font-size: 0.75rem"
-                                >Brightness:
-                                <span id="val-brightness">0</span></label
-                            >
-                            <input
-                                type="range"
-                                id="img-brightness"
-                                min="-100"
-                                max="100"
-                                value="0"
-                                style="padding: 0; height: 6px"
-                            />
-                        </div>
-                        <div>
-                            <label
-                                for="img-contrast"
-                                style="margin-bottom: 4px; font-size: 0.75rem"
-                                >Contrast:
-                                <span id="val-contrast">0</span></label
-                            >
-                            <input
-                                type="range"
-                                id="img-contrast"
-                                min="-100"
-                                max="100"
-                                value="0"
-                                style="padding: 0; height: 6px"
-                            />
-                        </div>
-                    </div>
+      <button class="btn-danger" id="close-player-btn">Stop</button>
+    </div>
 
-                    <div
-                        style="
-                            display: grid;
-                            grid-template-columns: 1fr 1fr;
-                            gap: 15px;
-                            margin-bottom: 15px;
-                        "
-                    >
-                        <div>
-                            <label
-                                for="img-gamma"
-                                style="margin-bottom: 4px; font-size: 0.75rem"
-                                >Gamma: <span id="val-gamma">1.0</span></label
-                            >
-                            <input
-                                type="range"
-                                id="img-gamma"
-                                min="0.5"
-                                max="3.0"
-                                step="0.1"
-                                value="1.0"
-                                style="padding: 0; height: 6px"
-                            />
-                        </div>
-                        <div>
-                            <label
-                                for="img-dither"
-                                style="margin-bottom: 4px; font-size: 0.75rem"
-                                >Dithering Method</label
-                            >
-                            <select
-                                id="img-dither"
-                                style="
-                                    padding: 8px 12px;
-                                    font-size: 0.85rem;
-                                    border-radius: 6px;
-                                    background: #1a1a1a;
-                                    border: 1px solid var(--card-border);
-                                    color: #fff;
-                                "
-                            >
-                                <option value="floyd-steinberg">
-                                    Floyd-Steinberg (Standard)
-                                </option>
-                                <option value="atkinson">
-                                    Atkinson (Crisp Detail)
-                                </option>
-                                <option value="ordered-4x4">
-                                    Ordered Bayer (Patterned)
-                                </option>
-                                <option value="threshold">
-                                    High Contrast (No Dither)
-                                </option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div style="display: flex; justify-content: flex-end">
-                        <button
-                            id="reset-img-btn"
-                            class="btn-secondary"
-                            style="
-                                width: auto;
-                                padding: 6px 15px;
-                                font-size: 0.8rem;
-                                margin: 0;
-                            "
-                        >
-                            Reset Settings
-                        </button>
-                    </div>
-                </div>
-            </details>
-
-            <button
-                id="close-player-btn"
-                class="btn-secondary"
-                style="margin-top: 20px"
-            >
-                Close Stream and Reset Layout
-            </button>
-        </div>
-
-        <!-- DEBUG CONSOLE (collapsible, fixed to bottom of viewport) -->
-        <div id="debug-panel" class="debug-panel collapsed">
-            <div class="debug-header" id="debug-header">
-                <div class="debug-title">
-                    <span class="debug-dot"></span>
-                    Debug Console
-                    <span id="debug-count" style="color: var(--primary)">0</span>
-                </div>
-                <div class="debug-actions">
-                    <button id="debug-copy-btn" class="debug-action-btn">
-                        Copy
-                    </button>
-                    <button id="debug-clear-btn" class="debug-action-btn">
-                        Clear
-                    </button>
-                    <button id="debug-toggle-btn" class="debug-action-btn">
-                        Expand
-                    </button>
-                </div>
-            </div>
-            <div class="debug-log-output" id="debug-log-output"></div>
-        </div>
-
-        <!-- Import Map Configuration to Bind Even Realities Web Ecosystem Libraries.
-             Pinned to an explicit version — the bare "+esm" URL resolves to
-             npm's "latest" tag, so every future SDK release would silently
-             change runtime behavior on next page load with no chance to test
-             it first. Bump this deliberately alongside package.json. -->
-        <script type="importmap">
-            {
-                "imports": {
-                    "@evenrealities/even_hub_sdk": "https://cdn.jsdelivr.net/npm/@evenrealities/even_hub_sdk@0.0.14/+esm"
-                }
-            }
-        </script>
-    <script type="module" src="/src/main.ts"></script>
+    <!-- Import Map Configuration to Bind Even Realities Web Ecosystem Libraries.
+         Pinned to an explicit version — the bare "+esm" URL resolves to
+         npm's "latest" tag, so every future SDK release would silently
+         change runtime behavior on next page load with no chance to test
+         it first. Bump this deliberately alongside package.json. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@evenrealities/even_hub_sdk": "https://cdn.jsdelivr.net/npm/@evenrealities/even_hub_sdk@0.0.14/+esm"
+        }
+      }
+    </script>
+    <script type="module" src="/src/ui.ts"></script>
   </body>
 </html>

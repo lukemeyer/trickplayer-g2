@@ -114,3 +114,25 @@ export function buildSceneList(frames, cues, durationMs, opts = {}) {
 
     return built;
 }
+
+/**
+ * Thin a built scene list to every Nth scene, for the Bandwidth control.
+ *
+ * NOT a rule — the only user-facing knob that changes the scene list, and it
+ * sits after every policy filter rather than inside them. What it spends is the
+ * DEVICE link: the phone dithers whatever it fetched down to a fixed per-scene
+ * payload (16,384 B on G2), so halving the scenes halves the bytes over BLE
+ * whatever the provider charged to fetch them (F-040).
+ *
+ * A dropped scene's time is folded into the one that replaces it, exactly as a
+ * skipped duplicate's is (F-001), so the surviving scenes still tile the
+ * episode and no cue ends up belonging to no scene.
+ */
+export function thinScenes(scenes, stride) {
+    if (!(stride > 1) || scenes.length <= 1) return scenes;
+    const kept = scenes.filter((_, i) => i % stride === 0);
+    return kept.map((sc, n) => ({
+        ...sc,
+        endMs: n + 1 < kept.length ? kept[n + 1].startMs : scenes[scenes.length - 1].endMs,
+    }));
+}

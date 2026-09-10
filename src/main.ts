@@ -4,8 +4,28 @@ import {
     ImageRawDataUpdate,
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
-import { createPlexSource } from "./plexsource";
-import { buildSceneList } from "./scenes";
+import { buildSceneList, thinScenes } from "./scenes";
+
+            // --- UI HOOKS ---
+            //
+            // The engine drives the glasses. It does not know what a panel is,
+            // which is what lets the flow in trickplayer-knowledge/UI.md be
+            // rewritten without touching the BLE queue, the scene pipeline or
+            // the image path.
+            const ui = {
+                status: (_text, _state) => {},
+                stopped: () => {},
+                playing: (_isPlaying) => {},
+            };
+            export function setUiHooks(h) { Object.assign(ui, h); }
+
+            /** Escape text destined for innerHTML. */
+            export function escapeHtml(str) {
+                return String(str)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
 
             // --- APPLICATION METADATA FOR HEADERS ---
             const CLIENT_ID = "plex-bif-viewer";
@@ -18,8 +38,6 @@ import { buildSceneList } from "./scenes";
             silentAudio.loop = true;
 
             // --- APPLICATION RUNTIME STATE ---
-            let SERVER_URL = "";
-            let TOKEN = "";
             let bifs = [];
             let subtitles = [];
             let durationMs = 0;
@@ -28,8 +46,6 @@ import { buildSceneList } from "./scenes";
             let lastFrameTime = 0;
             let clockIntervalId = null;
             let pollIntervalId = null;
-            let plexServers = [];
-            let libraryTypes = {};
 
             // --- BLE SERIAL QUEUE ---
             // All BLE writes go through here so they never overlap on the channel.
@@ -104,7 +120,6 @@ import { buildSceneList } from "./scenes";
             // --- DOM ELEMENT OBJECT CACHES ---
             const statusDiv = document.getElementById("even-status");
             const indicator = document.getElementById("status-indicator");
-            const authStatus = document.getElementById("auth-status");
             const imgTag = document.getElementById("seek-image");
             const subDiv = document.getElementById("subtitle-overlay");
             const timeline = document.getElementById("timeline");
@@ -247,189 +262,12 @@ import { buildSceneList } from "./scenes";
             // stale: every state transition in the app should route through
             // here instead of touching statusDiv/indicator directly.
             function setStatus(text, state = "neutral") {
+                ui.status(text, state);
                 if (statusDiv) statusDiv.textContent = text;
                 if (!indicator) return;
                 indicator.classList.remove("active", "error");
                 if (state === "active") indicator.classList.add("active");
                 else if (state === "error") indicator.classList.add("error");
-            }
-
-            // --- ON-PAGE DEBUG CONSOLE ---
-            // Mirrors console.{log,info,warn,error} into the collapsible panel
-            // at the bottom of the page so logs are visible on the phone without
-            // a remote inspector. Set up first so it captures everything after.
-            const DEBUG_MAX_LINES = 500;
-            const debugLogBuffer = [];
-            const debugPanel = document.getElementById("debug-panel");
-            const debugLogOutput = document.getElementById("debug-log-output");
-            const debugCount = document.getElementById("debug-count");
-
-            function escapeHtml(str) {
-                return String(str)
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;");
-            }
-
-            function formatLogArg(arg) {
-                if (typeof arg === "string") return arg;
-                if (arg instanceof Error) return arg.stack || arg.message;
-                try {
-                    return JSON.stringify(arg);
-                } catch (e) {
-                    return String(arg);
-                }
-            }
-
-            function appendDebugLog(level, args) {
-                const time = new Date().toLocaleTimeString("en-US", {
-                    hour12: false,
-                });
-                const text = Array.from(args).map(formatLogArg).join(" ");
-                debugLogBuffer.push({ time, level, text });
-                if (debugLogBuffer.length > DEBUG_MAX_LINES) {
-                    debugLogBuffer.shift();
-                }
-                if (debugCount) debugCount.textContent = debugLogBuffer.length;
-
-                if (debugLogOutput) {
-                    const line = document.createElement("div");
-                    line.className = `log-line log-${level}`;
-                    line.innerHTML = `<span class="log-time">${time}</span><span class="log-text">${escapeHtml(text)}</span>`;
-                    debugLogOutput.appendChild(line);
-                    while (
-                        debugLogOutput.childElementCount > DEBUG_MAX_LINES
-                    ) {
-                        debugLogOutput.removeChild(debugLogOutput.firstChild);
-                    }
-                    // Keep the latest line in view when expanded
-                    debugLogOutput.scrollTop = debugLogOutput.scrollHeight;
-                }
-            }
-
-            // Wrap the native console so logs reach both devtools and the panel.
-            ["log", "info", "warn", "error"].forEach((level) => {
-                const original = console[level].bind(console);
-                console[level] = (...args) => {
-                    original(...args);
-                    try {
-                        appendDebugLog(level, args);
-                    } catch (e) {
-                        /* never let logging break the app */
-                    }
-                };
-            });
-
-            function setDebugExpanded(expanded) {
-                if (!debugPanel) return;
-                debugPanel.classList.toggle("expanded", expanded);
-                debugPanel.classList.toggle("collapsed", !expanded);
-                const toggleBtn =
-                    document.getElementById("debug-toggle-btn");
-                if (toggleBtn) {
-                    toggleBtn.textContent = expanded ? "Collapse" : "Expand";
-                }
-                if (expanded && debugLogOutput) {
-                    debugLogOutput.scrollTop = debugLogOutput.scrollHeight;
-                }
-            }
-
-            document
-                .getElementById("debug-header")
-                ?.addEventListener("click", () => {
-                    setDebugExpanded(
-                        debugPanel.classList.contains("collapsed"),
-                    );
-                });
-
-            document
-                .getElementById("debug-toggle-btn")
-                ?.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    setDebugExpanded(
-                        debugPanel.classList.contains("collapsed"),
-                    );
-                });
-
-            document
-                .getElementById("debug-clear-btn")
-                ?.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    debugLogBuffer.length = 0;
-                    if (debugLogOutput) debugLogOutput.innerHTML = "";
-                    if (debugCount) debugCount.textContent = "0";
-                });
-
-            document
-                .getElementById("debug-copy-btn")
-                ?.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    const copyBtn =
-                        document.getElementById("debug-copy-btn");
-                    const allText = debugLogBuffer
-                        .map((l) => `[${l.time}] ${l.text}`)
-                        .join("\n");
-
-                    const flash = (msg) => {
-                        if (!copyBtn) return;
-                        const prev = copyBtn.textContent;
-                        copyBtn.textContent = msg;
-                        setTimeout(() => {
-                            copyBtn.textContent = prev;
-                        }, 1500);
-                    };
-
-                    try {
-                        if (
-                            navigator.clipboard &&
-                            window.isSecureContext
-                        ) {
-                            await navigator.clipboard.writeText(allText);
-                        } else {
-                            const ta = document.createElement("textarea");
-                            ta.value = allText;
-                            ta.style.position = "fixed";
-                            ta.style.top = "0";
-                            ta.style.left = "0";
-                            ta.style.opacity = "0";
-                            document.body.appendChild(ta);
-                            ta.focus();
-                            ta.select();
-                            document.execCommand("copy");
-                            document.body.removeChild(ta);
-                        }
-                        flash("Copied!");
-                    } catch (err) {
-                        flash("Copy failed");
-                    }
-                });
-
-            // --- SYSTEM INITIALIZATION: HARDWARE & TOKEN CHECK ---
-            async function initApp() {
-                // 1. Initialize Glasses Frame Bridge
-                await initEvenBridge();
-
-                // 2. Check for existing session token in localStorage
-                const cachedToken = localStorage.getItem("plex_jwt_token");
-                const cachedUrl = localStorage.getItem("plex_server_url");
-
-                if (cachedToken && cachedUrl) {
-                    TOKEN = cachedToken;
-                    SERVER_URL = cachedUrl;
-
-                    // Inject values back into form fields for visibility (server-url removed)
-
-                    setStatus(
-                        "Active Plex session restored from storage.",
-                        "active",
-                    );
-                    document
-                        .getElementById("auth-panel")
-                        .classList.add("hidden");
-
-                    // Restore connection, fetch server list in background, and jump straight to libraries
-                    fetchServers(true);
-                }
             }
 
             async function initEvenBridge() {
@@ -501,893 +339,64 @@ import { buildSceneList } from "./scenes";
                 }
             }
 
-            // --- STEP 1: PIN AUTHENTICATION ENGINE ---
-            async function beginPlexAuthExchange() {
-                document.getElementById("pin-area").classList.remove("hidden");
-                authStatus.textContent =
-                    "Requesting verification codes from Plex...";
-
-                try {
-                    const res = await fetch("https://plex.tv/api/v2/pins", {
-                        method: "POST",
-                        headers: {
-                            Accept: "application/json",
-                            "Content-Type": "application/json",
-                            "X-Plex-Product": APP_NAME,
-                            "X-Plex-Client-Identifier": CLIENT_ID,
-                        },
-                        body: JSON.stringify({ strong: true }),
-                    });
-
-                    if (!res.ok)
-                        throw new Error(
-                            "Could not initialize Pin validation handshake.",
-                        );
-                    const data = await res.json();
-                    const pinId = data.id;
-                    const pinCode = data.code;
-                    document.getElementById("pin-code").textContent = pinCode;
-
-                    const authUrl = `https://app.plex.tv/auth#?clientID=${CLIENT_ID}&code=${pinCode}&context%5Bdevice%5D%5Bproduct%5D=${encodeURIComponent(APP_NAME)}&forwardURL=${location.href}`;
-
-                    const authLinkText =
-                        document.getElementById("auth-link-text");
-                    if (authLinkText) {
-                        authLinkText.value = authUrl;
-                        authLinkText.setAttribute("value", authUrl);
-
-                        const copyBtn =
-                            document.getElementById("copy-auth-link-btn");
-                        if (copyBtn) {
-                            copyBtn.onclick = () => {
-                                const urlToCopy = authUrl;
-
-                                if (
-                                    navigator.clipboard &&
-                                    window.isSecureContext
-                                ) {
-                                    navigator.clipboard
-                                        .writeText(urlToCopy)
-                                        .then(() => {
-                                            showCopied();
-                                        })
-                                        .catch((err) => {
-                                            fallbackCopy(urlToCopy);
-                                        });
-                                } else {
-                                    fallbackCopy(urlToCopy);
-                                }
-
-                                function showCopied() {
-                                    copyBtn.textContent = "Copied!";
-                                    copyBtn.style.background = "#2ecc71";
-                                    setTimeout(() => {
-                                        copyBtn.textContent =
-                                            "Copy Link to Clipboard";
-                                        copyBtn.style.background =
-                                            "var(--accent)";
-                                    }, 2000);
-                                }
-
-                                function fallbackCopy(text) {
-                                    try {
-                                        const textArea =
-                                            document.createElement("textarea");
-                                        textArea.value = text;
-                                        textArea.style.top = "0";
-                                        textArea.style.left = "0";
-                                        textArea.style.position = "fixed";
-                                        textArea.style.opacity = "0";
-                                        document.body.appendChild(textArea);
-                                        textArea.focus();
-                                        textArea.select();
-                                        const successful =
-                                            document.execCommand("copy");
-                                        document.body.removeChild(textArea);
-                                        if (successful) {
-                                            showCopied();
-                                        } else {
-                                            alert(
-                                                "Failed to copy automatically. Please select the URL and copy manually.",
-                                            );
-                                        }
-                                    } catch (err) {
-                                        console.error(
-                                            "Fallback copy failed:",
-                                            err,
-                                        );
-                                        alert(
-                                            "Failed to copy automatically. Please select the URL and copy manually.",
-                                        );
-                                    }
-                                }
-                            };
-                        }
-                    } else {
-                        // Safe fallback dynamic self-healing container injection (with new block structure)
-                        const container = document.getElementById(
-                            "auth-link-container",
-                        );
-                        if (container) {
-                            container.innerHTML = `
-                                <label for="auth-link-text" style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 6px;">Authorization URL</label>
-                                <input type="text" id="auth-link-text" readonly value="${authUrl}" style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: #1a1a1a; border: 1px solid #444; color: #fff; border-radius: 8px; font-family: monospace; font-size: 0.85em; outline: none; margin-bottom: 8px;" onclick="this.select()" />
-                                <button id="copy-auth-link-btn" style="display: block; width: 100%; box-sizing: border-box; padding: 12px; background: var(--accent); color: #fff; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95em; transition: background 0.2s;" onmouseover="this.style.background='#ffb71c'" onmouseout="this.style.background='var(--accent)'">Copy Link to Clipboard</button>
-                            `;
-                            const newCopyBtn =
-                                document.getElementById("copy-auth-link-btn");
-                            const newAuthLinkText =
-                                document.getElementById("auth-link-text");
-                            if (newCopyBtn && newAuthLinkText) {
-                                newCopyBtn.onclick = () => {
-                                    const urlToCopy = authUrl;
-
-                                    if (
-                                        navigator.clipboard &&
-                                        window.isSecureContext
-                                    ) {
-                                        navigator.clipboard
-                                            .writeText(urlToCopy)
-                                            .then(() => {
-                                                showCopied();
-                                            })
-                                            .catch((err) => {
-                                                fallbackCopy(urlToCopy);
-                                            });
-                                    } else {
-                                        fallbackCopy(urlToCopy);
-                                    }
-
-                                    function showCopied() {
-                                        newCopyBtn.textContent = "Copied!";
-                                        newCopyBtn.style.background = "#2ecc71";
-                                        setTimeout(() => {
-                                            newCopyBtn.textContent =
-                                                "Copy Link to Clipboard";
-                                            newCopyBtn.style.background =
-                                                "var(--accent)";
-                                        }, 2000);
-                                    }
-
-                                    function fallbackCopy(text) {
-                                        try {
-                                            const textArea =
-                                                document.createElement(
-                                                    "textarea",
-                                                );
-                                            textArea.value = text;
-                                            textArea.style.top = "0";
-                                            textArea.style.left = "0";
-                                            textArea.style.position = "fixed";
-                                            textArea.style.opacity = "0";
-                                            document.body.appendChild(textArea);
-                                            textArea.focus();
-                                            textArea.select();
-                                            const successful =
-                                                document.execCommand("copy");
-                                            document.body.removeChild(textArea);
-                                            if (successful) {
-                                                showCopied();
-                                            } else {
-                                                alert(
-                                                    "Failed to copy automatically. Please select the URL and copy manually.",
-                                                );
-                                            }
-                                        } catch (err) {
-                                            console.error(
-                                                "Fallback copy failed:",
-                                                err,
-                                            );
-                                            alert(
-                                                "Failed to copy automatically. Please select the URL and copy manually.",
-                                            );
-                                        }
-                                    }
-                                };
-                            }
-                        }
-                    }
-
-                    authStatus.textContent =
-                        "Awaiting authorization confirmation...";
-
-                    pollIntervalId = setInterval(() => {
-                        checkPinVerificationStatus(pinId);
-                    }, 3000);
-                } catch (e) {
-                    authStatus.textContent = `Authentication Initialization Failure: ${e.message}`;
-                }
-            }
-
-            async function checkPinVerificationStatus(pinId, popupRef) {
-                try {
-                    const res = await fetch(
-                        `https://plex.tv/api/v2/pins/${pinId}`,
-                        {
-                            headers: {
-                                Accept: "application/json",
-                                "X-Plex-Client-Identifier": CLIENT_ID,
-                            },
-                        },
-                    );
-                    const data = await res.json();
-                    if (data.authToken) {
-                        clearInterval(pollIntervalId);
-                        TOKEN = data.authToken;
-
-                        // Save credentials permanently to local storage strings
-                        localStorage.setItem("plex_jwt_token", TOKEN);
-                        authStatus.textContent =
-                            "Login verified and session saved!";
-                        setStatus("Plex login verified — fetching servers...");
-
-                        if (popupRef && !popupRef.closed) popupRef.close();
-                        document
-                            .getElementById("auth-panel")
-                            .classList.add("hidden");
-
-                        // Advance to fetch servers instead of directly to libraries
-                        fetchServers();
-                    }
-                } catch (e) {
-                    console.error(
-                        "Polling resolution tracking update anomaly:",
-                        e,
-                    );
-                }
-            }
-
-            // --- STEP 1.5: SERVER ROUTING & API DISCOVERY ---
-            async function fetchServers(skipToLibraries = false) {
-                setStatus("Fetching Plex servers...");
-                try {
-                    // Credentials as headers, never in the query string (F-021).
-                    // plex.tv answers the CORS preflight with
-                    // `access-control-allow-headers: x-plex-token,x-plex-client-identifier`
-                    // and `allow-origin: *` — verified against the live service.
-                    const url = `https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1`;
-                    const res = await fetch(url, {
-                        headers: { Accept: "application/json",
-                            "X-Plex-Token": TOKEN,
-                            "X-Plex-Client-Identifier": CLIENT_ID,
-                        },
-                    });
-                    if (!res.ok)
-                        throw new Error(
-                            `Plex.tv Resources Error: ${res.status}`,
-                        );
-                    const data = await res.json();
-
-                    let devices = [];
-                    if (data) {
-                        if (Array.isArray(data)) {
-                            devices = data;
-                        } else if (
-                            data.MediaContainer &&
-                            data.MediaContainer.Device
-                        ) {
-                            devices = Array.isArray(data.MediaContainer.Device)
-                                ? data.MediaContainer.Device
-                                : [data.MediaContainer.Device];
-                        } else if (data.Device) {
-                            devices = Array.isArray(data.Device)
-                                ? data.Device
-                                : [data.Device];
-                        }
-                    }
-
-                    plexServers = devices.filter((d) => {
-                        const prov = d.provides || "";
-                        return prov
-                            .split(",")
-                            .map((s) => s.trim().toLowerCase())
-                            .includes("server");
-                    });
-
-                    const serverSelect =
-                        document.getElementById("server-select");
-                    serverSelect.innerHTML = "";
-
-                    if (plexServers.length === 0) {
-                        const opt = document.createElement("option");
-                        opt.value = "";
-                        opt.text = "No servers found";
-                        serverSelect.appendChild(opt);
-                        document
-                            .getElementById("connection-group")
-                            .classList.add("hidden");
-                        document.getElementById("connect-server-btn").disabled =
-                            true;
-
-                        document
-                            .getElementById("auth-panel")
-                            .classList.add("hidden");
-                        document
-                            .getElementById("server-panel")
-                            .classList.remove("hidden");
-                        setStatus("No Plex servers found on this account.", "error");
-                        return;
-                    }
-
-                    document
-                        .getElementById("connection-group")
-                        .classList.remove("hidden");
-                    document.getElementById("connect-server-btn").disabled =
-                        false;
-
-                    plexServers.forEach((srv, idx) => {
-                        const opt = document.createElement("option");
-                        opt.value = idx;
-                        opt.text = `${srv.name} (Owner: ${srv.sourceTitle || "Me"})`;
-                        serverSelect.appendChild(opt);
-                    });
-
-                    // Match current SERVER_URL to pre-select the active server/connection
-                    let matchedServerIdx = 0;
-                    let matchedConnIdx = 0;
-                    let foundMatch = false;
-
-                    if (SERVER_URL) {
-                        for (let sIdx = 0; sIdx < plexServers.length; sIdx++) {
-                            const srv = plexServers[sIdx];
-                            const rawConnections =
-                                srv.connections || srv.Connection || [];
-                            const connections = Array.isArray(rawConnections)
-                                ? rawConnections
-                                : [rawConnections].filter(Boolean);
-                            for (
-                                let cIdx = 0;
-                                cIdx < connections.length;
-                                cIdx++
-                            ) {
-                                const conn = connections[cIdx];
-                                const uri =
-                                    conn.uri ||
-                                    `${conn.protocol}://${conn.address}:${conn.port}`;
-                                if (
-                                    uri === SERVER_URL ||
-                                    conn.uri === SERVER_URL
-                                ) {
-                                    matchedServerIdx = sIdx;
-                                    matchedConnIdx = cIdx;
-                                    foundMatch = true;
-                                    break;
-                                }
-                            }
-                            if (foundMatch) break;
-                        }
-                    }
-
-                    serverSelect.value = matchedServerIdx;
-                    populateConnections(matchedServerIdx);
-
-                    const connSelect =
-                        document.getElementById("connection-select");
-                    if (foundMatch) {
-                        connSelect.value = matchedConnIdx;
-                    }
-
-                    if (skipToLibraries && foundMatch) {
-                        document
-                            .getElementById("auth-panel")
-                            .classList.add("hidden");
-                        document
-                            .getElementById("server-panel")
-                            .classList.add("hidden");
-                        fetchLibraries();
-                    } else {
-                        document
-                            .getElementById("auth-panel")
-                            .classList.add("hidden");
-                        document
-                            .getElementById("server-panel")
-                            .classList.remove("hidden");
-                        setStatus("Select a Plex server to continue.");
-                        sendSubtitleToGlasses("Select a server").catch(
-                            () => {},
-                        );
-                    }
-                } catch (e) {
-                    console.error("Failed to fetch servers:", e);
-                    setStatus("Failed to fetch Plex servers.", "error");
-                    if (skipToLibraries) {
-                        document
-                            .getElementById("auth-panel")
-                            .classList.add("hidden");
-                        document
-                            .getElementById("server-panel")
-                            .classList.add("hidden");
-                        fetchLibraries();
-                    } else {
-                        alert("Failed to view server list: " + e.message);
-                        disconnectAccount();
-                    }
-                }
-            }
-
-            function populateConnections(serverIdx) {
-                const server = plexServers[serverIdx];
-                const connSelect = document.getElementById("connection-select");
-                connSelect.innerHTML = "";
-
-                if (!server) return;
-
-                const rawConnections =
-                    server.connections || server.Connection || [];
-                const connections = Array.isArray(rawConnections)
-                    ? rawConnections
-                    : [rawConnections].filter(Boolean);
-
-                connections.forEach((conn, idx) => {
-                    const opt = document.createElement("option");
-                    opt.value = idx;
-                    const type = conn.local
-                        ? "Local"
-                        : conn.relay
-                          ? "Relay"
-                          : "Remote";
-                    opt.text = `${type}: ${conn.address}:${conn.port} (${conn.protocol})`;
-                    connSelect.appendChild(opt);
-                });
-            }
-
-            async function connectToSelectedServer() {
-                const serverIdx = Number(
-                    document.getElementById("server-select").value,
-                );
-                const connIdx = Number(
-                    document.getElementById("connection-select").value,
-                );
-
-                const server = plexServers[serverIdx];
-                if (!server) return alert("Please select a valid server.");
-
-                const rawConnections =
-                    server.connections || server.Connection || [];
-                const connections = Array.isArray(rawConnections)
-                    ? rawConnections
-                    : [rawConnections].filter(Boolean);
-                const connection = connections[connIdx];
-                if (!connection)
-                    return alert("Please select a valid connection route.");
-
-                // Update runtime state
-                SERVER_URL =
-                    connection.uri ||
-                    `${connection.protocol}://${connection.address}:${connection.port}`;
-                TOKEN = server.accessToken || TOKEN;
-
-                // Save details to localStorage
-                localStorage.setItem("plex_server_url", SERVER_URL);
-                localStorage.setItem("plex_jwt_token", TOKEN);
-
-                setStatus(
-                    `Connected to ${server.name} (${connection.local ? "Local" : "Remote"})`,
-                    "active",
-                );
-
-                document.getElementById("server-panel").classList.add("hidden");
-                fetchLibraries();
-            }
-
-            async function querySourceSecurityResources() {
-                const sourceId = document
-                    .getElementById("source-id-input")
-                    .value.trim();
-                if (!sourceId)
-                    return alert("Please enter a source identifier.");
-
-                const resultDiv = document.getElementById(
-                    "source-query-result",
-                );
-                resultDiv.style.display = "block";
-                resultDiv.textContent =
-                    "Querying security resources from selected server...";
-
-                const serverIdx = Number(
-                    document.getElementById("server-select").value,
-                );
-                const server = plexServers[serverIdx];
-                if (!server) {
-                    resultDiv.textContent =
-                        "Error: Please select a server first.";
-                    return;
-                }
-
-                const connIdx = Number(
-                    document.getElementById("connection-select").value,
-                );
-                const rawConnections =
-                    server.connections || server.Connection || [];
-                const connections = Array.isArray(rawConnections)
-                    ? rawConnections
-                    : [rawConnections].filter(Boolean);
-                const connection = connections[connIdx];
-                if (!connection) {
-                    resultDiv.textContent =
-                        "Error: Please select a connection route first.";
-                    return;
-                }
-
-                const hostUrl =
-                    connection.uri ||
-                    `${connection.protocol}://${connection.address}:${connection.port}`;
-                const token = server.accessToken || TOKEN;
-
-                try {
-                    const cleanHostUrl = hostUrl.replace(/\/$/, "");
-                    const queryUrl = `${cleanHostUrl}/security/resources?source=${encodeURIComponent(sourceId)}&refresh=0`;
-
-                    const res = await fetch(queryUrl, {
-                        headers: {
-                            Accept: "application/json",
-                            "X-Plex-Token": token,
-                        },
-                    });
-
-                    if (!res.ok)
-                        throw new Error(`Server returned HTTP ${res.status}`);
-                    const data = await res.json();
-
-                    resultDiv.textContent = JSON.stringify(data, null, 4);
-                } catch (e) {
-                    resultDiv.textContent = `Query Failed: ${e.message}`;
-                }
-            }
-
-            // --- SESSION REVOCATION / DISCONNECT ---
-            function disconnectAccount() {
-                // Clear variable references
-                TOKEN = "";
-                SERVER_URL = "";
-                // Wipe persistent browser cache records
-                localStorage.removeItem("plex_jwt_token");
-                localStorage.removeItem("plex_server_url");
-                // Reset UI layouts
-                document
-                    .getElementById("library-panel")
-                    .classList.add("hidden");
-                document.getElementById("media-panel").classList.add("hidden");
-                document.getElementById("player-panel").classList.add("hidden");
-                document.getElementById("pin-area").classList.add("hidden");
-                document.getElementById("server-panel").classList.add("hidden");
-                document
-                    .getElementById("auth-panel")
-                    .classList.remove("hidden");
-                setStatus("Signed out. Sign in to continue.");
-                if (bridgeInstance) {
-                    sendSubtitleToGlasses("Sign in to Plex").catch(() => {});
-                }
-                alert(
-                    "Logged out successfully. Local storage credentials dropped.",
-                );
-            }
-
-            // --- STEP 2 & 3: MEDIA EXPLORATION VIA TOKEN ---
-            async function plexFetch(endpoint) {
-                const cleanUrl = SERVER_URL.replace(/\/$/, "");
-                const url = `${cleanUrl}${endpoint}`;
-                const res = await fetch(url, {
-                    headers: {
-                        Accept: "application/json",
-                        "X-Plex-Token": TOKEN,
-                    },
-                });
-                if (!res.ok) throw new Error(`Plex Server Error ${res.status}`);
-                return await res.json();
-            }
-
-            async function fetchLibraries() {
-                setStatus("Loading library list...");
-                try {
-                    const data = await plexFetch("/library/sections");
-                    const dirs = data.MediaContainer.Directory || [];
-                    const select = document.getElementById("library-select");
-                    select.innerHTML = "";
-                    libraryTypes = {};
-
-                    dirs.forEach((lib) => {
-                        if (["movie", "show"].includes(lib.type)) {
-                            libraryTypes[lib.key] = lib.type;
-                            const opt = document.createElement("option");
-                            opt.value = lib.key;
-                            opt.text = `${lib.title} (${lib.type})`;
-                            select.appendChild(opt);
-                        }
-                    });
-
-                    // Trigger library selection change to handle initial state
-                    if (select.value) {
-                        handleLibraryChange(select.value);
-                    }
-
-                    document
-                        .getElementById("library-panel")
-                        .classList.remove("hidden");
-                    setStatus("Select a library to browse.", "active");
-                } catch (e) {
-                    setStatus("Failed to load libraries.", "error");
-                    alert("Failed to view server libraries: " + e.message);
-                    disconnectAccount();
-                }
-            }
-
-            async function handleLibraryChange(libId) {
-                const showGroup = document.getElementById("show-select-group");
-                const type = libraryTypes[libId];
-
-                if (type === "show") {
-                    showGroup.classList.remove("hidden");
-                    await fetchShowsForLibrary(libId);
-                } else {
-                    showGroup.classList.add("hidden");
-                }
-            }
-
-            async function fetchShowsForLibrary(libId) {
-                const showSelect = document.getElementById("show-select");
-                showSelect.innerHTML = "<option>Loading shows...</option>";
-                showSelect.disabled = true;
-
-                try {
-                    const data = await plexFetch(
-                        `/library/sections/${libId}/all`,
-                    );
-                    const items = data.MediaContainer.Metadata || [];
-                    showSelect.innerHTML = "";
-
-                    if (items.length === 0) {
-                        showSelect.innerHTML =
-                            "<option value=''>No shows found</option>";
-                        return;
-                    }
-
-                    items.forEach((show) => {
-                        const opt = document.createElement("option");
-                        opt.value = show.ratingKey;
-                        opt.text = show.title;
-                        showSelect.appendChild(opt);
-                    });
-                    showSelect.disabled = false;
-                } catch (e) {
-                    showSelect.innerHTML = `<option value=''>Error: ${e.message}</option>`;
-                    console.error("Failed to fetch shows:", e);
-                }
-            }
-
-            // Eligibility for one already-fetched metadata item, or null.
-            //
-            // An item needs BOTH an `sd` trick-play index and a subtitle stream
-            // with a NON-NULL key. Most SRT streams Plex reports are embedded in
-            // the media file and cannot be fetched separately; only sidecars can.
-            // See trickplayer-knowledge findings/F-014.
-            function eligibleFrom(detailedItem, isEpisodeFlow) {
-                if (!detailedItem || !detailedItem.Media) return null;
-                for (const media of detailedItem.Media) {
-                    if (!media.Part) continue;
-                    for (const part of media.Part) {
-                        const hasBif = part.indexes && part.indexes.includes("sd");
-                        if (!hasBif) continue;
-                        const subStream = part.Stream
-                            ? part.Stream.find(
-                                  (st) =>
-                                      st.streamType === 3 &&
-                                      st.codec === "srt" &&
-                                      st.key,
-                              )
-                            : null;
-                        if (!subStream) continue;
-
-                        let displayTitle = detailedItem.title;
-                        if (isEpisodeFlow) {
-                            const sNum = String(detailedItem.parentIndex || 0).padStart(2, "0");
-                            const eNum = String(detailedItem.index || 0).padStart(2, "0");
-                            displayTitle = `${detailedItem.grandparentTitle || ""} - S${sNum}E${eNum} - ${detailedItem.title}`;
-                        }
-                        return {
-                            title: displayTitle,
-                            timelineRef: part.id,
-                            subId: subStream.id,
-                            subtitleRef: subStream.key,
-                            res: media.videoResolution,
-                        };
-                    }
-                }
-                return null;
-            }
-
-            // Bumped whenever a scan starts or the user leaves the panel, so an
-            // in-flight scan knows to stop rather than rendering into a screen
-            // that has moved on.
-            let scanGeneration = 0;
-
-            async function scanForValidMedia() {
-                const libId = document.getElementById("library-select").value;
-                const scanStatus = document.getElementById("scan-status");
-                const results = document.getElementById("results-list");
-
-                const myGeneration = ++scanGeneration;
-                results.innerHTML = "";
-                setStatus("Scanning library for compatible media...");
-
-                try {
-                    const type = libraryTypes[libId];
-                    let items = [];
-                    let isEpisodeFlow = false;
-
-                    if (type === "show") {
-                        const showId = document.getElementById("show-select").value;
-                        if (!showId) {
-                            if (scanStatus) scanStatus.textContent = "";
-                            return alert("Please select a show first.");
-                        }
-                        const data = await plexFetch(`/library/metadata/${showId}/allLeaves`);
-                        items = data.MediaContainer.Metadata || [];
-                        isEpisodeFlow = true;
-                    } else {
-                        const data = await plexFetch(`/library/sections/${libId}/all`);
-                        items = data.MediaContainer.Metadata || [];
-                    }
-
-                    // Show the list NOW and fill it in as hits are found, rather
-                    // than after the whole library has been swept (F-015).
-                    //
-                    // Eligibility costs one metadata request per item — about
-                    // 23 ms on a LAN, so ~4 s for a 157-episode show either way.
-                    // The difference is not the total: four seconds of blank
-                    // screen is a bad app, four seconds of a list filling in is
-                    // a working one, and the user picks something long before
-                    // the scan ends. The old path fetched everything in batches
-                    // of 20 up front and threw almost all of it away.
-                    document.getElementById("library-panel").classList.add("hidden");
-                    document.getElementById("media-panel").classList.remove("hidden");
-
-                    let found = 0;
-                    for (let i = 0; i < items.length; i++) {
-                        if (myGeneration !== scanGeneration) return; // superseded
-                        if (scanStatus) {
-                            scanStatus.textContent =
-                                `Checking ${i + 1}/${items.length}` +
-                                (found ? ` — ${found} playable so far` : "");
-                        }
-                        let match = null;
-                        try {
-                            const details = await plexFetch(
-                                `/library/metadata/${items[i].ratingKey}`,
-                            );
-                            match = eligibleFrom(
-                                details.MediaContainer?.Metadata?.[0],
-                                isEpisodeFlow,
-                            );
-                        } catch (err) {
-                            console.warn(
-                                `eligibility check failed for ` +
-                                `${items[i].title || items[i].ratingKey}: ${err.message}`,
-                            );
-                        }
-                        if (!match) continue;
-
-                        found++;
-                        const div = document.createElement("div");
-                        div.className = "media-item";
-                        div.innerHTML =
-                            `<span>${escapeHtml(match.title)}</span>` +
-                            `<span class="tags"><span class="tag-badge">${escapeHtml(String(match.res))}p</span>` +
-                            `<span class="tag-badge">SRT</span></span>`;
-                        div.onclick = () => {
-                            scanGeneration++; // stop the scan; we are leaving
-                            loadPlayer(match);
-                        };
-                        results.appendChild(div);
-                        setStatus(`${found} compatible item(s) so far — pick one any time.`, "active");
-                    }
-
-                    if (myGeneration !== scanGeneration) return;
-                    if (scanStatus) scanStatus.textContent = "";
-                    if (found === 0) {
-                        results.innerHTML =
-                            '<div style="padding:20px; text-align:center; color:var(--text-muted)">' +
-                            "No compatible items were found. An item needs both a trick-play " +
-                            "index and an SRT <em>sidecar</em> — subtitles embedded in the media " +
-                            "file cannot be fetched separately.</div>";
-                    }
-                    setStatus(
-                        found
-                            ? `Found ${found} compatible item(s). Select one to play.`
-                            : "No compatible media found in this library.",
-                        found ? "active" : "neutral",
-                    );
-                } catch (e) {
-                    if (myGeneration !== scanGeneration) return;
-                    if (scanStatus) scanStatus.textContent = "Error scanning file tree: " + e.message;
-                    else alert("Error scanning file tree: " + e.message);
-                    setStatus("Error scanning library: " + e.message, "error");
-                }
-            }
-
             // --- STEP 4: MOUNT PLAYER RUNTIME & TRANSMIT OVER BLE ---
-            async function loadPlayer(media) {
-                document.getElementById("media-panel").classList.add("hidden");
-                document
-                    .getElementById("player-panel")
-                    .classList.remove("hidden");
-                document.getElementById("playing-title").textContent =
-                    media.title;
+            //
+            // The provider comes in already built. The engine never names one:
+            // which provider this is, and how it was authenticated, is settled
+            // before anything here runs (SEAM.md, UI.md §5).
+            async function prepareItem(item) {
+                document.getElementById("playing-title").textContent = item.title;
 
-                setStatus(`Loading "${media.title}"...`);
+                setStatus(`Loading "${item.title}"...`);
                 showLoadProgress("Connecting to server...");
-                sendSubtitleToGlasses(`Loading ${media.title}`).catch(
-                    () => {},
-                );
 
-                // The provider for this item. Everything below asks it for
-                // frames and cues; nothing below knows this is Plex. Swapping
-                // in a second source is a change to this one line.
-                source = createPlexSource({
-                    serverUrl: SERVER_URL,
-                    token: TOKEN,
-                    timelineRef: media.timelineRef,
-                    subtitleRef: media.subtitleRef,
-                });
-
+                if (source && source.release) source.release();
+                source = item.source;
+                currentItem = item;
                 clearFrameCache();
 
-                try {
-                    // Index phase (0-20%). The provider decides how to get a
-                    // timeline — two small ranged reads here, tile geometry
-                    // elsewhere. Either way the track is not downloaded (F-005).
-                    setLoadProgress(null, "Reading index...");
-                    const timelineResult = await source.timeline();
-                    const header = timelineResult.header;
-                    bifs = timelineResult.frames;
-                    setLoadProgress(0.2, "Reading index...");
+                // Index phase (0-20%). The provider decides how to get a
+                // timeline — two small ranged reads here, tile geometry
+                // elsewhere. Either way the track is not downloaded (F-005).
+                setLoadProgress(null, "Reading index...");
+                const timelineResult = await source.timeline();
+                bifs = timelineResult.frames;
+                setLoadProgress(0.2, "Reading index...");
 
-                    // Subtitle phase (20-90%): the only download large enough
-                    // to be worth a progress bar now.
-                    setLoadProgress(0.5, "Downloading subtitles...");
-                    subtitles = await source.cues();
-                    setLoadProgress(0.9, "Parsing subtitles...");
+                // Subtitle phase (20-90%): the only download large enough to
+                // be worth a progress bar now.
+                setLoadProgress(0.5, "Downloading subtitles...");
+                subtitles = await source.cues();
+                setLoadProgress(0.9, "Parsing subtitles...");
 
-                    durationMs = bifs[bifs.length - 1].tsMs;
-                    // A source with no per-frame sizes gets neither blank
-                    // filtering nor duplicate detection — skipped, not faked
-                    // (SEAM.md §4).
-                    const caps = source.capabilities();
-                    sceneList = buildSceneList(bifs, subtitles, durationMs, {
-                        hasFrameSizeHints: caps.hasFrameSizeHints,
-                    });
+                durationMs = item.durationMs || bifs[bifs.length - 1].tsMs;
+                rebuildScenes();
 
-                    const trackBytes = bifs.reduce((n, f) => n + f.length, 0);
-                    console.log(
-                        `[timeline] ${bifs.length} frames, multiplier ` +
-                        `${header.rawMultiplier} (=> ${header.multiplierMs} ms), ` +
-                        `index ${header.indexByteLength} B read, ` +
-                        `${(trackBytes / 1e6).toFixed(2)} MB of frames NOT downloaded`,
-                    );
+                const header = timelineResult.header;
+                const trackBytes = bifs.reduce((n, f) => n + (f.sizeHint || 0), 0);
+                console.log(
+                    `[timeline] ${bifs.length} frames` +
+                    (header ? `, index ${header.indexByteLength} B read` : ", from geometry") +
+                    (trackBytes ? `, ${(trackBytes / 1e6).toFixed(2)} MB of frames NOT downloaded` : ""),
+                );
 
-                    timeline.max = durationMs;
-                    currentTimeMs = 0;
+                timeline.max = durationMs;
+                currentTimeMs = 0;
+                resetPipelineState();
 
-                    // Reset scene pipeline state
-                    scenePipelineRunning = false;
-                    sceneAbortController = null;
-                    renderDurations = [];
-                    averageRenderDuration = 1500;
-                    lastSentImageTimestampMs = 0;
-                    lastPushedSubText = "";
+                setLoadProgress(1, "Ready");
+                hideLoadProgress();
+                setStatus(`Ready: ${item.title}`, "active");
+                return sceneStats();
+            }
 
-                    setLoadProgress(1, "Ready");
-                    hideLoadProgress();
-                    setStatus(`Now playing: ${media.title}`, "active");
-
-                    updateUI();
-                    sendOneShotUpdate();
-                } catch (e) {
-                    hideLoadProgress();
-                    setStatus(`Failed to load "${media.title}".`, "error");
-                    alert("Failed to load stream: " + e.message);
-                    resetPlayer();
-                }
+            function resetPipelineState() {
+                scenePipelineRunning = false;
+                sceneAbortController = null;
+                renderDurations = [];
+                averageRenderDuration = 1500;
+                lastSentImageTimestampMs = 0;
+                lastPushedSubText = "";
             }
 
             function resizeAndPrepareImage(blob, targetWidth, targetHeight) {
@@ -1616,6 +625,54 @@ import { buildSceneList } from "./scenes";
             // headlessly against the shared corpus. See that file for why it
             // is shaped the way it is (F-001, F-007, F-009, F-036).
             let sceneList = [];
+            let currentItem = null;
+
+            // The two policy options. Neither is a rule: both change which
+            // scenes exist, so both rebuild the list rather than being consulted
+            // during playback (UI.md §4.2).
+            let skipSilent = true;
+            let bandwidthStride = 1; // 1 = every scene
+
+            /** Per-scene bytes over BLE — fixed, whatever the provider charged (F-040). */
+            const DEVICE_BYTES_PER_SCENE = 16384;
+
+            function rebuildScenes() {
+                if (!bifs.length) { sceneList = []; return; }
+                // A source with no per-frame sizes gets neither blank filtering
+                // nor duplicate detection — skipped, not faked (SEAM.md §4).
+                const caps = source.capabilities();
+                const full = buildSceneList(bifs, subtitles, durationMs, {
+                    hasFrameSizeHints: caps.hasFrameSizeHints,
+                    skipSilent,
+                });
+                sceneList = thinScenes(full, bandwidthStride);
+            }
+
+            /**
+             * What the consequence lines under the controls quote (UI.md §4.1).
+             *
+             * `unfiltered` and `withSubtitles` are both computed regardless of
+             * how the switch is currently set, because the line has to say what
+             * turning it ON would do — "73 scenes -> 73 with subtitles" while it
+             * is off is a true sentence that answers nothing.
+             *
+             * All of it falls out of the scene list, which is built without
+             * touching the network, so quoting it costs nothing.
+             */
+            function sceneStats() {
+                const count = (skip) => buildSceneList(bifs, subtitles, durationMs, {
+                    hasFrameSizeHints: source.capabilities().hasFrameSizeHints,
+                    skipSilent: skip,
+                }).length;
+                return {
+                    scenes: sceneList.length,
+                    withSubtitles: count(true),
+                    unfiltered: count(false),
+                    hasCues: subtitles.length > 0,
+                    deviceBytes: sceneList.length * DEVICE_BYTES_PER_SCENE,
+                    durationMs,
+                };
+            }
 
             /** The selected scene containing startMs, or the first one after it. */
             function sceneContaining(startMs) {
@@ -1727,6 +784,7 @@ import { buildSceneList } from "./scenes";
 
             async function sendImageToGlasses(frameIndex) {
                 if (!bridgeInstance || frameIndex == null || frameIndex < 0) return 0;
+                const frame = bifs[frameIndex];
 
                 // The bytes come from the SOURCE, one frame at a time, rather
                 // than every frame being materialised at load time (F-005).
@@ -2243,183 +1301,6 @@ import { buildSceneList } from "./scenes";
                 }
             }
 
-            // --- ATTACH HANDLERS ---
-            document.getElementById("login-btn").onclick =
-                beginPlexAuthExchange;
-            document.getElementById("scan-media-btn").onclick =
-                scanForValidMedia;
-            document.getElementById("logout-btn-0").onclick = disconnectAccount;
-            document.getElementById("logout-btn-1").onclick = disconnectAccount;
-            document.getElementById("logout-btn-2").onclick = disconnectAccount;
-            document.getElementById("back-to-lib-btn").onclick = () => {
-                document.getElementById("media-panel").classList.add("hidden");
-                document
-                    .getElementById("library-panel")
-                    .classList.remove("hidden");
-            };
-
-            document.getElementById("library-select").onchange = (e) => {
-                handleLibraryChange(e.target.value);
-            };
-
-            document.getElementById("server-select").onchange = (e) => {
-                populateConnections(Number(e.target.value));
-            };
-
-            document.getElementById("connect-server-btn").onclick =
-                connectToSelectedServer;
-            document.getElementById("query-source-btn").onclick =
-                querySourceSecurityResources;
-
-            document.getElementById("switch-server-btn-1").onclick = () => {
-                document
-                    .getElementById("library-panel")
-                    .classList.add("hidden");
-                document
-                    .getElementById("server-panel")
-                    .classList.remove("hidden");
-            };
-
-            document.getElementById("switch-server-btn-2").onclick = () => {
-                document.getElementById("media-panel").classList.add("hidden");
-                document
-                    .getElementById("server-panel")
-                    .classList.remove("hidden");
-            };
-
-            playBtn.onclick = () => {
-                isPlaying = !isPlaying;
-                playBtn.innerText = isPlaying ? "Pause" : "Play";
-                const title =
-                    document.getElementById("playing-title")?.textContent ||
-                    "media";
-                if (isPlaying) {
-                    backgroundedWhilePlaying = false;
-                    try {
-                        silentAudio.play();
-                    } catch (e) {
-                        console.warn("Silent audio play failed:", e);
-                    }
-                    setStatus(`Now playing: ${title}`, "active");
-                    // Pipeline drives the timeline — no clock needed
-                    runScenePipeline();
-                } else {
-                    stopScenePipeline();
-                    try {
-                        silentAudio.pause();
-                    } catch (e) {}
-                    setStatus(`Paused: ${title}`, "active");
-                }
-            };
-
-            timeline.oninput = (e) => {
-                const wasPlaying = isPlaying;
-                if (wasPlaying) {
-                    stopScenePipeline();
-                }
-                currentTimeMs = Number(e.target.value);
-                updateUI();
-                sendOneShotUpdate();
-                // Restart pipeline from new position if was playing
-                if (wasPlaying && isPlaying) {
-                    runScenePipeline();
-                }
-            };
-
-            function resetPlayer() {
-                isPlaying = false;
-                stopScenePipeline();
-                stopClock();
-                hideLoadProgress();
-                // Release the frame cache's object URLs. Leaving the episode is
-                // the one moment they are certainly all dead.
-                clearFrameCache();
-                try {
-                    silentAudio.pause();
-                } catch (e) {}
-                if (bridgeInstance) {
-                    sendSubtitleToGlasses("Stream terminated.").catch(() => {});
-                }
-                document.getElementById("player-panel").classList.add("hidden");
-                document
-                    .getElementById("media-panel")
-                    .classList.remove("hidden");
-                setStatus("Select a title to play.", "active");
-
-                // Reset scene pipeline state
-                scenePipelineRunning = false;
-                sceneAbortController = null;
-                renderDurations = [];
-                averageRenderDuration = 1500;
-                lastSentImageTimestampMs = 0;
-                lastPushedSubText = "";
-            }
-
-            document.getElementById("close-player-btn").onclick = resetPlayer;
-
-            // --- IMAGE ADJUSTMENTS HANDLERS ---
-            const brightnessSlider = document.getElementById("img-brightness");
-            const contrastSlider = document.getElementById("img-contrast");
-            const gammaSlider = document.getElementById("img-gamma");
-            const ditherSelect = document.getElementById("img-dither");
-
-            const valBrightness = document.getElementById("val-brightness");
-            const valContrast = document.getElementById("val-contrast");
-            const valGamma = document.getElementById("val-gamma");
-
-            brightnessSlider.oninput = (e) => {
-                brightnessValue = Number(e.target.value);
-                valBrightness.textContent =
-                    brightnessValue > 0
-                        ? `+${brightnessValue}`
-                        : brightnessValue;
-                updateUI();
-                sendOneShotUpdate();
-            };
-
-            contrastSlider.oninput = (e) => {
-                contrastValue = Number(e.target.value);
-                valContrast.textContent =
-                    contrastValue > 0 ? `+${contrastValue}` : contrastValue;
-                updateUI();
-                sendOneShotUpdate();
-            };
-
-            gammaSlider.oninput = (e) => {
-                gammaValue = Number(e.target.value);
-                valGamma.textContent = gammaValue.toFixed(1);
-                updateUI();
-                sendOneShotUpdate();
-            };
-
-            ditherSelect.onchange = (e) => {
-                ditherAlgorithm = e.target.value;
-                updateUI();
-                sendOneShotUpdate();
-            };
-
-            document.getElementById("reset-img-btn").onclick = () => {
-                brightnessValue = 0;
-                contrastValue = 0;
-                gammaValue = 1.0;
-                ditherAlgorithm = "floyd-steinberg";
-
-                brightnessSlider.value = 0;
-                contrastSlider.value = 0;
-                gammaSlider.value = 1.0;
-                ditherSelect.value = "floyd-steinberg";
-
-                valBrightness.textContent = "0";
-                valContrast.textContent = "0";
-                valGamma.textContent = "1.0";
-
-                updateUI();
-                sendOneShotUpdate();
-            };
-
-            // Run startup authentication and layout initializations
-            initApp();
-
             // --- EVEN HUB SDK EXTENSIONS ---
             // 1. Double tap exit & lifecycle cleanup
             let cleanedUp = false;
@@ -2544,14 +1425,14 @@ import { buildSceneList } from "./scenes";
             window.addEventListener('beforeunload', cleanup);
 
             // 2. Background State Persistence
+            //
+            // Position only. The old snapshot also handed the host the server
+            // URL and the account token, which is a credential leaving the app
+            // for no benefit: a restore cannot rebuild a provider from them
+            // anyway — that is the UI's saved sources — and this only ever runs
+            // against an item that is still loaded.
             window.__getStateSnapshot = () => {
-                return JSON.stringify({
-                    currentTimeMs,
-                    isPlaying,
-                    durationMs,
-                    SERVER_URL,
-                    TOKEN
-                });
+                return JSON.stringify({ currentTimeMs, isPlaying, durationMs });
             };
             
             window.__restoreState = (jsonStr) => {
@@ -2575,8 +1456,6 @@ import { buildSceneList } from "./scenes";
                             return;
                         }
 
-                        SERVER_URL = state.SERVER_URL ?? SERVER_URL;
-                        TOKEN = state.TOKEN ?? TOKEN;
                         durationMs = state.durationMs ?? durationMs;
 
                         // Clamp against the actually-loaded media's real
@@ -2609,3 +1488,147 @@ import { buildSceneList } from "./scenes";
                     }
                 }
             };
+            // ================================================================
+            // ENGINE API
+            //
+            // Everything above drives the glasses; everything the UI is allowed
+            // to ask for is below. The split exists so the flow in
+            // trickplayer-knowledge/UI.md can be rewritten without touching the
+            // BLE queue, the scene pipeline or the image path — and so nothing
+            // in this file has to know what a panel is.
+            // ================================================================
+
+            export { prepareItem, sceneStats };
+
+            export async function initBridge() {
+                await initEvenBridge();
+            }
+
+            /** Skip scenes with no subtitles — a rebuild, not a playback flag. */
+            export function setSkipSilent(on) {
+                skipSilent = !!on;
+                rebuildScenes();
+                return sceneStats();
+            }
+
+            /**
+             * Bandwidth, 0 (fewest images) to 2 (every scene).
+             *
+             * Named for what the user spends rather than for the mechanism: the
+             * pictures are identical, there are fewer of them (UI.md §4.2).
+             */
+            export function setBandwidth(level) {
+                bandwidthStride = [3, 2, 1][Math.max(0, Math.min(2, Number(level)))] ?? 1;
+                rebuildScenes();
+                return sceneStats();
+            }
+
+            export function setPicture(p) {
+                if (typeof p.brightness === "number") brightnessValue = p.brightness;
+                if (typeof p.contrast === "number") contrastValue = p.contrast;
+                if (typeof p.gamma === "number") gammaValue = p.gamma;
+                if (p.texture) ditherAlgorithm = p.texture;
+                return { brightnessValue, contrastValue, gammaValue, ditherAlgorithm };
+            }
+
+            /** What a preview would cost to fetch, or null if the source cannot say. */
+            export function previewCostBytes(sceneCount) {
+                if (!source || !bifs.length) return null;
+                return source.previewCostBytes(bifs, sceneCount);
+            }
+
+            /**
+             * `n` scenes spread across the item, rendered through the SAME image
+             * path the glasses get — grey, quantised, dithered, at the real
+             * 256x128. The point of a preview here is to answer "will this
+             * content survive my display", which a colour thumbnail cannot.
+             */
+            export async function previewScenes(n = 3) {
+                if (!sceneList.length) return [];
+                const step = Math.max(1, Math.floor(sceneList.length / n));
+                const picked = [];
+                for (let i = 0; i < sceneList.length && picked.length < n; i += step) {
+                    picked.push(sceneList[i]);
+                }
+
+                const out = [];
+                for (const sc of picked) {
+                    const { blob } = await getFrameAssets(sc.frameIndex);
+                    const png = await resizeAndPrepareImage(
+                        blob, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT,
+                    );
+                    // A cue belongs to the window it STARTS in (F-010).
+                    const cue = subtitles.find(
+                        (c) => c.startMs >= sc.startMs && c.startMs < sc.endMs,
+                    );
+                    out.push({
+                        url: URL.createObjectURL(new Blob([png], { type: "image/png" })),
+                        text: cue ? cleanSubText(cue.text) : "",
+                        tsMs: sc.startMs,
+                    });
+                }
+                return out;
+            }
+
+            /** Re-render the preview strip after a picture change, same scenes. */
+            export function pictureIsLive() {
+                if (!isPlaying) return;
+                updateUI();
+                sendOneShotUpdate();
+            }
+
+            export function play() {
+                if (isPlaying || !sceneList.length) return;
+                isPlaying = true;
+                backgroundedWhilePlaying = false;
+                playBtn.innerText = "Pause";
+                try { silentAudio.play(); } catch (e) {}
+                setStatus(`Now playing: ${currentItem?.title || "media"}`, "active");
+                ui.playing(true);
+                // The pipeline drives the timeline — no clock needed.
+                runScenePipeline();
+            }
+
+            export function pause() {
+                if (!isPlaying) return;
+                isPlaying = false;
+                playBtn.innerText = "Play";
+                stopScenePipeline();
+                try { silentAudio.pause(); } catch (e) {}
+                setStatus(`Paused: ${currentItem?.title || "media"}`, "active");
+                ui.playing(false);
+            }
+
+            export function togglePlay() {
+                if (isPlaying) pause(); else play();
+            }
+
+            export function seekTo(ms) {
+                const wasPlaying = isPlaying;
+                if (wasPlaying) stopScenePipeline();
+                currentTimeMs = Number(ms);
+                updateUI();
+                sendOneShotUpdate();
+                if (wasPlaying && isPlaying) runScenePipeline();
+            }
+
+            /** Leave the item. The one moment every object URL is certainly dead. */
+            export function stop() {
+                isPlaying = false;
+                stopScenePipeline();
+                stopClock();
+                hideLoadProgress();
+                clearFrameCache();
+                playBtn.innerText = "Play";
+                try { silentAudio.pause(); } catch (e) {}
+                if (bridgeInstance) sendSubtitleToGlasses("Stream terminated.").catch(() => {});
+                if (source && source.release) source.release();
+                resetPipelineState();
+                ui.playing(false);
+                ui.stopped();
+            }
+
+            // The player's own two controls stay wired here: they act on engine
+            // state and have no flow meaning, unlike every other button.
+            playBtn.onclick = togglePlay;
+            timeline.oninput = (e) => seekTo(e.target.value);
