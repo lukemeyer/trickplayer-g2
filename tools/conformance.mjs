@@ -109,6 +109,23 @@ const subtitles = await loadTs("src/subtitles.ts");
   })), exp.cues);
 }
 
+// -------------------------------------------------------------- encodings
+
+{
+  const exp = readJson("subs/torture.expected.json");
+  const enc = readJson("subs/encodings.expected.json");
+  for (const v of enc.variants) {
+    const bytes = fs.readFileSync(path.join(CORPUS, v.file));
+    const text = subtitles.decodeSubtitleBytes(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const cues = await subtitles.parseSubtitles(text);
+    check("encoding", `${v.file} cueCount`, cues.length, exp.cueCount);
+    check("encoding", `${v.file} cues`, cues.map((c) => ({
+      startMs: c.startMs, endMs: c.endMs, text: c.text.replace(/<br>/g, "\n"),
+    })), exp.cues);
+  }
+}
+
 // --------------------------------------------------------- scene / cues
 
 skip("scene", "selection policy",

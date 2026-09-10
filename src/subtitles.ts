@@ -12,6 +12,7 @@ function yieldToMain() {
 //   * ASS override blocks ({\an8} and friends) are stripped — they leak in
 //     from converted tracks and are positioning directives, not dialogue.
 //   * A cue with nothing left after cleaning is dropped, not kept as empty.
+//   * The byte encoding is sniffed from the BOM, never assumed (F-035).
 //
 // This happens HERE, at parse time, rather than at display time. It used to
 // happen downstream in main.ts's cleanSubText, which meant the parsed cue list
@@ -25,6 +26,32 @@ function yieldToMain() {
 //
 // Parses in chunks with a yield back to the main thread every N blocks so a
 // very large SRT file doesn't freeze the UI while it parses.
+/**
+ * Decode subtitle bytes, sniffing the byte-order mark.
+ *
+ * A real Plex server serves UTF-16 sidecars, labelled `text/html` with no
+ * charset. Decoding blindly as UTF-8 — which is what this build did — yields a
+ * string full of NULs, from which the parser extracts ZERO cues. Silently: the
+ * fetch is a 200, the parse succeeds, and the glasses just never show
+ * dialogue. See trickplayer-knowledge findings/F-035.
+ *
+ * Content-Type is deliberately not consulted; the bytes are the only honest
+ * signal.
+ */
+export function decodeSubtitleBytes(buffer) {
+    const b = new Uint8Array(buffer);
+    if (b.length >= 2 && b[0] === 0xff && b[1] === 0xfe) {
+        return new TextDecoder("utf-16le").decode(b.subarray(2));
+    }
+    if (b.length >= 2 && b[0] === 0xfe && b[1] === 0xff) {
+        return new TextDecoder("utf-16be").decode(b.subarray(2));
+    }
+    if (b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) {
+        return new TextDecoder().decode(b.subarray(3));
+    }
+    return new TextDecoder().decode(b);
+}
+
 export async function parseSubtitles(text, onProgress) {
     const subs = [];
     const cleanText = text

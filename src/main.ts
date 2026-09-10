@@ -5,7 +5,7 @@ import {
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
 import { parseTimelineHeader, parseTimelineIndex } from "./timeline";
-import { parseSubtitles } from "./subtitles";
+import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
 
             // --- APPLICATION METADATA FOR HEADERS ---
             const CLIENT_ID = "plex-bif-viewer";
@@ -202,7 +202,10 @@ import { parseSubtitles } from "./subtitles";
 
             async function fetchRange(url, from, to) {
                 const res = await fetch(url, {
-                    headers: { Range: `bytes=${from}-${to}` },
+                    headers: {
+                        Range: `bytes=${from}-${to}`,
+                        "X-Plex-Token": TOKEN,
+                    },
                 });
                 if (!res.ok && res.status !== 206) {
                     throw new Error(`range fetch ${from}-${to} -> HTTP ${res.status}`);
@@ -751,9 +754,16 @@ import { parseSubtitles } from "./subtitles";
             async function fetchServers(skipToLibraries = false) {
                 setStatus("Fetching Plex servers...");
                 try {
-                    const url = `https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&X-Plex-Token=${TOKEN}&X-Plex-Client-Identifier=${CLIENT_ID}`;
+                    // Credentials as headers, never in the query string (F-021).
+                    // plex.tv answers the CORS preflight with
+                    // `access-control-allow-headers: x-plex-token,x-plex-client-identifier`
+                    // and `allow-origin: *` — verified against the live service.
+                    const url = `https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1`;
                     const res = await fetch(url, {
-                        headers: { Accept: "application/json" },
+                        headers: { Accept: "application/json",
+                            "X-Plex-Token": TOKEN,
+                            "X-Plex-Client-Identifier": CLIENT_ID,
+                        },
                     });
                     if (!res.ok)
                         throw new Error(
@@ -1019,10 +1029,13 @@ import { parseSubtitles } from "./subtitles";
 
                 try {
                     const cleanHostUrl = hostUrl.replace(/\/$/, "");
-                    const queryUrl = `${cleanHostUrl}/security/resources?source=${encodeURIComponent(sourceId)}&refresh=0&X-Plex-Token=${token}`;
+                    const queryUrl = `${cleanHostUrl}/security/resources?source=${encodeURIComponent(sourceId)}&refresh=0`;
 
                     const res = await fetch(queryUrl, {
-                        headers: { Accept: "application/json" },
+                        headers: {
+                            Accept: "application/json",
+                            "X-Plex-Token": token,
+                        },
                     });
 
                     if (!res.ok)
@@ -1066,9 +1079,12 @@ import { parseSubtitles } from "./subtitles";
             // --- STEP 2 & 3: MEDIA EXPLORATION VIA TOKEN ---
             async function plexFetch(endpoint) {
                 const cleanUrl = SERVER_URL.replace(/\/$/, "");
-                const url = `${cleanUrl}${endpoint}${endpoint.includes("?") ? "&" : "?"}X-Plex-Token=${TOKEN}`;
+                const url = `${cleanUrl}${endpoint}`;
                 const res = await fetch(url, {
-                    headers: { Accept: "application/json" },
+                    headers: {
+                        Accept: "application/json",
+                        "X-Plex-Token": TOKEN,
+                    },
                 });
                 if (!res.ok) throw new Error(`Plex Server Error ${res.status}`);
                 return await res.json();
@@ -1311,12 +1327,12 @@ import { parseSubtitles } from "./subtitles";
                     () => {},
                 );
 
-                timelineUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd?X-Plex-Token=${TOKEN}`;
+                timelineUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd`;
                 const cleanServerUrl = SERVER_URL.replace(/\/$/, "");
                 const cleanSubtitleRef = media.subtitleRef.startsWith("/")
                     ? media.subtitleRef
                     : `/${media.subtitleRef}`;
-                const subUrl = `${cleanServerUrl}${cleanSubtitleRef}${cleanSubtitleRef.includes("?") ? "&" : "?"}X-Plex-Token=${TOKEN}`;
+                const subUrl = `${cleanServerUrl}${cleanSubtitleRef}`;
 
                 clearFrameCache();
 
@@ -1341,7 +1357,9 @@ import { parseSubtitles } from "./subtitles";
 
                     // Subtitle phase (20-90%): the only download large enough
                     // to be worth a progress bar now.
-                    const subRes = await fetch(subUrl);
+                    const subRes = await fetch(subUrl, {
+                        headers: { "X-Plex-Token": TOKEN },
+                    });
                     if (!subRes.ok) {
                         throw new Error(
                             `SRT subtitle file download returned HTTP ${subRes.status}`,
@@ -1356,7 +1374,7 @@ import { parseSubtitles } from "./subtitles";
                             );
                         },
                     );
-                    const subText = new TextDecoder().decode(subBuffer);
+                    const subText = decodeSubtitleBytes(subBuffer);
 
                     // Parse phase (90-100%): chunked, yields to the main thread.
                     subtitles = await parseSubtitles(subText, (frac) => {
