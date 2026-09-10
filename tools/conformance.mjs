@@ -77,9 +77,18 @@ const subtitles = await loadTs("src/subtitles.ts");
     })), e.frames);
   }
 
-  skip("timeline", "rejects malformed input",
-    "parseTimelineIndex validates nothing — no magic check, no length check. " +
-    "Tracked as part of PLAN.md Phase 2 item 11.");
+  for (const [name, mutate] of [
+    ["rejects non-BIF magic", (b) => { const c = Buffer.from(b); c[1] = 0; return c; }],
+    ["rejects truncated header", (b) => b.subarray(0, 32)],
+    ["rejects truncated index", (b) => b.subarray(0, 70)],
+  ]) {
+    const m = mutate(buf);
+    let threw = false;
+    try {
+      timeline.parseTimelineIndex(m.buffer.slice(m.byteOffset, m.byteOffset + m.byteLength));
+    } catch (e) { threw = true; }
+    check("timeline", name, threw, true);
+  }
   skip("timeline", "byte-identical duplicate detection",
     "F-001 not implemented on G2.");
 }

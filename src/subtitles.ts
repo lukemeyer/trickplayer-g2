@@ -5,6 +5,24 @@ function yieldToMain() {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// Cleaning rules — trickplayer-knowledge findings/F-011 and F-003:
+//
+//   * HTML tags are stripped. Real Plex sidecars are full of <i>…</i>, and
+//     <font color=…> shows up too.
+//   * ASS override blocks ({\an8} and friends) are stripped — they leak in
+//     from converted tracks and are positioning directives, not dialogue.
+//   * A cue with nothing left after cleaning is dropped, not kept as empty.
+//
+// This happens HERE, at parse time, rather than at display time. It used to
+// happen downstream in main.ts's cleanSubText, which meant the parsed cue list
+// still carried markup: the local preview rendered it as HTML (so <i> looked
+// fine and {\an8} did not), and anything reasoning about cue text saw the
+// tags. Cleaning once, at the boundary, is the shared rule.
+//
+// Lines within a cue are joined with "\n", not "<br>". The platform-neutral
+// text is what the rule is about; turning it into markup is a rendering
+// choice and belongs at the point of rendering.
+//
 // Parses in chunks with a yield back to the main thread every N blocks so a
 // very large SRT file doesn't freeze the UI while it parses.
 export async function parseSubtitles(text, onProgress) {
@@ -15,6 +33,15 @@ export async function parseSubtitles(text, onProgress) {
     const blocks = cleanText.split("\n\n");
 
     const timeRegex = /(\d{1,2})?:?(\d{2}):(\d{2})[,.](\d{3})/;
+    const tagRegex = /<[^>]*>/g;
+    const assOverrideRegex = /\{[^}]*\}/g;
+
+    function cleanLine(line) {
+        return line
+            .replace(assOverrideRegex, "")
+            .replace(tagRegex, "")
+            .trim();
+    }
 
     function timeToMs(timeStr) {
         if (!timeStr) return 0;
@@ -40,8 +67,12 @@ export async function parseSubtitles(text, onProgress) {
 
             const startMs = timeToMs(startStr);
             const endMs = timeToMs(endStr);
-            const subText = textLines.join("<br>");
+            const subText = textLines
+                .map(cleanLine)
+                .filter((l) => l.length > 0)
+                .join("\n");
 
+            // Empty after cleaning => not a cue (F-003).
             if (subText) {
                 subs.push({ startMs, endMs, text: subText });
             }

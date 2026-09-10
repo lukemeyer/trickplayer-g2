@@ -4,7 +4,7 @@ import {
     ImageRawDataUpdate,
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
-import { parseTimeline } from "./timeline";
+import { parseTimelineHeader, parseTimelineIndex } from "./timeline";
 import { parseSubtitles } from "./subtitles";
 
             // --- APPLICATION METADATA FOR HEADERS ---
@@ -185,6 +185,74 @@ import { parseSubtitles } from "./subtitles";
             }
 
             // --- STATUS BAR ---
+            // --- RANGED FETCH + FRAME ASSET CACHE ---
+            //
+            // The track is not downloaded. A 24-minute episode's index is
+            // ~9.5 MB and only ~6 KB of that is the index proper; frames are
+            // pulled individually by byte range as they are needed
+            // (trickplayer-knowledge findings/F-005).
+            //
+            // This replaces materialising a Blob and an object URL for every
+            // frame up front — hundreds of objects, most never shown, none
+            // revoked.
+            let timelineUrl = "";
+            const FRAME_CACHE_MAX = 8;
+            const frameCache = new Map(); // byte offset -> { blob, url }
+            let previewWantedOffset = -1;  // guards the async preview update
+
+            async function fetchRange(url, from, to) {
+                const res = await fetch(url, {
+                    headers: { Range: `bytes=${from}-${to}` },
+                });
+                if (!res.ok && res.status !== 206) {
+                    throw new Error(`range fetch ${from}-${to} -> HTTP ${res.status}`);
+                }
+                const buf = await res.arrayBuffer();
+                // A proxy in front of the server may ignore Range and return
+                // 200 with the whole body. Slice locally rather than trusting
+                // the status code (F-022).
+                if (res.status === 200 && buf.byteLength > to - from + 1) {
+                    return buf.slice(from, to + 1);
+                }
+                return buf;
+            }
+
+            /** Cached { blob, url } for one frame, range-fetching on a miss. */
+            async function getFrameAssets(frame) {
+                const hit = frameCache.get(frame.offset);
+                if (hit) return hit;
+
+                const buf = await fetchRange(
+                    timelineUrl,
+                    frame.offset,
+                    frame.offset + frame.length - 1,
+                );
+                const blob = new Blob([buf], { type: "image/jpeg" });
+                const entry = { blob, url: URL.createObjectURL(blob) };
+                frameCache.set(frame.offset, entry);
+
+                // Evict oldest first, revoking as we go — the revoke is the
+                // half that was missing before, and is why the old code leaked
+                // one object URL per frame for the life of the episode.
+                while (frameCache.size > FRAME_CACHE_MAX) {
+                    const oldestKey = frameCache.keys().next().value;
+                    URL.revokeObjectURL(frameCache.get(oldestKey).url);
+                    frameCache.delete(oldestKey);
+                }
+                return entry;
+            }
+
+            /** Already-cached URL for a frame, or null. Never fetches. */
+            function peekFrameUrl(frame) {
+                const hit = frame && frameCache.get(frame.offset);
+                return hit ? hit.url : null;
+            }
+
+            function clearFrameCache() {
+                for (const entry of frameCache.values()) URL.revokeObjectURL(entry.url);
+                frameCache.clear();
+            }
+
             // Single choke point for the top status line so it can never go
             // stale: every state transition in the app should route through
             // here instead of touching statusDiv/indicator directly.
@@ -1243,79 +1311,68 @@ import { parseSubtitles } from "./subtitles";
                     () => {},
                 );
 
-                const bifUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd?X-Plex-Token=${TOKEN}`;
+                timelineUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd?X-Plex-Token=${TOKEN}`;
                 const cleanServerUrl = SERVER_URL.replace(/\/$/, "");
                 const cleanSubtitleRef = media.subtitleRef.startsWith("/")
                     ? media.subtitleRef
                     : `/${media.subtitleRef}`;
                 const subUrl = `${cleanServerUrl}${cleanSubtitleRef}${cleanSubtitleRef.includes("?") ? "&" : "?"}X-Plex-Token=${TOKEN}`;
 
-                try {
-                    const [bifRes, subRes] = await Promise.all([
-                        fetch(bifUrl),
-                        fetch(subUrl),
-                    ]);
+                clearFrameCache();
 
-                    if (!bifRes.ok)
-                        throw new Error(
-                            `BIF index file download returned HTTP ${bifRes.status}`,
-                        );
-                    if (!subRes.ok)
+                try {
+                    // Index phase (0-20%). Two small ranged reads instead of a
+                    // 9.5 MB download: 64 bytes to learn how long the index is,
+                    // then the index itself (~6 KB). Frames are fetched
+                    // individually, later, only when actually shown (F-005).
+                    setLoadProgress(null, "Reading index...");
+                    const headerBuf = await fetchRange(timelineUrl, 0, 63);
+                    const header = parseTimelineHeader(headerBuf);
+                    const indexBuf = await fetchRange(
+                        timelineUrl, 0, header.indexByteLength - 1);
+                    setLoadProgress(0.2, "Reading index...");
+
+                    const parsed = parseTimelineIndex(indexBuf);
+                    bifs = parsed.frames.map((f) => ({
+                        timestampMs: f.tsMs,
+                        offset: f.offset,
+                        length: f.length,
+                    }));
+
+                    // Subtitle phase (20-90%): the only download large enough
+                    // to be worth a progress bar now.
+                    const subRes = await fetch(subUrl);
+                    if (!subRes.ok) {
                         throw new Error(
                             `SRT subtitle file download returned HTTP ${subRes.status}`,
                         );
-
-                    // Download phase (0-70%): real byte progress when both
-                    // responses report Content-Length, indeterminate otherwise.
-                    let bifReceived = 0;
-                    let subReceived = 0;
-                    let bifTotal = 0;
-                    let subTotal = 0;
-                    const reportDownloadProgress = () => {
-                        const knownTotal = bifTotal + subTotal;
-                        if (knownTotal > 0) {
+                    }
+                    const subBuffer = await readResponseWithProgress(
+                        subRes,
+                        (received, total) => {
                             setLoadProgress(
-                                ((bifReceived + subReceived) / knownTotal) *
-                                    0.7,
-                                "Downloading slideshow + subtitles...",
+                                total > 0 ? 0.2 + (received / total) * 0.7 : null,
+                                "Downloading subtitles...",
                             );
-                        } else {
-                            setLoadProgress(
-                                null,
-                                "Downloading slideshow + subtitles...",
-                            );
-                        }
-                    };
-
-                    const [bifBuffer, subBuffer] = await Promise.all([
-                        readResponseWithProgress(bifRes, (received, total) => {
-                            bifReceived = received;
-                            bifTotal = total;
-                            reportDownloadProgress();
-                        }),
-                        readResponseWithProgress(subRes, (received, total) => {
-                            subReceived = received;
-                            subTotal = total;
-                            reportDownloadProgress();
-                        }),
-                    ]);
+                        },
+                    );
                     const subText = new TextDecoder().decode(subBuffer);
 
-                    // Decode phase (70-95%): chunked, yields to the main thread.
-                    bifs = await parseTimeline(bifBuffer, (frac) => {
-                        setLoadProgress(
-                            0.7 + frac * 0.25,
-                            "Decoding video slideshow...",
-                        );
-                    });
-
-                    // Parse phase (95-100%): chunked, yields to the main thread.
+                    // Parse phase (90-100%): chunked, yields to the main thread.
                     subtitles = await parseSubtitles(subText, (frac) => {
                         setLoadProgress(
-                            0.95 + frac * 0.05,
+                            0.9 + frac * 0.1,
                             "Parsing subtitles...",
                         );
                     });
+
+                    const trackBytes = bifs.reduce((n, f) => n + f.length, 0);
+                    console.log(
+                        `[timeline] ${bifs.length} frames, multiplier ` +
+                        `${header.rawMultiplier} (=> ${header.multiplierMs} ms), ` +
+                        `index ${header.indexByteLength} B read, ` +
+                        `${(trackBytes / 1e6).toFixed(2)} MB of frames NOT downloaded`,
+                    );
 
                     durationMs = bifs[bifs.length - 1].timestampMs;
                     timeline.max = durationMs;
@@ -1597,12 +1654,13 @@ import { parseSubtitles } from "./subtitles";
                 };
             }
 
-            // Strip SRT markup down to plain text with real newlines.
+            // Cue text arrives already cleaned — tags and ASS overrides are
+            // stripped in subtitles.ts at parse time (F-011), and lines are
+            // joined with real newlines. This is kept as a narrow guard for
+            // the strings the app itself injects into the same path (status
+            // messages like "Loading …"), not as a second cleaning pass.
             function cleanSubText(text) {
-                return text
-                    .replace(/<br\s*\/?>/gi, "\n")
-                    .replace(/<[^>]*>/g, "")
-                    .trim();
+                return String(text).trim();
             }
 
             // Estimate how many rendered lines a block of text occupies on the
@@ -1667,10 +1725,23 @@ import { parseSubtitles } from "./subtitles";
             }
 
             async function sendImageToGlasses(frame) {
-                if (!bridgeInstance || !frame?.rawBlobData) return 0;
+                if (!bridgeInstance || !frame) return 0;
+
+                // The frame's bytes are fetched here, by byte range, rather
+                // than having been materialised for every frame at load time
+                // (F-005). The cache means a frame shown twice is fetched once.
+                let assets;
+                try {
+                    assets = await getFrameAssets(frame);
+                } catch (e) {
+                    console.warn(
+                        `[frame] fetch failed at ${frame.timestampMs}ms: ${e.message}`,
+                    );
+                    return 0;
+                }
 
                 const preparedBytes = await resizeAndPrepareImage(
-                    frame.rawBlobData,
+                    assets.blob,
                     GLASSES_IMAGE_WIDTH,
                     GLASSES_IMAGE_HEIGHT,
                 );
@@ -2086,9 +2157,25 @@ import { parseSubtitles } from "./subtitles";
                             !bifs[i + 1]),
                 );
 
-                // Update local monitor image src
-                if (frame && imgTag.src !== frame.url) {
-                    imgTag.src = frame.url;
+                // Update local monitor image src. updateUI runs on a timer and
+                // must stay synchronous, so a cached frame is applied straight
+                // away and a miss is fetched in the background. The offset
+                // guard stops a slow fetch for an old frame overwriting a
+                // newer one that has since been drawn.
+                if (frame) {
+                    const cachedUrl = peekFrameUrl(frame);
+                    if (cachedUrl) {
+                        if (imgTag.src !== cachedUrl) imgTag.src = cachedUrl;
+                    } else {
+                        previewWantedOffset = frame.offset;
+                        getFrameAssets(frame)
+                            .then((a) => {
+                                if (previewWantedOffset === frame.offset) {
+                                    imgTag.src = a.url;
+                                }
+                            })
+                            .catch(() => {});
+                    }
                 }
 
                 // Find subtitle matching currentTimeMs for local display
@@ -2097,8 +2184,14 @@ import { parseSubtitles } from "./subtitles";
                         currentTimeMs >= s.startMs && currentTimeMs <= s.endMs,
                 );
 
-                if (subDiv.innerHTML !== (sub ? sub.text : "")) {
-                    subDiv.innerHTML = sub ? sub.text : "";
+                // Cue text is plain text with real newlines now that cleaning
+                // happens at parse time (F-011), so it is escaped and its
+                // newlines turned into <br> here rather than trusted as markup.
+                const previewHtml = sub
+                    ? escapeHtml(sub.text).replace(/\n/g, "<br>")
+                    : "";
+                if (subDiv.innerHTML !== previewHtml) {
+                    subDiv.innerHTML = previewHtml;
                 }
 
                 timeline.value = currentTimeMs;
@@ -2238,6 +2331,9 @@ import { parseSubtitles } from "./subtitles";
                 stopScenePipeline();
                 stopClock();
                 hideLoadProgress();
+                // Release the frame cache's object URLs. Leaving the episode is
+                // the one moment they are certainly all dead.
+                clearFrameCache();
                 try {
                     silentAudio.pause();
                 } catch (e) {}
