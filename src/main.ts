@@ -4,8 +4,7 @@ import {
     ImageRawDataUpdate,
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
-import { parseTimelineHeader, parseTimelineIndex } from "./timeline";
-import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
+import { createPlexSource } from "./plexsource";
 import { buildSceneList } from "./scenes";
 
             // --- APPLICATION METADATA FOR HEADERS ---
@@ -196,44 +195,31 @@ import { buildSceneList } from "./scenes";
             // This replaces materialising a Blob and an object URL for every
             // frame up front — hundreds of objects, most never shown, none
             // revoked.
-            let timelineUrl = "";
+            // The media source. Everything below asks IT for frames and cues
+            // rather than reaching for Plex directly, so a second provider is a
+            // change to this one line. See src/source.ts.
+            let source = null;
+
             const FRAME_CACHE_MAX = 8;
-            const frameCache = new Map(); // byte offset -> { blob, url }
-            let previewWantedOffset = -1;  // guards the async preview update
+            const frameCache = new Map(); // frame INDEX -> { blob, url }
+            let previewWantedIndex = -1;  // guards the async preview update
 
-            async function fetchRange(url, from, to) {
-                const res = await fetch(url, {
-                    headers: {
-                        Range: `bytes=${from}-${to}`,
-                        "X-Plex-Token": TOKEN,
-                    },
-                });
-                if (!res.ok && res.status !== 206) {
-                    throw new Error(`range fetch ${from}-${to} -> HTTP ${res.status}`);
-                }
-                const buf = await res.arrayBuffer();
-                // A proxy in front of the server may ignore Range and return
-                // 200 with the whole body. Slice locally rather than trusting
-                // the status code (F-022).
-                if (res.status === 200 && buf.byteLength > to - from + 1) {
-                    return buf.slice(from, to + 1);
-                }
-                return buf;
-            }
-
-            /** Cached { blob, url } for one frame, range-fetching on a miss. */
-            async function getFrameAssets(frame) {
-                const hit = frameCache.get(frame.offset);
+            /**
+             * Cached { blob, url } for one frame, asking the source on a miss.
+             *
+             * Keyed by frame index rather than byte offset: an offset is
+             * locator data and only the provider may read it. On a batch source
+             * the "fetch" may be a crop out of a sheet it already holds, and
+             * this layer neither knows nor needs to.
+             */
+            async function getFrameAssets(index) {
+                const hit = frameCache.get(index);
                 if (hit) return hit;
 
-                const buf = await fetchRange(
-                    timelineUrl,
-                    frame.offset,
-                    frame.offset + frame.length - 1,
-                );
+                const buf = await source.frameBytes(bifs[index]);
                 const blob = new Blob([buf], { type: "image/jpeg" });
                 const entry = { blob, url: URL.createObjectURL(blob) };
-                frameCache.set(frame.offset, entry);
+                frameCache.set(index, entry);
 
                 // Evict oldest first, revoking as we go — the revoke is the
                 // half that was missing before, and is why the old code leaked
@@ -246,9 +232,9 @@ import { buildSceneList } from "./scenes";
                 return entry;
             }
 
-            /** Already-cached URL for a frame, or null. Never fetches. */
-            function peekFrameUrl(frame) {
-                const hit = frame && frameCache.get(frame.offset);
+            /** Already-cached URL for a frame index, or null. Never fetches. */
+            function peekFrameUrl(index) {
+                const hit = index >= 0 && frameCache.get(index);
                 return hit ? hit.url : null;
             }
 
@@ -1334,65 +1320,42 @@ import { buildSceneList } from "./scenes";
                     () => {},
                 );
 
-                timelineUrl = `${SERVER_URL}/library/parts/${media.timelineRef}/indexes/sd`;
-                const cleanServerUrl = SERVER_URL.replace(/\/$/, "");
-                const cleanSubtitleRef = media.subtitleRef.startsWith("/")
-                    ? media.subtitleRef
-                    : `/${media.subtitleRef}`;
-                const subUrl = `${cleanServerUrl}${cleanSubtitleRef}`;
+                // The provider for this item. Everything below asks it for
+                // frames and cues; nothing below knows this is Plex. Swapping
+                // in a second source is a change to this one line.
+                source = createPlexSource({
+                    serverUrl: SERVER_URL,
+                    token: TOKEN,
+                    timelineRef: media.timelineRef,
+                    subtitleRef: media.subtitleRef,
+                });
 
                 clearFrameCache();
 
                 try {
-                    // Index phase (0-20%). Two small ranged reads instead of a
-                    // 9.5 MB download: 64 bytes to learn how long the index is,
-                    // then the index itself (~6 KB). Frames are fetched
-                    // individually, later, only when actually shown (F-005).
+                    // Index phase (0-20%). The provider decides how to get a
+                    // timeline — two small ranged reads here, tile geometry
+                    // elsewhere. Either way the track is not downloaded (F-005).
                     setLoadProgress(null, "Reading index...");
-                    const headerBuf = await fetchRange(timelineUrl, 0, 63);
-                    const header = parseTimelineHeader(headerBuf);
-                    const indexBuf = await fetchRange(
-                        timelineUrl, 0, header.indexByteLength - 1);
+                    const timelineResult = await source.timeline();
+                    const header = timelineResult.header;
+                    bifs = timelineResult.frames;
                     setLoadProgress(0.2, "Reading index...");
-
-                    const parsed = parseTimelineIndex(indexBuf);
-                    bifs = parsed.frames.map((f) => ({
-                        timestampMs: f.tsMs,
-                        offset: f.offset,
-                        length: f.length,
-                    }));
 
                     // Subtitle phase (20-90%): the only download large enough
                     // to be worth a progress bar now.
-                    const subRes = await fetch(subUrl, {
-                        headers: { "X-Plex-Token": TOKEN },
-                    });
-                    if (!subRes.ok) {
-                        throw new Error(
-                            `SRT subtitle file download returned HTTP ${subRes.status}`,
-                        );
-                    }
-                    const subBuffer = await readResponseWithProgress(
-                        subRes,
-                        (received, total) => {
-                            setLoadProgress(
-                                total > 0 ? 0.2 + (received / total) * 0.7 : null,
-                                "Downloading subtitles...",
-                            );
-                        },
-                    );
-                    const subText = decodeSubtitleBytes(subBuffer);
+                    setLoadProgress(0.5, "Downloading subtitles...");
+                    subtitles = await source.cues();
+                    setLoadProgress(0.9, "Parsing subtitles...");
 
-                    // Parse phase (90-100%): chunked, yields to the main thread.
-                    subtitles = await parseSubtitles(subText, (frac) => {
-                        setLoadProgress(
-                            0.9 + frac * 0.1,
-                            "Parsing subtitles...",
-                        );
+                    durationMs = bifs[bifs.length - 1].tsMs;
+                    // A source with no per-frame sizes gets neither blank
+                    // filtering nor duplicate detection — skipped, not faked
+                    // (SEAM.md §4).
+                    const caps = source.capabilities();
+                    sceneList = buildSceneList(bifs, subtitles, durationMs, {
+                        hasFrameSizeHints: caps.hasFrameSizeHints,
                     });
-
-                    durationMs = bifs[bifs.length - 1].timestampMs;
-                    sceneList = buildSceneList(bifs, subtitles, durationMs);
 
                     const trackBytes = bifs.reduce((n, f) => n + f.length, 0);
                     console.log(
@@ -1665,7 +1628,12 @@ import { buildSceneList } from "./scenes";
 
             function buildScene(startMs) {
                 const sc = sceneContaining(startMs);
-                if (!sc) return { image: null, subtitles: [], startMs, endMs: startMs, duration: 0 };
+                if (!sc) {
+                    return {
+                        frameIndex: -1, image: null, subtitles: [],
+                        startMs, endMs: startMs, duration: 0,
+                    };
+                }
 
                 // Own each cue to the scene it STARTS in. Scenes tile the
                 // timeline contiguously, so this assigns every cue to exactly
@@ -1675,6 +1643,10 @@ import { buildSceneList } from "./scenes";
                 );
 
                 return {
+                    // The index, not the frame: everything downstream of here
+                    // addresses frames by position so it never handles a
+                    // provider's locator.
+                    frameIndex: sc.frameIndex,
                     image: bifs[sc.frameIndex],
                     subtitles: sceneSubs,
                     startMs: sc.startMs,
@@ -1753,18 +1725,19 @@ import { buildSceneList } from "./scenes";
                 }));
             }
 
-            async function sendImageToGlasses(frame) {
-                if (!bridgeInstance || !frame) return 0;
+            async function sendImageToGlasses(frameIndex) {
+                if (!bridgeInstance || frameIndex == null || frameIndex < 0) return 0;
 
-                // The frame's bytes are fetched here, by byte range, rather
-                // than having been materialised for every frame at load time
-                // (F-005). The cache means a frame shown twice is fetched once.
+                // The bytes come from the SOURCE, one frame at a time, rather
+                // than every frame being materialised at load time (F-005).
+                // How that fetch happens is the provider's business: a ranged
+                // GET on Plex, a crop out of a cached sheet elsewhere.
                 let assets;
                 try {
-                    assets = await getFrameAssets(frame);
+                    assets = await getFrameAssets(frameIndex);
                 } catch (e) {
                     console.warn(
-                        `[frame] fetch failed at ${frame.timestampMs}ms: ${e.message}`,
+                        `[frame] fetch failed at ${bifs[frameIndex]?.tsMs}ms: ${e.message}`,
                     );
                     return 0;
                 }
@@ -1843,7 +1816,7 @@ import { buildSceneList } from "./scenes";
                             );
                             if (renderDurations.length > 5) renderDurations.shift();
                             averageRenderDuration = getSceneDuration();
-                            lastSentImageTimestampMs = frame.timestampMs;
+                            lastSentImageTimestampMs = frame.tsMs;
                             imageSuccessCount++;
 
                             // Report how long the image had been frozen.
@@ -1871,7 +1844,7 @@ import { buildSceneList } from "./scenes";
                                 ? ` STUCK x${consecutiveImageFailures}`
                                 : "";
                         console.log(
-                            `[Scene Engine] Image ${frame.timestampMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                            `[Scene Engine] Image ${frame.tsMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
                         );
 
                         resolve(duration);
@@ -1936,8 +1909,8 @@ import { buildSceneList } from "./scenes";
                     // nothing to overlap with yet, so it just starts immediately.
                     let scene = buildScene(pipelinePos);
                     let imageSend =
-                        scene.image
-                            ? sendImageToGlasses(scene.image)
+                        scene.frameIndex >= 0
+                            ? sendImageToGlasses(scene.frameIndex)
                             : Promise.resolve(0);
 
                     while (
@@ -1946,12 +1919,12 @@ import { buildSceneList } from "./scenes";
                         pipelinePos < durationMs
                     ) {
                         // No BIF frame at this position — nudge forward and retry.
-                        if (!scene.image) {
+                        if (scene.frameIndex < 0) {
                             await sleep(50, signal);
                             pipelinePos += 50;
                             scene = buildScene(pipelinePos);
-                            imageSend = scene.image
-                                ? sendImageToGlasses(scene.image)
+                            imageSend = scene.frameIndex >= 0
+                                ? sendImageToGlasses(scene.frameIndex)
                                 : Promise.resolve(0);
                             continue;
                         }
@@ -1988,8 +1961,8 @@ import { buildSceneList } from "./scenes";
                         const startNextImage = () => {
                             if (nextImageSend) return;
                             nextImageSend =
-                                nextScene && nextScene.image
-                                    ? sendImageToGlasses(nextScene.image)
+                                nextScene && nextScene.frameIndex >= 0
+                                    ? sendImageToGlasses(nextScene.frameIndex)
                                     : Promise.resolve(0);
                         };
 
@@ -2142,11 +2115,10 @@ import { buildSceneList } from "./scenes";
             async function sendOneShotUpdate() {
                 if (!bridgeInstance) return;
 
-                const frame = bifs.find(
+                const frameIndex = bifs.findIndex(
                     (f, i) =>
-                        f.timestampMs <= currentTimeMs &&
-                        (bifs[i + 1]?.timestampMs > currentTimeMs ||
-                            !bifs[i + 1]),
+                        f.tsMs <= currentTimeMs &&
+                        (bifs[i + 1]?.tsMs > currentTimeMs || !bifs[i + 1]),
                 );
 
                 const sub = subtitles.find(
@@ -2165,9 +2137,9 @@ import { buildSceneList } from "./scenes";
                     );
                 }
 
-                if (frame) {
+                if (frameIndex >= 0) {
                     try {
-                        await sendImageToGlasses(frame);
+                        await sendImageToGlasses(frameIndex);
                     } catch (e) {
                         console.error(
                             "[Scene Engine] One-shot image failed:",
@@ -2179,27 +2151,26 @@ import { buildSceneList } from "./scenes";
 
             function updateUI() {
                 // Find BIF frame corresponding to current playback time for local preview monitor
-                const frame = bifs.find(
+                const frameIndex = bifs.findIndex(
                     (f, i) =>
-                        f.timestampMs <= currentTimeMs &&
-                        (bifs[i + 1]?.timestampMs > currentTimeMs ||
-                            !bifs[i + 1]),
+                        f.tsMs <= currentTimeMs &&
+                        (bifs[i + 1]?.tsMs > currentTimeMs || !bifs[i + 1]),
                 );
 
                 // Update local monitor image src. updateUI runs on a timer and
                 // must stay synchronous, so a cached frame is applied straight
-                // away and a miss is fetched in the background. The offset
-                // guard stops a slow fetch for an old frame overwriting a
-                // newer one that has since been drawn.
-                if (frame) {
-                    const cachedUrl = peekFrameUrl(frame);
+                // away and a miss is fetched in the background. The index guard
+                // stops a slow fetch for an old frame overwriting a newer one
+                // that has since been drawn.
+                if (frameIndex >= 0) {
+                    const cachedUrl = peekFrameUrl(frameIndex);
                     if (cachedUrl) {
                         if (imgTag.src !== cachedUrl) imgTag.src = cachedUrl;
                     } else {
-                        previewWantedOffset = frame.offset;
-                        getFrameAssets(frame)
+                        previewWantedIndex = frameIndex;
+                        getFrameAssets(frameIndex)
                             .then((a) => {
-                                if (previewWantedOffset === frame.offset) {
+                                if (previewWantedIndex === frameIndex) {
                                     imgTag.src = a.url;
                                 }
                             })
@@ -2614,7 +2585,7 @@ import { buildSceneList } from "./scenes";
                         // same (possibly stale) snapshot.
                         const knownDurationMs =
                             bifs.length > 0
-                                ? bifs[bifs.length - 1].timestampMs
+                                ? bifs[bifs.length - 1].tsMs
                                 : durationMs;
                         if (typeof state.currentTimeMs === "number") {
                             currentTimeMs = Math.max(

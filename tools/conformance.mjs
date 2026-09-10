@@ -134,17 +134,20 @@ const scenes = await loadTs("src/scenes.ts");
   const cx = readJson("scene/episode.cues.json");
   const want = readJson("scene/episode.expected.json").cases.adopted.expect;
 
-  // The fixture speaks tsMs; this build's frame records use timestampMs.
+  // Callers lift into the SEAM's frame shape: the byte length becomes a size
+  // hint, and the BIF entry becomes an opaque locator the policy never reads.
   const frames = fx.frames.map((f) => ({
-    timestampMs: f.tsMs, offset: f.offset, length: f.length,
+    tsMs: f.tsMs, sizeHint: f.length, locator: { offset: f.offset, length: f.length },
   }));
   const built = scenes.buildSceneList(frames, cx.cues, fx.durationMs);
   check("scene", "adopted: sceneCount", built.length, want.sceneCount);
 
+  // Byte accounting reads the FIXTURE, not the seam frame: offsets and lengths
+  // are locator data, and the policy under test never sees them.
   const seen = new Set();
   let bytes = 0, cueTotal = 0;
   for (const sc of built) {
-    const f = frames[sc.frameIndex];
+    const f = fx.frames[sc.frameIndex];
     if (!seen.has(f.offset)) { seen.add(f.offset); bytes += f.length; }
     cueTotal += cx.cues.filter((c) => c.startMs >= sc.startMs && c.startMs < sc.endMs).length;
   }
@@ -161,6 +164,17 @@ const scenes = await loadTs("src/scenes.ts");
   dup.forEach((d, i) => { if (d && !truth[i]) fp++; if (!d && truth[i]) missed++; });
   check("scene", "length-run dedup: no false positives", fp, 0);
   check("scene", "length-run dedup: none missed", missed, 0);
+
+  // A source with no per-frame sizes: both filters SKIPPED, not faked
+  // (SEAM.md §4). Before the seam refactor this build could not express it.
+  const noSize = fx.frames.map((f) => ({ tsMs: f.tsMs, sizeHint: null, locator: {} }));
+  const wantNo = readJson("scene/episode.expected.json").cases["no-size-hints"].expect;
+  const degraded = scenes.buildSceneList(noSize, cx.cues, fx.durationMs, {
+    hasFrameSizeHints: false,
+  });
+  check("scene", "no size hints: sceneCount", degraded.length, wantNo.sceneCount);
+  check("scene", "no size hints: differs from the filtered run",
+    degraded.length > built.length, true);
 }
 skip("cues", "wrap / paginate",
   "F-002 not implemented — groupSceneSubtitles merges cues to fill the " +
