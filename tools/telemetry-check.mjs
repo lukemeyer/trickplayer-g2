@@ -156,6 +156,37 @@ def("it sees a freeze — the outage that sends NOTHING", async () => {
     };
 });
 
+def("it tells throttled timers apart from a dead page", async () => {
+    // The case a real session got wrong: the heartbeat stopped because Android
+    // throttled setInterval, while link callbacks kept arriving throughout. The
+    // report called it "the page stopped". The page was fine; its timers were
+    // not, which is why a timer-driven pipeline sent nothing.
+    const t0 = Date.now();
+    const vnow = () => t0 + (Date.now() - t0) * SCALE;
+    const rec = createRecorder({ now: vnow });
+    const t = createBleTransport({ sleep: wait, now: vnow, onEvent: (e) => rec.event(e) });
+    const link = makeLink({ imageMs: 400 });
+    const beat = setInterval(() => rec.tick({ playing: true }), ms(2000));
+    for (let i = 0; i < 4; i++) {
+        t.sendImage(() => link.write("image", 16384), { d: i }, { bytes: 16384 });
+        await wait(3000);
+    }
+    // Heartbeat dies; the host keeps reporting link state, as it really did.
+    clearInterval(beat);
+    const links = setInterval(() => rec.mark("link", { connectType: "connected" }), ms(6000));
+    await wait(60000);
+    clearInterval(links);
+    await wait(2000);
+    const a = analyse(rec.session());
+    const g = a.gaps[0];
+    return {
+        pass: !!g && g.kind === "timers throttled" &&
+              a.findings.some((x) => /timers were not firing/.test(x)),
+        detail: `${a.gaps.length} gap(s), first is "${g?.kind}" — ` +
+            `"${a.findings.find((x) => /timers|PAGE stopped/.test(x))?.slice(0, 80)}"`,
+    };
+});
+
 def("the report renders and carries its findings", async () => {
     const s = await session({ link: makeLink({ imageMs: 3000 }), frames: 20, gap: 1000 });
     const text = formatReport(s);

@@ -209,7 +209,15 @@ export function analyse(session) {
     //                     and nothing in the app noticed.
     //      pipeline idle  ticks continued, and the app said it was PLAYING, and
     //                     still nothing was sent. That is ours.
-    const ticks = (session.marks || []).filter((m) => m.name === "tick");
+    const allMarks = session.marks || [];
+    const ticks = allMarks.filter((m) => m.name === "tick");
+    // Anything that is NOT our own timer is independent proof the page was
+    // running: a link callback, a lifecycle event. This distinction was learned
+    // the hard way — a session was reported as "the page stopped, no heartbeat"
+    // while link callbacks arrived every few seconds throughout it. The page
+    // was fine. `setInterval` was throttled, which is what Android does to a
+    // backgrounded WebView, and is ALSO what stalls a timer-driven pipeline.
+    const proofOfLife = allMarks.filter((m) => m.name !== "tick");
 
     const GAP_MS = 15000;      // several scene intervals: not a slow frame
     const gaps = [];
@@ -225,21 +233,29 @@ export function analyse(session) {
     const closeGap = (fromMs, toMs, endedHere = false) => {
         if (toMs - fromMs <= GAP_MS) return;
         const inside = ticks.filter((t) => t.at > fromMs + 2000 && t.at < toMs - 2000);
+        const alive = proofOfLife.filter((m) => m.at > fromMs + 2000 && m.at < toMs - 2000);
         const add = (a, b, kind, playing) => {
             if (b - a <= GAP_MS) return;
             gaps.push({ fromMs: a, toMs: b, ms: b - a, kind, playing: !!playing,
                 ...(endedHere && b === toMs ? { endedHere: true } : {}) });
         };
         if (!inside.length) {
-            add(fromMs, toMs, "page stopped", false);
+            // No heartbeat, but other events still arriving: the page is alive
+            // and its TIMERS are not. That is the diagnosis that matters,
+            // because the scene pipeline is timer-driven — it is why nothing
+            // was sent, and it is a different fix from a dead page.
+            add(fromMs, toMs, alive.length ? "timers throttled" : "page stopped", false);
             return;
         }
         const first = inside[0].at, last = inside[inside.length - 1].at;
         // Before the heartbeat resumed, and after it stopped, the page was not
         // running. Between them it was, and sent nothing anyway.
-        add(fromMs, first, "page stopped", false);
+        const deadOr = (a, b) =>
+            proofOfLife.some((m) => m.at > a + 2000 && m.at < b - 2000)
+                ? "timers throttled" : "page stopped";
+        add(fromMs, first, deadOr(fromMs, first), false);
         add(first, last, "pipeline idle", inside.some((t) => t.playing));
-        add(last, toMs, "page stopped", false);
+        add(last, toMs, deadOr(last, toMs), false);
     };
 
     const ops = ev.map((e) => e.startedAt).sort((a, b) => a - b);
@@ -305,15 +321,22 @@ export function analyse(session) {
         const share = ((100 * out.deadMs) / Math.max(1, out.durationMs)).toFixed(0);
         f.unshift(`NOTHING WAS SENT for ${dead}s of this session (${share}% of it), ` +
             `across ${out.gaps.length} gap(s), longest ${(out.longestGapMs / 1000).toFixed(0)}s.`);
+        const throttled = out.gaps.filter((g) => g.kind === "timers throttled");
+        if (throttled.length) {
+            f.splice(1, 0, `${throttled.length} of those: the page was ALIVE — other events kept ` +
+                `arriving — but its timers were not firing. Android throttles timers in a ` +
+                `backgrounded WebView, and the scene pipeline is timer-driven, so this is why ` +
+                `nothing was sent.`);
+        }
         const stopped = out.gaps.filter((g) => g.kind === "page stopped");
         const idle = out.gaps.filter((g) => g.kind === "pipeline idle");
         if (stopped.length) {
-            f.splice(1, 0, `${stopped.length} of those: the PAGE stopped running — no heartbeat ` +
+            f.splice(throttled.length ? 2 : 1, 0, `${stopped.length} of those: the PAGE stopped running — no heartbeat ` +
                 `either, so the WebView was frozen, discarded or killed. Recovering from that is ` +
                 `a resume path, not a transport fix.`);
         }
         if (idle.length) {
-            f.splice(stopped.length ? 2 : 1, 0,
+            f.splice((stopped.length ? 1 : 0) + (throttled.length ? 1 : 0) + 1, 0,
                 `${idle.length} of those: the page kept ticking and still sent nothing` +
                 `${idle.some((g) => g.playing) ? " WHILE THE APP BELIEVED IT WAS PLAYING" : ""} — ` +
                 `that is the scene pipeline stopping, and it is ours.`);
@@ -372,8 +395,15 @@ export function formatReport(session, a = analyse(session)) {
     }
     if (a.lifecycle.length) {
         L.push("");
-        L.push("lifecycle");
-        for (const m of a.lifecycle.slice(-14)) {
+        // Around the GAPS, not the last N. The previous version truncated to
+        // the tail and cut off the beginning of every outage, which is the end
+        // that says what started it.
+        const near = a.gaps.length
+            ? a.lifecycle.filter((m) =>
+                  a.gaps.some((g) => m.at > g.fromMs - 30000 && m.at < g.toMs + 30000))
+            : a.lifecycle;
+        L.push(a.gaps.length ? "lifecycle around the gaps" : "lifecycle");
+        for (const m of (near.length ? near : a.lifecycle).slice(0, 16)) {
             const { at, name, ...rest } = m;
             L.push(`  ${(at / 1000).toFixed(0).padStart(5)}s  ${name}` +
                 `${Object.keys(rest).length ? "  " + JSON.stringify(rest).slice(0, 70) : ""}`);

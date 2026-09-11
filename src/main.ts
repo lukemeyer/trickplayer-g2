@@ -1396,8 +1396,25 @@ import { createBleTransport } from "./bletransport";
             // and costs nothing extra — both handlers are idempotent so it's
             // safe if both fire for the same real transition.
             document.addEventListener("visibilitychange", () => {
-                if (document.hidden) pauseForBackground();
-                else resumeFromBackground();
+                if (document.hidden) {
+                    // **The phone screen turning off is NOT a reason to stop.**
+                    //
+                    // This used to pause playback here, which is backwards for
+                    // a glasses app: the phone is the compute in your pocket
+                    // and its screen being off is the normal wearing state. The
+                    // measured result was exactly what it sounds like —
+                    // playback freezing a little while after the phone slept,
+                    // 110s of a 3.8 min session with nothing sent at all.
+                    //
+                    // The glasses host losing foreground is a real reason to
+                    // stop, and that still pauses: see FOREGROUND_EXIT_EVENT.
+                    noteLifecycle("phone-screen-off", { keptPlaying: isPlaying });
+                    console.log("[Lifecycle] Phone hidden — still playing");
+                    return;
+                }
+                noteLifecycle("phone-screen-on", {});
+                // Still a resume path, for when something else did pause us.
+                resumeFromBackground();
             });
 
             // Event routing for Even Hub.
