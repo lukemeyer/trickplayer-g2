@@ -28,7 +28,11 @@ if (new URLSearchParams(location.search).has("discarded")) {
     // the phone reloads this page on its own, and every one of those reloads
     // would wipe the session that had been recorded since — which looks exactly
     // like telemetry that never records anything.
-    history.replaceState(null, "", location.pathname);
+    const keep = new URLSearchParams(location.search);
+    keep.delete("discarded");
+    history.replaceState(
+        null, "", location.pathname + (keep.toString() ? `?${keep}` : ""),
+    );
 } else {
     try {
         const prev = JSON.parse(localStorage.getItem(KEY) || "null");
@@ -219,7 +223,14 @@ $("tlm-reset").onclick = () => {
     try { localStorage.removeItem(KEY); } catch (e) {}
     // Belt and braces: if anything still writes on the way out, the reload
     // lands on a page that will not resume from it either.
-    location.replace(location.pathname + "?discarded=1");
+    //
+    // KEEP the existing query string. Rebuilding the URL from pathname alone
+    // dropped ?play=1, so discarding a session silently stopped playback and
+    // looked like image sending had broken outright — the measurement tool
+    // disabling the thing being measured.
+    const q = new URLSearchParams(location.search);
+    q.set("discarded", "1");
+    location.replace(`${location.pathname}?${q}`);
 };
 
 refresh();
