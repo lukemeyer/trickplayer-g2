@@ -1231,6 +1231,15 @@ import { createBleTransport } from "./bletransport";
             }
 
             function updateUI() {
+                // Every element below belongs to the PREVIEW — the little
+                // monitor beside the player. It is a convenience, and on a page
+                // that does not have it (the telemetry page) these are null.
+                //
+                // Guarded because this runs inside the scene pipeline: an
+                // exception here does not break a preview, it breaks the
+                // GLASSES, by aborting the loop that feeds them. The screen the
+                // wearer sees must not depend on the screen the developer does.
+                if (!imgTag || !subDiv || !timeline || !timeDisplay) return;
                 // Find BIF frame corresponding to current playback time for local preview monitor
                 const frameIndex = bifs.findIndex(
                     (f, i) =>

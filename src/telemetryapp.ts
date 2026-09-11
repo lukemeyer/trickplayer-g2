@@ -34,9 +34,12 @@ async function mountProductionApp() {
     const body = html.slice(html.indexOf("<body>") + 6, html.indexOf("</body>"));
     // Drop the page's own script tags; this page loads the modules itself.
     $("tlm-app").innerHTML = body.replace(/<script[\s\S]*?<\/script>/g, "");
-    return import("./ui");
 }
 
+// ORDER MATTERS, and getting it wrong cost a session of "images never send":
+// main.ts captures its DOM references at module scope, so it has to be imported
+// AFTER the markup exists. Mount, then engine, then sink, then the app.
+await mountProductionApp();
 const engine = await import("./main");
 engine.setEventSink((e) => recorder.event(e));
 
@@ -166,20 +169,38 @@ try {
 refresh();
 
 /**
+ * `?play=1` starts the first playable item and leaves it running.
+ *
+ * The measurement worth having is a long unattended one: put the glasses on,
+ * load this, come back in fifteen minutes. It is also the only way to exercise
+ * the SCENE PIPELINE headlessly — the sweep talks to the transport directly and
+ * would not have caught a pipeline that dies on its first frame, which is
+ * exactly the bug that made this page look broken while the sweep looked fine.
+ */
+async function autoPlay() {
+    const ui = await import("./ui");
+    const item = await ui.firstPlayable();
+    if (!item) { $("tlm-hint").textContent = "Nothing playable to measure."; return; }
+    $("tlm-hint").textContent = `Playing "${item.title}" — leave it running.`;
+    recorder.mark("autoplay", { title: item.title });
+}
+
+/**
  * `?probe=1` runs the sweep on load and prints the report to the console.
  *
  * For driving this from a harness rather than a fingertip: the EvenHub
  * simulator has no pointer into the webview, and neither does a phone sitting
  * on a desk being watched over adb. Everything the button does, without one.
  */
+if (new URLSearchParams(location.search).has("play")) setTimeout(autoPlay, 2500);
 if (new URLSearchParams(location.search).has("probe")) {
     setTimeout(() => $("tlm-probe").click(), 2500);
     setTimeout(() => $("tlm-report").click(), 90_000);
 }
 
-// Last, so the recorder and the link observer are attached before the app has
-// a chance to send anything.
-mountProductionApp().then(() => {
+// Last, so the recorder and the link observer are attached before the app can
+// send anything.
+import("./ui").then(() => {
     $("tlm-hint").textContent =
         "Play something on the glasses for a few minutes, then generate the report. " +
         "Five minutes is enough to be useful; fifteen gives better tail estimates.";
