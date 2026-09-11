@@ -10,7 +10,8 @@
     "pack": "evenhub pack",
     "simulate": "evenhub-simulator http://localhost:5173",
     "conformance": "node tools/conformance.mjs",
-    "ble-sim": "node tools/ble-sim.mjs"
+    "ble-sim": "node tools/ble-sim.mjs",
+    "telemetry-check": "node tools/telemetry-check.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.14"

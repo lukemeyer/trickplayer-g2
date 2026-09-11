@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trickplayer — link telemetry</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- A SEPARATE ENTRY POINT, not a flag on the production page.
+         Recording every BLE operation is a cost, and a wearer who is just
+         watching something should not pay it.
+
+         The app's own markup is NOT duplicated here — it is fetched from
+         index.html at runtime and injected below, so there is one copy of the
+         flow and this page cannot drift from it. See src/telemetryapp.ts. -->
+
+    <div class="section" id="tlm-panel">
+      <h2>Link telemetry</h2>
+      <p class="text-muted" id="tlm-hint">Loading the app…</p>
+
+      <div class="control-row"><span>Session</span><span id="tlm-elapsed">—</span></div>
+      <div class="control-row"><span>Operations recorded</span><span id="tlm-count">0</span></div>
+      <div class="control-row"><span>Images</span><span id="tlm-images">—</span></div>
+      <div class="control-row"><span>Queue depth</span><span id="tlm-depth">0</span></div>
+
+      <button class="btn-secondary" id="tlm-probe">Sweep payload sizes (~1 min)</button>
+      <button class="btn-secondary" id="tlm-report">Generate report</button>
+      <button class="btn-secondary" id="tlm-copy">Copy report</button>
+      <button class="btn-secondary" id="tlm-json">Copy raw JSON</button>
+      <button class="btn-danger" id="tlm-reset">Discard session</button>
+
+      <pre id="tlm-out" class="tlm-out"></pre>
+    </div>
+
+    <div id="tlm-app"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "@evenrealities/even_hub_sdk": "https://cdn.jsdelivr.net/npm/@evenrealities/even_hub_sdk@0.0.14/+esm"
+        }
+      }
+    </script>
+    <script type="module" src="/src/telemetryapp.ts"></script>
+  </body>
+</html>

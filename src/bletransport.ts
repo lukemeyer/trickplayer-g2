@@ -43,6 +43,20 @@ export function createBleTransport(opts = {}) {
     const now = cfg.now || (() => Date.now());
     const sleep = cfg.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
 
+    /**
+     * Where telemetry attaches. Null by default and called only through
+     * `record`, so the production page pays one null check per operation and
+     * nothing else — no allocation, no timestamps it will not use.
+     *
+     * What it receives is the only thing that can answer "why is this slow":
+     * when an op was ENQUEUED against when it STARTED (queue wait) against when
+     * it FINISHED (write duration), with the payload size and the link's own
+     * account of itself alongside. Aggregates hide exactly the tail that hurts.
+     */
+    let sink = cfg.onEvent || null;
+    const record = (e) => { if (sink) sink(e); };
+    let seq = 0;
+
     let tail = Promise.resolve();
     let depth = 0;
     let generation = 0;
@@ -63,22 +77,37 @@ export function createBleTransport(opts = {}) {
      * caller waited for everything queued after it as well, and could not tell
      * its own failure from someone else's.
      */
-    function enqueue(fn, { generationAtEnqueue = generation } = {}) {
+    function enqueue(fn, { generationAtEnqueue = generation, meta = null } = {}) {
         depth++;
+        const id = ++seq;
+        const enqueuedAt = sink ? now() : 0;
+        const depthAtEnqueue = depth;
         let settle;
         const mine = new Promise((resolve) => { settle = resolve; });
         tail = tail.then(async () => {
+            const startedAt = sink ? now() : 0;
             // Rule 4: the world moved on while this waited.
             if (generationAtEnqueue !== generation) {
-                settle({ ok: false, reason: "superseded" });
+                const r = { ok: false, reason: "superseded" };
+                record({ id, ...meta, ...r, enqueuedAt, startedAt, endedAt: startedAt,
+                    queuedMs: startedAt - enqueuedAt, durationMs: 0, depthAtEnqueue });
+                settle(r);
                 return;
             }
+            let r;
             try {
-                settle(await fn());
+                r = await fn();
             } catch (e) {
                 // Rule 2: a throw is a result, not a lost promise.
-                settle({ ok: false, reason: "threw", error: String(e) });
+                r = { ok: false, reason: "threw", error: String(e) };
             }
+            if (sink) {
+                const endedAt = now();
+                record({ id, ...meta, ...r, enqueuedAt, startedAt, endedAt,
+                    queuedMs: startedAt - enqueuedAt, durationMs: endedAt - startedAt,
+                    depthAtEnqueue });
+            }
+            settle(r);
         }).finally(() => { depth--; });
         return mine;
     }
@@ -130,7 +159,7 @@ export function createBleTransport(opts = {}) {
                 if (attempt < cfg.maxAttempts) await sleep(cfg.retryDelayMs);
             }
             return { ok: false, reason: "failed", attempts: attempt, tried };
-        }, { generationAtEnqueue: gen });
+        }, { generationAtEnqueue: gen, meta: { kind: "image", bytes: meta?.bytes ?? null, tsMs: meta?.tsMs ?? null } });
 
         pendingImages = pendingImages.filter((m) => m !== meta);
 
@@ -164,7 +193,7 @@ export function createBleTransport(opts = {}) {
             } catch (e) {
                 return { ok: false, reason: "threw", error: String(e) };
             }
-        });
+        }, { meta: { kind: "text", bytes: wanted.length, chars: wanted.length } });
 
         if (result.ok) { lastText = wanted; stats.textOk++; }
         else if (result.reason !== "superseded") stats.textFail++;
@@ -184,5 +213,7 @@ export function createBleTransport(opts = {}) {
         get generation() { return generation; },
         stats,
         config: cfg,
+        /** Attach or detach telemetry at runtime. Null turns it fully off. */
+        setEventSink(fn) { sink = fn || null; },
     };
 }

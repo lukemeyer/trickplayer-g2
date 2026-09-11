@@ -289,6 +289,13 @@ import { createBleTransport } from "./bletransport";
                             if (prev !== "unknown" && deviceConnectType !== prev) {
                                 ble.forgetText();
                             }
+                            if (linkObserver) {
+                                linkObserver({
+                                    connectType: deviceConnectType,
+                                    batteryLevel: deviceBatteryLevel,
+                                    isWearing: deviceIsWearing,
+                                });
+                            }
                             if (deviceConnectType !== prev) {
                                 console.warn(
                                     `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepthNow()})`,
@@ -838,7 +845,7 @@ import { createBleTransport } from "./bletransport";
                 const r = await ble.sendImage(
                     (p) => bridgeInstance.imageRawDataUpgrade(p),
                     payload,
-                    { tsMs: frame.tsMs },
+                    { tsMs: frame.tsMs, bytes: preparedBytes.byteLength },
                 );
 
                 if (r.reason === "superseded") {
@@ -1472,6 +1479,83 @@ import { createBleTransport } from "./bletransport";
 
             export { prepareItem, sceneStats };
 
+            // --- TELEMETRY SEAM ---
+            //
+            // Three functions, used only by the telemetry page. The production
+            // page never calls them and the transport's sink stays null, so
+            // recording costs one null check per BLE operation and nothing
+            // else.
+            export function setEventSink(fn) { ble.setEventSink(fn); }
+            export function bleDepth() { return ble.depth; }
+
+            /**
+             * Report link state changes — the thing every other number has to
+             * be read against, and the one the app cannot infer for itself.
+             */
+            let linkObserver = null;
+            export function setLinkObserver(fn) { linkObserver = fn; }
+
+            /**
+             * Send synthetic payloads to characterise the link, with no media
+             * involved.
+             *
+             * Worth having because the interesting question — how write time
+             * and failure rate vary with payload size — is one a normal session
+             * answers badly: real frames cluster around one size, so the
+             * regression has almost no range to fit. A sweep gives the analysis
+             * the spread it needs, in a minute, on a pair of glasses with
+             * nothing configured.
+             *
+             * The payloads are grey noise at the real geometry, so they
+             * compress to something like a real frame rather than to nothing.
+             */
+            export async function probeLink({ densities = null, perSize = 4 } = {}) {
+                // Noise density, not a byte target: what a PNG of dithered grey
+                // actually compresses to is not something to predict, and the
+                // ACTUAL size is what gets recorded. These five bracket the
+                // real operating range — a shipping frame is around 16 KB — so
+                // the analysis has spread either side of it to fit against.
+                const levels = densities || [0.004, 0.02, 0.06, 0.18, 0.5];
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+                const canvas = document.createElement("canvas");
+                canvas.width = GLASSES_IMAGE_WIDTH;
+                canvas.height = GLASSES_IMAGE_HEIGHT;
+                const ctx = canvas.getContext("2d");
+
+                for (const density of levels) {
+                    const img = ctx.createImageData(canvas.width, canvas.height);
+                    for (let i = 0; i < img.data.length; i += 4) {
+                        const v = Math.random() < density ? (Math.random() * 255) | 0 : 128;
+                        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+                        img.data[i + 3] = 255;
+                    }
+                    ctx.putImageData(img, 0, 0);
+                    const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+                    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+                    for (let n = 0; n < perSize; n++) {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({
+                                      containerID: 2, containerName: "g2_bif", imageData: bytes,
+                                  })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        await ble.sendImage(
+                            (p) => bridgeInstance.imageRawDataUpgrade(p),
+                            payload,
+                            { bytes: bytes.byteLength, probe: true },
+                        );
+                        await ble.sendText(
+                            (content) => bridgeInstance.textContainerUpgrade({
+                                containerID: 1, containerName: "g2_subs",
+                                contentOffset: 0, contentLength: 0, content,
+                            }),
+                            `probe ${(bytes.byteLength / 1024).toFixed(0)}KB #${n + 1}`,
+                        );
+                    }
+                }
+            }
+
             export async function initBridge() {
                 await initEvenBridge();
             }
@@ -1602,5 +1686,9 @@ import { createBleTransport } from "./bletransport";
 
             // The player's own two controls stay wired here: they act on engine
             // state and have no flow meaning, unlike every other button.
-            playBtn.onclick = togglePlay;
-            timeline.oninput = (e) => seekTo(e.target.value);
+            //
+            // Guarded, because importing this module must not depend on a
+            // particular page's markup. The telemetry page found that the hard
+            // way: it has no transport bar, and the engine threw at import.
+            if (playBtn) playBtn.onclick = togglePlay;
+            if (timeline) timeline.oninput = (e) => seekTo(e.target.value);
