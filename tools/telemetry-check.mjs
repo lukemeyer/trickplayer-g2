@@ -122,6 +122,40 @@ def("it measures a stall the way a wearer would describe it", async () => {
             `(${a.stalls[0]?.failures} consecutive failures)` };
 });
 
+def("it sees a freeze — the outage that sends NOTHING", async () => {
+    // The failure the first version of this report could not see: not failed
+    // sends, but an absence of them. A page that keeps ticking while the
+    // pipeline is stopped, and one that stops ticking altogether, are
+    // different bugs and have to read differently.
+    // This check runs on a VIRTUAL clock. Everything else here compresses time
+    // by SCALE to keep the suite fast, which is harmless while assertions are
+    // relative — but gap detection compares against an absolute threshold, so
+    // the recorder has to be told the same lie about how long things took.
+    const t0 = Date.now();
+    const vnow = () => t0 + (Date.now() - t0) * SCALE;
+    const rec = createRecorder({ now: vnow });
+    const t = createBleTransport({ sleep: wait, now: vnow, onEvent: (e) => rec.event(e) });
+    const link = makeLink({ imageMs: 400 });
+    const beat = setInterval(() => rec.tick({ playing: true }), ms(2000));
+    for (let i = 0; i < 6; i++) {
+        t.sendImage(() => link.write("image", 16384), { d: i }, { bytes: 16384 });
+        await wait(3000);
+    }
+    // Pipeline stops; the page is still alive and still thinks it is playing.
+    await wait(40000);
+    clearInterval(beat);
+    // And then the page itself stops — no ticks at all.
+    await wait(40000);
+    const a = analyse(rec.session());
+    const kinds = a.gaps.map((g) => g.kind);
+    return {
+        pass: a.gaps.length >= 2 && kinds.includes("pipeline idle") &&
+              kinds.includes("page stopped") && /NOTHING WAS SENT/.test(a.findings[0]),
+        detail: `${a.gaps.length} gap(s) [${kinds.join(", ")}], ` +
+            `${(a.deadMs / 1000).toFixed(0)}s dead — "${a.findings[0]?.slice(0, 70)}"`,
+    };
+});
+
 def("the report renders and carries its findings", async () => {
     const s = await session({ link: makeLink({ imageMs: 3000 }), frames: 20, gap: 1000 });
     const text = formatReport(s);

@@ -29,10 +29,20 @@
 
 export const TELEMETRY_VERSION = 1;
 
-export function createRecorder({ max = 20000, now = () => Date.now() } = {}) {
-    const started = now();
-    const events = [];
-    const marks = [];
+export function createRecorder({ max = 20000, now = () => Date.now(), resume = null } = {}) {
+    // A session CONTINUES across a reload rather than starting again.
+    //
+    // The phone sleeping can discard the page, and the old design started a
+    // fresh recorder on the way back — so the very event worth measuring became
+    // two disjoint sessions with the interesting part falling in the crack
+    // between them. Now the clock keeps running and the reload is a mark, which
+    // makes the outage a GAP inside one timeline.
+    const priorMs = resume?.durationMs || 0;
+    const wall = now();
+    const at = () => wall - priorMs;         // virtual session start
+    const started = at();
+    const events = resume?.events ? [...resume.events] : [];
+    const marks = resume?.marks ? [...resume.marks] : [];
     let context = {};
 
     return {
@@ -41,6 +51,18 @@ export function createRecorder({ max = 20000, now = () => Date.now() } = {}) {
         /** A named moment — play, pause, background, reconnect. */
         mark(name, detail = {}) {
             marks.push({ at: now() - started, name, ...detail });
+        },
+        /**
+         * Proof of life.
+         *
+         * The whole point: an operation record says something HAPPENED, and the
+         * complaint being chased is that nothing did. A tick every few seconds
+         * turns silence into evidence — a span with no ticks is a page that was
+         * not running, a span with ticks but no images is a pipeline that
+         * stopped while the page was fine, and those are different bugs.
+         */
+        tick(state = {}) {
+            marks.push({ at: now() - started, name: "tick", ...state });
         },
         event(e) {
             if (events.length >= max) events.shift();
@@ -175,6 +197,66 @@ export function analyse(session) {
     out.stalls = stalls;
     out.longestStallMs = stalls.reduce((m, s) => Math.max(m, s.ms), 0);
 
+    // 7. GAPS — the thing the first version of this report could not see.
+    //
+    //    An operation record is proof something happened; a frozen stream is
+    //    the absence of them, which no aggregate over the records can show. So
+    //    the timeline is walked instead, and every span where nothing was sent
+    //    is classified by whether the page was still ticking:
+    //
+    //      page stopped   no ticks either — the WebView was frozen, discarded
+    //                     or killed. Nothing in the app can be blamed for it,
+    //                     and nothing in the app noticed.
+    //      pipeline idle  ticks continued, and the app said it was PLAYING, and
+    //                     still nothing was sent. That is ours.
+    const ticks = (session.marks || []).filter((m) => m.name === "tick");
+
+    const GAP_MS = 15000;      // several scene intervals: not a slow frame
+    const gaps = [];
+
+    /**
+     * Break a silence into spans by what the page was doing during it.
+     *
+     * One silence is not necessarily one problem: the reported case was the
+     * pipeline stopping first and the phone freezing the page some time later,
+     * which is two bugs end to end and reads as one if the span is not split
+     * where the heartbeat stops.
+     */
+    const closeGap = (fromMs, toMs, endedHere = false) => {
+        if (toMs - fromMs <= GAP_MS) return;
+        const inside = ticks.filter((t) => t.at > fromMs + 2000 && t.at < toMs - 2000);
+        const add = (a, b, kind, playing) => {
+            if (b - a <= GAP_MS) return;
+            gaps.push({ fromMs: a, toMs: b, ms: b - a, kind, playing: !!playing,
+                ...(endedHere && b === toMs ? { endedHere: true } : {}) });
+        };
+        if (!inside.length) {
+            add(fromMs, toMs, "page stopped", false);
+            return;
+        }
+        const first = inside[0].at, last = inside[inside.length - 1].at;
+        // Before the heartbeat resumed, and after it stopped, the page was not
+        // running. Between them it was, and sent nothing anyway.
+        add(fromMs, first, "page stopped", false);
+        add(first, last, "pipeline idle", inside.some((t) => t.playing));
+        add(last, toMs, "page stopped", false);
+    };
+
+    const ops = ev.map((e) => e.startedAt).sort((a, b) => a - b);
+    let lastOp = 0;
+    for (const at of ops) {
+        closeGap(lastOp, at);
+        lastOp = at;
+    }
+    // A session that ends mid-silence is the most important gap of all — it is
+    // what the wearer was looking at when they gave up.
+    closeGap(lastOp, session.durationMs, true);
+
+    out.gaps = gaps;
+    out.longestGapMs = gaps.reduce((m, g) => Math.max(m, g.ms), 0);
+    out.deadMs = gaps.reduce((t, g) => t + g.ms, 0);
+    out.lifecycle = (session.marks || []).filter((m) => m.name !== "tick");
+
     // --- findings -------------------------------------------------------
     const f = out.findings;
     const sent = out.counts.imagesSent;
@@ -215,6 +297,27 @@ export function analyse(session) {
     if (out.counts.imagesSuperseded > sent * 0.5 && sent > 0) {
         f.push(`${out.counts.imagesSuperseded} frames were dropped as stale against ${sent} sent: ` +
             `scenes are being produced far faster than they can be shown.`);
+    }
+    // Gaps first, because a stream that stopped is a bigger complaint than a
+    // stream that was slow, and the old report ranked it below nothing at all.
+    if (out.gaps.length) {
+        const dead = (out.deadMs / 1000).toFixed(0);
+        const share = ((100 * out.deadMs) / Math.max(1, out.durationMs)).toFixed(0);
+        f.unshift(`NOTHING WAS SENT for ${dead}s of this session (${share}% of it), ` +
+            `across ${out.gaps.length} gap(s), longest ${(out.longestGapMs / 1000).toFixed(0)}s.`);
+        const stopped = out.gaps.filter((g) => g.kind === "page stopped");
+        const idle = out.gaps.filter((g) => g.kind === "pipeline idle");
+        if (stopped.length) {
+            f.splice(1, 0, `${stopped.length} of those: the PAGE stopped running — no heartbeat ` +
+                `either, so the WebView was frozen, discarded or killed. Recovering from that is ` +
+                `a resume path, not a transport fix.`);
+        }
+        if (idle.length) {
+            f.splice(stopped.length ? 2 : 1, 0,
+                `${idle.length} of those: the page kept ticking and still sent nothing` +
+                `${idle.some((g) => g.playing) ? " WHILE THE APP BELIEVED IT WAS PLAYING" : ""} — ` +
+                `that is the scene pipeline stopping, and it is ours.`);
+        }
     }
     if (!f.length) f.push("Nothing stands out — the link kept up with the pipeline.");
     return out;
@@ -259,7 +362,23 @@ export function formatReport(session, a = analyse(session)) {
         }
     }
     L.push("");
-    L.push(`stalls      ${a.stalls.length}, longest ${(a.longestStallMs / 1000).toFixed(1)}s`);
+    L.push(`stalls      ${a.stalls.length} (consecutive failures), ` +
+        `longest ${(a.longestStallMs / 1000).toFixed(1)}s`);
+    L.push(`gaps        ${a.gaps.length} (nothing sent at all), ` +
+        `${(a.deadMs / 1000).toFixed(0)}s dead, longest ${(a.longestGapMs / 1000).toFixed(0)}s`);
+    for (const g of a.gaps.slice(0, 8)) {
+        L.push(`  ${(g.fromMs / 1000).toFixed(0).padStart(5)}s +${(g.ms / 1000).toFixed(0).padStart(4)}s  ` +
+            `${g.kind}${g.playing ? ", app thought it was playing" : ""}${g.endedHere ? ", session ended here" : ""}`);
+    }
+    if (a.lifecycle.length) {
+        L.push("");
+        L.push("lifecycle");
+        for (const m of a.lifecycle.slice(-14)) {
+            const { at, name, ...rest } = m;
+            L.push(`  ${(at / 1000).toFixed(0).padStart(5)}s  ${name}` +
+                `${Object.keys(rest).length ? "  " + JSON.stringify(rest).slice(0, 70) : ""}`);
+        }
+    }
     L.push("");
     L.push("FINDINGS");
     a.findings.forEach((x, i) => L.push(`  ${i + 1}. ${x}`));

@@ -1368,6 +1368,7 @@ import { createBleTransport } from "./bletransport";
                 stopScenePipeline();
                 try { silentAudio.pause(); } catch (e) {}
                 console.log("[Lifecycle] Backgrounded — pipeline paused");
+                noteLifecycle("app-paused", { reason: "background" });
             }
 
             function resumeFromBackground() {
@@ -1376,7 +1377,7 @@ import { createBleTransport } from "./bletransport";
                 if (!bifs || bifs.length === 0) return;
                 isPlaying = true;
                 playBtn.innerText = "Pause";
-                try { silentAudio.play(); } catch (e) {}
+                silentAudio.play().catch(() => {});
                 const title =
                     document.getElementById("playing-title")?.textContent ||
                     "media";
@@ -1384,6 +1385,7 @@ import { createBleTransport } from "./bletransport";
                 console.log(
                     "[Lifecycle] Foregrounded — refreshing and resuming pipeline",
                 );
+                noteLifecycle("app-resumed", { reason: "foreground" });
                 sendOneShotUpdate().catch(() => {});
                 runScenePipeline();
             }
@@ -1428,7 +1430,7 @@ import { createBleTransport } from "./bletransport";
                     } else if (bifs && bifs.length > 0) {
                         isPlaying = true;
                         backgroundedWhilePlaying = false;
-                        try { silentAudio.play(); } catch (e) {}
+                        silentAudio.play().catch(() => {});
                         playBtn.innerText = "Pause";
                         setStatus(`Now playing: ${title}`, "active");
                         if (typeof runScenePipeline === 'function') runScenePipeline();
@@ -1547,6 +1549,23 @@ import { createBleTransport } from "./bletransport";
              */
             let linkObserver = null;
             export function setLinkObserver(fn) { linkObserver = fn; }
+
+            /** What the app believes it is doing, for the heartbeat to stamp. */
+            export function playbackState() {
+                return {
+                    playing: isPlaying,
+                    pipeline: scenePipelineRunning,
+                    scene: sceneList.length ? currentTimeMs : null,
+                    bridge: !!bridgeInstance,
+                    hidden: document.hidden,
+                };
+            }
+
+            let lifecycleObserver = null;
+            export function setLifecycleObserver(fn) { lifecycleObserver = fn; }
+            function noteLifecycle(what, detail = {}) {
+                if (lifecycleObserver) lifecycleObserver(what, detail);
+            }
 
             /**
              * Send synthetic payloads to characterise the link, with no media
@@ -1692,7 +1711,7 @@ import { createBleTransport } from "./bletransport";
                 isPlaying = true;
                 backgroundedWhilePlaying = false;
                 playBtn.innerText = "Pause";
-                try { silentAudio.play(); } catch (e) {}
+                silentAudio.play().catch(() => {});
                 setStatus(`Now playing: ${currentItem?.title || "media"}`, "active");
                 ui.playing(true);
                 // The pipeline drives the timeline — no clock needed.

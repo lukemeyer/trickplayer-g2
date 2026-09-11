@@ -15,7 +15,23 @@ import { createRecorder, analyse, formatReport } from "./telemetry";
 
 const $ = (id) => document.getElementById(id);
 const KEY = "trickplayer.telemetry";
-const recorder = createRecorder();
+// Pick the previous session up rather than starting a new one: a sleep that
+// discards the page is exactly what needs measuring, and a fresh recorder would
+// drop it into the crack between two sessions.
+let resumeFrom = null;
+try {
+    const prev = JSON.parse(localStorage.getItem(KEY) || "null");
+    if (prev?.events?.length) resumeFrom = prev;
+} catch (e) { /* nothing recoverable */ }
+
+const recorder = createRecorder({ resume: resumeFrom });
+if (resumeFrom) {
+    recorder.mark("page-reloaded", {
+        // Android discarded the page rather than merely hiding it.
+        discarded: document.wasDiscarded === true,
+        priorMs: resumeFrom.durationMs,
+    });
+}
 
 /**
  * Borrow the production page's markup rather than copying it.
@@ -52,6 +68,30 @@ document.addEventListener("visibilitychange", () => {
     recorder.setContext({ foreground });
     recorder.mark(foreground ? "foreground" : "background");
 });
+
+// The Page Lifecycle events, which are the ones that actually fire when a phone
+// sleeps: `freeze` means timers are about to stop, `resume` that they started
+// again. Without these a multi-minute outage has no label on either end.
+for (const name of ["freeze", "resume", "pageshow", "pagehide"]) {
+    window.addEventListener(name, (e) => {
+        recorder.mark(name, name === "pageshow" ? { persisted: !!e.persisted } : {});
+        if (name === "freeze" || name === "pagehide") persist();
+    });
+}
+
+// The app's own idea of what it is doing, so "the page was alive and still sent
+// nothing" can be told apart from "the app had stopped on purpose".
+engine.setLifecycleObserver((what, detail) => recorder.mark(what, detail));
+
+/**
+ * Proof of life every 5s.
+ *
+ * This is what makes a frozen stream visible at all: operation records say
+ * something happened, and the complaint is that nothing did. A span with no
+ * ticks is a page that was not running; a span with ticks and no images while
+ * the app believed it was playing is the pipeline stopping, which is ours.
+ */
+setInterval(() => recorder.tick(engine.playbackState()), 5000);
 engine.setLinkObserver((link) => {
     recorder.setContext({ conn: link.connectType, wearing: link.isWearing });
     recorder.mark("link", link);
@@ -154,17 +194,6 @@ $("tlm-reset").onclick = () => {
     try { localStorage.removeItem(KEY); } catch (e) {}
     location.reload();
 };
-
-// A session recovered from a previous run is worth more than this one, which
-// has not happened yet — offer it rather than silently overwriting it.
-try {
-    const prev = JSON.parse(localStorage.getItem(KEY) || "null");
-    if (prev?.events?.length) {
-        $("tlm-out").textContent =
-            `A previous session of ${prev.events.length} operations was recovered.\n` +
-            `It is still here until you discard it.\n\n` + formatReport(prev);
-    }
-} catch (e) { /* nothing recoverable */ }
 
 refresh();
 
