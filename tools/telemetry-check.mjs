@@ -207,12 +207,52 @@ def("it separates what the payload costs from what playback costs", async () => 
 
     const a = analyse(rec.session());
     const hit = a.findings.find((x) => /what their SIZE explains/.test(x));
+    // And it must NOT also tell you to shrink the image in the next breath.
+    const contradiction = a.findings.find((x) => /Shrinking the image buys time directly/.test(x));
     return {
-        pass: !!hit && a.synthetic.ratio > 2 && a.synthetic.perKbMs > 20 && a.synthetic.perKbMs < 60,
+        pass: !!hit && !contradiction &&
+              a.synthetic.ratio > 2 && a.synthetic.perKbMs > 20 && a.synthetic.perKbMs < 60,
         detail: hit
             ? `fit ${Math.round(a.synthetic.fixedMs)}ms + ${a.synthetic.perKbMs.toFixed(0)}ms/KB, ` +
               `ratio ${a.synthetic.ratio.toFixed(2)}x`
             : a.findings.join(" | ").slice(0, 120),
+    };
+});
+
+def("it measures contention, and stays quiet when there is none", async () => {
+    const build = (slowWhenBusy) => {
+        const rec = createRecorder();
+        const put = (kind, startedAt, durationMs, extra = {}) => rec.event({
+            id: 0, kind, ok: true, enqueuedAt: startedAt, startedAt,
+            endedAt: startedAt + durationMs, queuedMs: 0, durationMs,
+            depthAtEnqueue: 1, ...extra,
+        });
+        for (let i = 0; i < 10; i++) {
+            const t = i * 6000;
+            // Half the writes have a fetch and a decode running underneath.
+            const busy = i % 2 === 0;
+            put("image", t, busy && slowWhenBusy ? 1900 : 800, { bytes: 16384 });
+            if (busy) {
+                put("fetch", t + 100, 500, { frameIndex: i, cached: false });
+                put("prepare", t + 650, 300, { frameIndex: i });
+            }
+        }
+        return analyse(rec.session());
+    };
+
+    const slow = build(true);
+    const even = build(false);
+    const slowHit = slow.findings.find((x) => /SCHEDULING problem/.test(x));
+    const evenHit = even.findings.find((x) => /Concurrent prep costs little/.test(x));
+    return {
+        pass: !!slowHit && !!evenHit &&
+              slow.contention.contendedPct > 40 && slow.contention.contendedPct < 60,
+        detail: slowHit
+            ? `contended ${Math.round(slow.contention.contended.p50)}ms vs ` +
+              `${Math.round(slow.contention.clear.p50)}ms clear, ` +
+              `${slow.contention.contendedPct.toFixed(0)}% contended; ` +
+              `and the even case says "${evenHit ? "costs little" : "MISSED"}"`
+            : slow.findings.join(" | ").slice(0, 130),
     };
 });
 

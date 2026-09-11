@@ -841,8 +841,10 @@ import { createBleTransport } from "./bletransport";
                 // How that fetch happens is the provider's business: a ranged
                 // GET on Plex, a crop out of a cached sheet elsewhere.
                 let assets;
+                const cached = !!peekFrameUrl(frameIndex);
                 try {
-                    assets = await getFrameAssets(frameIndex);
+                    assets = await timed("fetch", { frameIndex, cached },
+                        () => getFrameAssets(frameIndex));
                 } catch (e) {
                     console.warn(
                         `[frame] fetch failed at ${bifs[frameIndex]?.tsMs}ms: ${e.message}`,
@@ -850,10 +852,12 @@ import { createBleTransport } from "./bletransport";
                     return 0;
                 }
 
-                const preparedBytes = await resizeAndPrepareImage(
-                    assets.blob,
-                    GLASSES_IMAGE_WIDTH,
-                    GLASSES_IMAGE_HEIGHT,
+                const preparedBytes = await timed("prepare", { frameIndex }, () =>
+                    resizeAndPrepareImage(
+                        assets.blob,
+                        GLASSES_IMAGE_WIDTH,
+                        GLASSES_IMAGE_HEIGHT,
+                    ),
                 );
 
                 const payload =
@@ -1576,6 +1580,37 @@ import { createBleTransport } from "./bletransport";
                     bridge: !!bridgeInstance,
                     hidden: document.hidden,
                 };
+            }
+
+            /**
+             * Where the work AROUND a send is recorded.
+             *
+             * A session showed real frames costing 2.3x what their size
+             * explains, and the only honest answer was "whatever else playback
+             * is doing while the write is in flight". This is that: the fetch
+             * and the decode/dither, timed on the same clock as the writes, so
+             * the overlap between them stops being a hypothesis.
+             */
+            let workObserver = null;
+            export function setWorkObserver(fn) { workObserver = fn; }
+
+            async function timed(kind, meta, fn) {
+                if (!workObserver) return fn();
+                const startedAt = Date.now();
+                let ok = true;
+                try {
+                    return await fn();
+                } catch (e) {
+                    ok = false;
+                    throw e;
+                } finally {
+                    const endedAt = Date.now();
+                    workObserver({
+                        kind, ok, ...meta,
+                        enqueuedAt: startedAt, startedAt, endedAt,
+                        queuedMs: 0, durationMs: endedAt - startedAt,
+                    });
+                }
             }
 
             let lifecycleObserver = null;

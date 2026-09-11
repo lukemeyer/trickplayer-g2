@@ -99,6 +99,10 @@ for (const name of ["freeze", "resume", "pageshow", "pagehide"]) {
 // nothing" can be told apart from "the app had stopped on purpose".
 engine.setLifecycleObserver((what, detail) => recorder.mark(what, detail));
 
+// The fetch and the decode/dither, on the same clock as the writes, so their
+// overlap with a write in flight can be measured rather than assumed.
+engine.setWorkObserver((e) => recorder.event(e));
+
 /**
  * Proof of life every 5s.
  *

@@ -232,6 +232,39 @@ export function analyse(session) {
         }
     }
 
+    // 6c. CONTENTION — does a write slow down when prep runs underneath it?
+    //
+    //     The pipeline prefetches the NEXT scene's frame while the current one
+    //     is on screen, so a fetch and a decode routinely overlap a write in
+    //     flight. Whether that costs anything is measurable rather than
+    //     arguable: split the writes by whether work overlapped them, and
+    //     compare. If the busy ones are slower, the 2.3x gap between real
+    //     frames and synthetic payloads has its explanation, and the fix is
+    //     scheduling rather than smaller images.
+    const work = ev.filter((e) => e.kind === "fetch" || e.kind === "prepare");
+    out.fetchMs = summarise(work.filter((e) => e.kind === "fetch" && e.ok).map((e) => e.durationMs));
+    out.prepareMs = summarise(work.filter((e) => e.kind === "prepare" && e.ok).map((e) => e.durationMs));
+    out.fetchCachedPct = (() => {
+        const f = work.filter((e) => e.kind === "fetch");
+        return f.length ? (100 * f.filter((e) => e.cached).length) / f.length : 0;
+    })();
+
+    if (work.length >= 4 && ok(images).length >= 4) {
+        const overlapMs = (a0, a1) =>
+            work.reduce((t, w) =>
+                t + Math.max(0, Math.min(a1, w.endedAt) - Math.max(a0, w.startedAt)), 0);
+        const withWork = [], alone = [];
+        for (const w of ok(images)) {
+            const o = overlapMs(w.startedAt, w.endedAt);
+            (o > 0.1 * w.durationMs ? withWork : alone).push(w.durationMs);
+        }
+        out.contention = {
+            contended: summarise(withWork),
+            clear: summarise(alone),
+            contendedPct: (100 * withWork.length) / ok(images).length,
+        };
+    }
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -316,7 +349,27 @@ export function analyse(session) {
             `(${Math.round(out.imageWriteMs.p50)}ms): the pipeline is outrunning the link. ` +
             `Pace scenes off the measured write time rather than sending sooner.`);
     }
-    if (out.synthetic && out.synthetic.ratio > 1.5) {
+    const c = out.contention;
+    if (c && c.contended.n >= 3 && c.clear.n >= 3) {
+        const factor = c.contended.p50 / Math.max(1, c.clear.p50);
+        if (factor > 1.3) {
+            f.push(`Writes that had a fetch or a decode running underneath them take ` +
+                `${factor.toFixed(1)}x as long: ${Math.round(c.contended.p50)}ms against ` +
+                `${Math.round(c.clear.p50)}ms when the write had the device to itself, and ` +
+                `${c.contendedPct.toFixed(0)}% of writes were contended. This is a SCHEDULING ` +
+                `problem — hold the next frame's prep until the current write completes — and ` +
+                `it is worth more than any payload reduction.`);
+        } else {
+            f.push(`Concurrent prep costs little: contended writes ${Math.round(c.contended.p50)}ms ` +
+                `against ${Math.round(c.clear.p50)}ms clear. The time is in the link itself, so ` +
+                `look at the payload and the pacing rather than the scheduling.`);
+        }
+    }
+    // A ratio on top of trivial numbers is noise, and a report that fires on
+    // noise gets ignored when it matters. The gap has to be worth acting on.
+    const sizeIsALie = out.synthetic && out.synthetic.ratio > 1.5 &&
+        out.synthetic.actualMs - out.synthetic.predictedMs > 150;
+    if (sizeIsALie) {
         const y = out.synthetic;
         f.push(`Real frames cost ${y.ratio.toFixed(1)}x what their SIZE explains: ` +
             `${Math.round(y.actualMs)}ms against ${Math.round(y.predictedMs)}ms predicted at ` +
@@ -327,7 +380,11 @@ export function analyse(session) {
     }
     if (out.bySize.length > 1) {
         const lo = out.bySize[0], hi = out.bySize[out.bySize.length - 1];
-        if (hi.writeMs.p50 > lo.writeMs.p50 * 1.3) {
+        // Suppressed when the synthetic comparison has just said the opposite.
+        // Both readings are drawn from the same table, and a report that
+        // recommends shrinking the image one line after explaining that
+        // shrinking it would not help is worse than one that says less.
+        if (!sizeIsALie && hi.writeMs.p50 > lo.writeMs.p50 * 1.3) {
             f.push(`Write time scales with payload: ${lo.kb}KB takes ${Math.round(lo.writeMs.p50)}ms, ` +
                 `${hi.kb}KB takes ${Math.round(hi.writeMs.p50)}ms. Shrinking the image buys time directly.`);
         }
@@ -420,6 +477,17 @@ export function formatReport(session, a = analyse(session)) {
         L.push(`synthetic fit   ${Math.round(y.fixedMs)}ms fixed + ${y.perKbMs.toFixed(1)}ms/KB`);
         L.push(`real frames     ${y.realKb.toFixed(0)}KB -> ${Math.round(y.actualMs)}ms actual ` +
             `vs ${Math.round(y.predictedMs)}ms predicted  (${y.ratio.toFixed(2)}x)`);
+    }
+    if (a.fetchMs.n || a.prepareMs.n) {
+        L.push("");
+        L.push(`fetch        n=${a.fetchMs.n}  p50 ${ms(a.fetchMs.p50)}  p90 ${ms(a.fetchMs.p90)}  ` +
+            `${a.fetchCachedPct.toFixed(0)}% already cached`);
+        L.push(`prepare      n=${a.prepareMs.n}  p50 ${ms(a.prepareMs.p50)}  p90 ${ms(a.prepareMs.p90)}`);
+    }
+    if (a.contention) {
+        L.push(`write alone  n=${a.contention.clear.n}  p50 ${ms(a.contention.clear.p50)}`);
+        L.push(`write busy   n=${a.contention.contended.n}  p50 ${ms(a.contention.contended.p50)}  ` +
+            `(${a.contention.contendedPct.toFixed(0)}% of writes)`);
     }
     L.push("");
     L.push("retry yield");
