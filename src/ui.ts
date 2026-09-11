@@ -99,6 +99,9 @@ function showSources() {
         row(list, rec.name || rec.serverUrl, rec.serverUrl,
             () => openSource(rec), [rec.provider === "jellyfin" ? "Jellyfin" : "Plex"]);
     }
+    // Reached deliberately now, not only on the way in, so there has to be a
+    // way out that is not "pick a server again".
+    setHidden("sources-back", !account);
     show("panel-sources");
 }
 
@@ -110,6 +113,7 @@ async function openSource(rec) {
 }
 
 $("add-source-btn").onclick = () => startAddSource();
+$("sources-back").onclick = () => { if (account) showBrowse(); };
 $("add-source-cancel").onclick = () => {
     stopPolling();
     loadSaved().length ? showSources() : startAddSource();
@@ -270,9 +274,15 @@ async function afterAuth() {
 async function showBrowse() {
     show("panel-browse");
     $("browse-title").textContent = account.name;
-    // With one source the sources step does not appear; it is absent, not a
-    // screen you dismiss — so the way back only exists when there is one.
-    setHidden("browse-back", loadSaved().length < 2);
+    // Always reachable, however many are saved.
+    //
+    // UI.md §1's rule is that the source step does not APPEAR when there is
+    // only one — it is not a screen you dismiss on the way in. That was read
+    // here as "there is no way to reach it", which strands anyone who has
+    // signed in to one provider with no route to the other: the only place to
+    // add a server is the screen this button leads to. Absent from the path,
+    // reachable on purpose.
+    setHidden("browse-back", false);
     const list = $("root-list");
     list.innerHTML = '<p class="text-muted">Loading…</p>';
     try {
