@@ -275,18 +275,39 @@ export function analyse(session) {
     }
 
     if (work.length >= 4 && ok(images).length >= 4) {
-        const overlapMs = (a0, a1) =>
-            work.reduce((t, w) =>
-                t + Math.max(0, Math.min(a1, w.endedAt) - Math.max(a0, w.startedAt)), 0);
+        // Split by WHICH work overlapped, not just whether any did. A fetch and
+        // a decode contend for different things — the radio and the network on
+        // one side, the main thread on the other — and they have opposite
+        // fixes: you can delay a decode without losing anything, while delaying
+        // a fetch is giving up the prefetch that hides the network entirely.
+        // Lumping them is the same mistake `prepare` made one level down
+        // ([[F-046]]): a number spanning two fixes cannot choose between them.
+        const overlapOf = (kind, a0, a1) =>
+            work.reduce((t, w) => t + (w.kind === kind
+                ? Math.max(0, Math.min(a1, w.endedAt) - Math.max(a0, w.startedAt)) : 0), 0);
+
         const withWork = [], alone = [];
+        const byKind = { fetch: [], prepare: [], both: [] };
         for (const w of ok(images)) {
-            const o = overlapMs(w.startedAt, w.endedAt);
-            (o > 0.1 * w.durationMs ? withWork : alone).push(w.durationMs);
+            const bar = 0.1 * w.durationMs;
+            const f = overlapOf("fetch", w.startedAt, w.endedAt) > bar;
+            const p = overlapOf("prepare", w.startedAt, w.endedAt) > bar;
+            if (f || p) {
+                withWork.push(w.durationMs);
+                byKind[f && p ? "both" : f ? "fetch" : "prepare"].push(w.durationMs);
+            } else {
+                alone.push(w.durationMs);
+            }
         }
         out.contention = {
             contended: summarise(withWork),
             clear: summarise(alone),
             contendedPct: (100 * withWork.length) / ok(images).length,
+            byKind: {
+                fetch: summarise(byKind.fetch),
+                prepare: summarise(byKind.prepare),
+                both: summarise(byKind.both),
+            },
         };
     }
 
@@ -420,8 +441,32 @@ export function analyse(session) {
                 `${factor.toFixed(1)}x as long: ${Math.round(c.contended.p50)}ms against ` +
                 `${Math.round(c.clear.p50)}ms when the write had the device to itself, and ` +
                 `${c.contendedPct.toFixed(0)}% of writes were contended. This is a SCHEDULING ` +
-                `problem — hold the next frame's prep until the current write completes — and ` +
-                `it is worth more than any payload reduction.`);
+                `problem, and it is worth more than any payload reduction.`);
+
+            // WHICH kind, because the two have opposite remedies.
+            const k = c.byKind;
+            if (k) {
+                const named = ["prepare", "fetch", "both"]
+                    .filter((n) => k[n].n >= 3)
+                    .sort((a, b) => k[b].p50 - k[a].p50);
+                const worst = named[0];
+                if (worst && k[worst].p50 > c.clear.p50 * 1.3) {
+                    f.push(worst === "prepare"
+                        ? `The overlap that costs most is a DECODE running under the write ` +
+                          `(${Math.round(k.prepare.p50)}ms vs ${Math.round(c.clear.p50)}ms clear). ` +
+                          `That one is free to move: hold the next frame's prep until the current ` +
+                          `write completes and nothing is lost but a little idle time.`
+                        : worst === "fetch"
+                        ? `The overlap that costs most is a FETCH running under the write ` +
+                          `(${Math.round(k.fetch.p50)}ms vs ${Math.round(c.clear.p50)}ms clear). ` +
+                          `Be careful here — the prefetch is what hides the network, so serialising ` +
+                          `it trades one stall for another. Fetch earlier rather than later.`
+                        : `The expensive case is a fetch AND a decode under the same write ` +
+                          `(${Math.round(k.both.p50)}ms vs ${Math.round(c.clear.p50)}ms clear), so ` +
+                          `it is the pile-up rather than either one. Stagger them: the decode can ` +
+                          `wait for the write, the fetch should start sooner.`);
+                }
+            }
         } else {
             f.push(`Concurrent prep costs little: contended writes ${Math.round(c.contended.p50)}ms ` +
                 `against ${Math.round(c.clear.p50)}ms clear. The time is in the link itself, so ` +
@@ -558,6 +603,13 @@ export function formatReport(session, a = analyse(session)) {
         L.push(`write alone  n=${a.contention.clear.n}  p50 ${ms(a.contention.clear.p50)}`);
         L.push(`write busy   n=${a.contention.contended.n}  p50 ${ms(a.contention.contended.p50)}  ` +
             `(${a.contention.contendedPct.toFixed(0)}% of writes)`);
+        if (a.contention.byKind) {
+            for (const name of ["fetch", "prepare", "both"]) {
+                const k = a.contention.byKind[name];
+                if (!k.n) continue;
+                L.push(`  under ${name.padEnd(8)} n=${k.n}  p50 ${ms(k.p50)}  p90 ${ms(k.p90)}`);
+            }
+        }
     }
     L.push("");
     L.push("retry yield");

@@ -274,6 +274,48 @@ def("it flags a decode slow enough to block the pipeline", async () => {
     return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
 });
 
+def("it names WHICH work is underneath the slow writes", async () => {
+    // A fetch under a write and a decode under a write have opposite remedies:
+    // the decode is free to move, the prefetch is what hides the network. The
+    // report has to say which one it saw, or the advice is a coin toss.
+    const build = (culprit) => {
+        const rec = createRecorder();
+        const put = (kind, startedAt, durationMs, extra = {}) => rec.event({
+            id: 0, kind, ok: true, enqueuedAt: startedAt, startedAt,
+            endedAt: startedAt + durationMs, queuedMs: 0, durationMs,
+            depthAtEnqueue: 1, ...extra,
+        });
+        for (let i = 0; i < 16; i++) {
+            const t = i * 8000;
+            // Half the writes have the culprit running underneath and are slow.
+            const busy = i % 2 === 0;
+            put("image", t, busy ? 2400 : 900, { bytes: 15000 });
+            if (busy) put(culprit, t + 100, 1200, { frameIndex: i, cached: false });
+            else {
+                // the other kind still happens, but clear of the write
+                const other = culprit === "fetch" ? "prepare" : "fetch";
+                put(other, t + 3000, 300, { frameIndex: i, cached: false });
+            }
+        }
+        return analyse(rec.session());
+    };
+
+    const byPrepare = build("prepare");
+    const byFetch = build("fetch");
+    const says = (a, re) => a.findings.some((x) => re.test(x));
+
+    const ok =
+        says(byPrepare, /overlap that costs most is a DECODE/) &&
+        says(byPrepare, /free to move/) &&
+        says(byFetch, /overlap that costs most is a FETCH/) &&
+        says(byFetch, /prefetch is what hides the network/) &&
+        // and never both stories at once
+        !says(byPrepare, /is a FETCH/) && !says(byFetch, /is a DECODE/);
+
+    const line = byPrepare.findings.find((x) => /overlap that costs most/.test(x)) || "MISSED";
+    return { pass: ok, detail: line.slice(0, 140) };
+});
+
 def("it names which phase of prepare is the expensive one", async () => {
     // The point of splitting prepare into decode/pixels/encode: a 4-second
     // prepare used to produce the advice "chase it", which is not an address.
