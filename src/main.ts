@@ -264,12 +264,44 @@ import { createBleTransport } from "./bletransport";
                 else if (state === "error") indicator.classList.add("error");
             }
 
+            /**
+             * Fail loudly if the bridge does not have what this app calls.
+             *
+             * A misspelt SDK method is not a crash — it is `undefined`, and
+             * calling it throws inside the transport's per-attempt try/catch,
+             * which turns it into "every image failed, three attempts each,
+             * forever". That is indistinguishable from a bad radio, and it cost
+             * a session to find: `imageRawDataUpgrade` invented by symmetry with
+             * the real `textContainerUpgrade`.
+             *
+             * Names are data the SDK owns and we can only get wrong, so check
+             * them once, at the one moment there is something to check against.
+             */
+            const REQUIRED_BRIDGE_METHODS = [
+                "updateImageRawData",
+                "textContainerUpgrade",
+                "createStartUpPageContainer",
+            ];
+
+            function assertBridgeContract(bridge) {
+                const missing = REQUIRED_BRIDGE_METHODS.filter(
+                    (m) => typeof bridge?.[m] !== "function",
+                );
+                if (missing.length) {
+                    throw new Error(
+                        `SDK is missing ${missing.join(", ")} — this build calls ` +
+                        `methods the bridge does not have`,
+                    );
+                }
+            }
+
             async function initEvenBridge() {
                 try {
                     setStatus(
                         "Searching for active G2 Webview Environment Hook...",
                     );
                     bridgeInstance = await waitForEvenAppBridge();
+                    assertBridgeContract(bridgeInstance);
 
                     // Wire tap/double-tap/exit event routing now that the
                     // bridge instance actually exists.
@@ -842,8 +874,20 @@ import { createBleTransport } from "./bletransport";
                 // live in the transport now. What is left here is the part that
                 // is about THIS app: what to log, and how the result feeds the
                 // pacing average.
+                // `updateImageRawData` resolves to a STRING enum, not a
+                // boolean: "success" | "imageException" | "imageSizeInvalid" |
+                // "imageToGray4Failed" | "sendFailed". The transport's contract
+                // is a boolean, so the mapping happens here — it is the only
+                // layer that should know what this SDK calls things.
+                //
+                // Mapping it with `!== false` would report every one of those
+                // failures as a delivery, which is worse than the failure.
+                let lastResult = "";
                 const r = await ble.sendImage(
-                    (p) => bridgeInstance.imageRawDataUpgrade(p),
+                    async (p) => {
+                        lastResult = await bridgeInstance.updateImageRawData(p);
+                        return lastResult === "success";
+                    },
                     payload,
                     { tsMs: frame.tsMs, bytes: preparedBytes.byteLength },
                 );
@@ -907,7 +951,7 @@ import { createBleTransport } from "./bletransport";
                     subtitleFailureCount++;
                     console.warn(
                         `[Scene Engine] Subtitle send failed (${r.reason}, ` +
-                        `conn:${deviceConnectType}, q:${bleQueueDepthNow()})`,
+                        `${lastResult && lastResult !== "success" ? lastResult + ", " : ""}conn:${deviceConnectType}, q:${bleQueueDepthNow()})`,
                     );
                 }
                 return r;
@@ -1541,7 +1585,8 @@ import { createBleTransport } from "./bletransport";
                                   })
                                 : { containerID: 2, containerName: "g2_bif", imageData: bytes };
                         await ble.sendImage(
-                            (p) => bridgeInstance.imageRawDataUpgrade(p),
+                            async (p) =>
+                                (await bridgeInstance.updateImageRawData(p)) === "success",
                             payload,
                             { bytes: bytes.byteLength, probe: true },
                         );
