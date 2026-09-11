@@ -87,12 +87,31 @@ def("it spots the pipeline outrunning the link", async () => {
 });
 
 def("it spots write time scaling with payload size", async () => {
-    const link = makeLink({ imageMs: 400, sizeCost: 0.12 });
+    const link = makeLink({ imageMs: 400, sizeCost: 0.4 });
     link.bytesFor = (i) => 4096 + (i % 6) * 8192;
     const s = await session({ link, frames: 48, gap: 6000 });
     const a = analyse(s);
     const hit = a.findings.find((x) => /scales with payload/.test(x));
     return { pass: !!hit, detail: hit || a.findings.join(" | ") };
+});
+
+def("it stays quiet about payload size when the difference is trivial", async () => {
+    // Caught in a real report: on a fast link, 4ms against 6ms is a 1.5x
+    // "scaling" that led the findings with "shrinking the image buys time
+    // directly". True as a ratio, worthless as advice — a scene interval is
+    // measured in seconds. A ratio without an absolute bar is noise dressed up
+    // as a recommendation, and it costs the report its first line.
+    const link = makeLink({ imageMs: 400, sizeCost: 0.004 });
+    link.bytesFor = (i) => 4096 + (i % 6) * 8192;
+    const a = analyse(await session({ link, frames: 48, gap: 6000 }));
+    const hit = a.findings.find((x) => /scales with payload/.test(x));
+    const lo = a.bySize[0], hi = a.bySize[a.bySize.length - 1];
+    return {
+        pass: !hit,
+        detail: hit
+            ? `REPORTED: ${hit.slice(0, 90)}`
+            : `quiet about a ${Math.round(lo.writeMs.p50)}ms -> ${Math.round(hi.writeMs.p50)}ms spread`,
+    };
 });
 
 def("it spots larger payloads failing more often", async () => {

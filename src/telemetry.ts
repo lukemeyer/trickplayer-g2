@@ -501,7 +501,15 @@ export function analyse(session) {
         // Both readings are drawn from the same table, and a report that
         // recommends shrinking the image one line after explaining that
         // shrinking it would not help is worse than one that says less.
-        if (!sizeIsALie && hi.writeMs.p50 > lo.writeMs.p50 * 1.3) {
+        // And a RATIO alone is not enough. On a fast link 4ms against 6ms is a
+        // 1.5x "scaling" that no wearer could perceive and no change could
+        // usefully exploit; the finding has to clear an absolute bar too, or
+        // the report spends its first line on noise. 200ms is roughly the
+        // point at which a saved write starts mattering against a scene
+        // interval measured in seconds.
+        const MATERIAL_MS = 200;
+        if (!sizeIsALie && hi.writeMs.p50 > lo.writeMs.p50 * 1.3 &&
+            hi.writeMs.p50 - lo.writeMs.p50 > MATERIAL_MS) {
             f.push(`Write time scales with payload: ${lo.kb}KB takes ${Math.round(lo.writeMs.p50)}ms, ` +
                 `${hi.kb}KB takes ${Math.round(hi.writeMs.p50)}ms. Shrinking the image buys time directly.`);
         }
