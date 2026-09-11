@@ -19,10 +19,22 @@ const KEY = "trickplayer.telemetry";
 // discards the page is exactly what needs measuring, and a fresh recorder would
 // drop it into the crack between two sessions.
 let resumeFrom = null;
-try {
-    const prev = JSON.parse(localStorage.getItem(KEY) || "null");
-    if (prev?.events?.length) resumeFrom = prev;
-} catch (e) { /* nothing recoverable */ }
+if (new URLSearchParams(location.search).has("discarded")) {
+    // Arrived here from Discard. Clear again on the way IN as well as on the
+    // way out, so a write that slipped through the unload handlers cannot
+    // resurrect the session.
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    // And strip the marker immediately. Left in the address bar it is a trap:
+    // the phone reloads this page on its own, and every one of those reloads
+    // would wipe the session that had been recorded since — which looks exactly
+    // like telemetry that never records anything.
+    history.replaceState(null, "", location.pathname);
+} else {
+    try {
+        const prev = JSON.parse(localStorage.getItem(KEY) || "null");
+        if (prev?.events?.length) resumeFrom = prev;
+    } catch (e) { /* nothing recoverable */ }
+}
 
 const recorder = createRecorder({ resume: resumeFrom });
 if (resumeFrom) {
@@ -104,7 +116,19 @@ engine.setLinkObserver((link) => {
  * worth having, and it is the one an in-memory buffer loses. Written on a timer
  * rather than per event so recording does not become the thing being measured.
  */
+/**
+ * Set by Discard, and checked here rather than only at the call sites.
+ *
+ * Discarding reloads the page, and a reload fires `pagehide` and
+ * `beforeunload` — both of which persist. So deleting the key and reloading
+ * wrote the very session being discarded straight back, and it came back
+ * looking like the button did nothing. Every write goes through this function,
+ * so one guard here closes all of them.
+ */
+let discarded = false;
+
 function persist() {
+    if (discarded) return;
     try {
         localStorage.setItem(KEY, JSON.stringify(recorder.session(device())));
     } catch (e) {
@@ -191,8 +215,11 @@ $("tlm-probe").onclick = async () => {
 };
 
 $("tlm-reset").onclick = () => {
+    discarded = true;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    location.reload();
+    // Belt and braces: if anything still writes on the way out, the reload
+    // lands on a page that will not resume from it either.
+    location.replace(location.pathname + "?discarded=1");
 };
 
 refresh();
