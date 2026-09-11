@@ -5,6 +5,7 @@ import {
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
+import { createBleTransport } from "./bletransport";
 
             // --- UI HOOKS ---
             //
@@ -48,19 +49,13 @@ import { buildSceneList, thinScenes } from "./scenes";
             let pollIntervalId = null;
 
             // --- BLE SERIAL QUEUE ---
-            // All BLE writes go through here so they never overlap on the channel.
-            let bleQueue = Promise.resolve();
-            let bleQueueDepth = 0; // pending BLE ops — a backpressure / saturation gauge
-            function bleEnqueue(fn) {
-                bleQueueDepth++;
-                bleQueue = bleQueue
-                    .then(() => fn())
-                    .catch(() => {})
-                    .finally(() => {
-                        bleQueueDepth--;
-                    });
-                return bleQueue;
-            }
+            //
+            // The link is the least reliable thing in this product, so its
+            // rules live in one testable place: src/bletransport.ts, driven
+            // against a modelled link by tools/ble-sim.mjs. Five defects that
+            // the inline version had are scenarios there now.
+            const ble = createBleTransport();
+            function bleQueueDepthNow() { return ble.depth; }
 
             // --- BLE / DEVICE DIAGNOSTICS ---
             // Tracked so every send can be annotated with the link state, which
@@ -81,7 +76,6 @@ import { buildSceneList, thinScenes } from "./scenes";
             let renderDurations = []; // last 5 image render durations (ms)
             let averageRenderDuration = 1500; // moving avg, clamped 1000–8000ms
             let lastSentImageTimestampMs = 0;
-            let lastPushedSubText = "";
 
             // --- GLASSES SUBTITLE DISPLAY CONSTRAINTS ---
             // The G2 subtitle container is 432×132 px. We merge consecutive SRT
@@ -288,9 +282,16 @@ import { buildSceneList, thinScenes } from "./scenes";
                             deviceConnectType = status?.connectType ?? "unknown";
                             deviceBatteryLevel = status?.batteryLevel ?? null;
                             deviceIsWearing = status?.isWearing ?? null;
+                            // A link that went away and came back cleared the
+                            // glasses; what we believe is on screen is no longer
+                            // true, so the next line must be sent even if it is
+                            // the same text.
+                            if (prev !== "unknown" && deviceConnectType !== prev) {
+                                ble.forgetText();
+                            }
                             if (deviceConnectType !== prev) {
                                 console.warn(
-                                    `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepth})`,
+                                    `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepthNow()})`,
                                 );
                             }
                         });
@@ -396,7 +397,6 @@ import { buildSceneList, thinScenes } from "./scenes";
                 renderDurations = [];
                 averageRenderDuration = 1500;
                 lastSentImageTimestampMs = 0;
-                lastPushedSubText = "";
             }
 
             function resizeAndPrepareImage(blob, targetWidth, targetHeight) {
@@ -806,137 +806,93 @@ import { buildSceneList, thinScenes } from "./scenes";
                     GLASSES_IMAGE_HEIGHT,
                 );
 
-                return new Promise((resolve) => {
-                    bleEnqueue(async () => {
-                        const payload =
-                            typeof ImageRawDataUpdate !== "undefined"
-                                ? new ImageRawDataUpdate({
-                                      containerID: 2,
-                                      containerName: "g2_bif",
-                                      imageData: preparedBytes,
-                                  })
-                                : {
-                                      containerID: 2,
-                                      containerName: "g2_bif",
-                                      imageData: preparedBytes,
-                                  };
+                const payload =
+                    typeof ImageRawDataUpdate !== "undefined"
+                        ? new ImageRawDataUpdate({
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          })
+                        : {
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          };
+                const payloadKB = (preparedBytes.byteLength / 1024).toFixed(1);
 
-                        const payloadKB = (
-                            preparedBytes.byteLength / 1024
-                        ).toFixed(1);
+                // Queue, retry, supersession and the failure bookkeeping all
+                // live in the transport now. What is left here is the part that
+                // is about THIS app: what to log, and how the result feeds the
+                // pacing average.
+                const r = await ble.sendImage(
+                    (p) => bridgeInstance.imageRawDataUpgrade(p),
+                    payload,
+                    { tsMs: frame.tsMs },
+                );
 
-                        // The BLE image transfer fails intermittently (the link
-                        // is flaky). Retry the same frame a few times within this
-                        // queue slot so a transient failure recovers in ~1s rather
-                        // than leaving the image frozen until the next scene.
-                        let result = "sendFailed";
-                        let duration = 0;
-                        const attemptResults = [];
-                        const sendStart = performance.now();
-                        for (
-                            let attempt = 1;
-                            attempt <= IMAGE_SEND_MAX_ATTEMPTS;
-                            attempt++
-                        ) {
-                            // Measure only the actual BLE render, not time spent
-                            // waiting behind other writes in the serial queue.
-                            const start = performance.now();
-                            result = await bridgeInstance.updateImageRawData(payload);
-                            duration = performance.now() - start;
-                            attemptResults.push(`${result}/${duration.toFixed(0)}ms`);
+                if (r.reason === "superseded") {
+                    console.log(
+                        `[Scene Engine] Image ${frame.tsMs / 1000}s: skipped — a newer frame is queued`,
+                    );
+                    return 0;
+                }
 
-                            if (result === "success") break;
-                            // Cap total retry time. Each failed attempt still takes
-                            // ~2-3s, so without this a bad frame blocks the serial
-                            // queue (and the next scene's subtitles) for ~10s.
-                            if (
-                                performance.now() - sendStart >=
-                                IMAGE_SEND_RETRY_BUDGET_MS
-                            ) {
-                                break;
-                            }
-                            if (attempt < IMAGE_SEND_MAX_ATTEMPTS) {
-                                await new Promise((r) =>
-                                    setTimeout(r, IMAGE_SEND_RETRY_DELAY_MS),
-                                );
-                            }
-                        }
-
-                        // Only successful renders inform the scene-size average;
-                        // failed-attempt durations aren't real render times. Cap
-                        // any single outlier (e.g. a send that resolved slow
-                        // while the BLE link was congested) so it can't drag
-                        // the pacing average — and therefore scene size — up
-                        // for the next several iterations.
-                        if (result === "success") {
-                            renderDurations.push(
-                                Math.min(duration, RENDER_DURATION_CAP_MS),
-                            );
-                            if (renderDurations.length > 5) renderDurations.shift();
-                            averageRenderDuration = getSceneDuration();
-                            lastSentImageTimestampMs = frame.tsMs;
-                            imageSuccessCount++;
-
-                            // Report how long the image had been frozen.
-                            if (consecutiveImageFailures > 0) {
-                                const frozenMs = lastImageSuccessWall
-                                    ? performance.now() - lastImageSuccessWall
-                                    : 0;
-                                console.warn(
-                                    `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
-                                );
-                            }
-                            consecutiveImageFailures = 0;
-                            lastImageSuccessWall = performance.now();
-                        } else {
-                            consecutiveImageFailures++;
-                            imageFailureCount++;
-                        }
-
-                        const attemptsNote =
-                            attemptResults.length > 1
-                                ? ` attempts[${attemptResults.join(", ")}]`
-                                : "";
-                        const stuckNote =
-                            consecutiveImageFailures > 0
-                                ? ` STUCK x${consecutiveImageFailures}`
-                                : "";
-                        console.log(
-                            `[Scene Engine] Image ${frame.tsMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                if (r.ok) {
+                    renderDurations.push(Math.min(r.duration, RENDER_DURATION_CAP_MS));
+                    if (renderDurations.length > 5) renderDurations.shift();
+                    averageRenderDuration = getSceneDuration();
+                    lastSentImageTimestampMs = frame.tsMs;
+                    imageSuccessCount++;
+                    if (consecutiveImageFailures > 0) {
+                        const frozenMs = lastImageSuccessWall
+                            ? performance.now() - lastImageSuccessWall
+                            : 0;
+                        console.warn(
+                            `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
                         );
+                    }
+                    consecutiveImageFailures = 0;
+                    lastImageSuccessWall = performance.now();
+                } else {
+                    consecutiveImageFailures++;
+                    imageFailureCount++;
+                }
 
-                        resolve(duration);
-                    });
-                });
+                const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
+                const stuckNote = consecutiveImageFailures > 0 ? ` STUCK x${consecutiveImageFailures}` : "";
+                console.log(
+                    `[Scene Engine] Image ${frame.tsMs / 1000}s: ${r.ok ? "success" : r.reason} ` +
+                    `(${(r.duration ?? 0).toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, ` +
+                    `q:${bleQueueDepthNow()}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                );
+                return r.ok ? r.duration : 0;
             }
 
             async function sendSubtitleToGlasses(text) {
                 if (!bridgeInstance) return;
-                const displayText = text || " ";
-                if (displayText === lastPushedSubText) return;
 
-                lastPushedSubText = displayText;
-                return new Promise((resolve) => {
-                    bleEnqueue(async () => {
-                        // textContainerUpgrade resolves to a boolean. Logging text
-                        // failures shows whether a bad patch is the whole BLE link
-                        // or just the image channel.
-                        const ok = await bridgeInstance.textContainerUpgrade({
-                            containerID: 1,
-                            containerName: "g2_subs",
-                            contentOffset: 0,
-                            contentLength: 0,
-                            content: displayText,
-                        });
-                        if (ok === false) {
-                            subtitleFailureCount++;
-                            console.warn(
-                                `[Scene Engine] Subtitle send failed (conn:${deviceConnectType}, q:${bleQueueDepth})`,
-                            );
-                        }
-                        resolve();
-                    });
-                });
+                // De-duplication lives in the transport, and it only records a
+                // line once the write SUCCEEDED. Recording it here, before the
+                // send, is what used to leave the glasses showing the previous
+                // line for ever after a single rejected write.
+                const r = await ble.sendText(
+                    (content) => bridgeInstance.textContainerUpgrade({
+                        containerID: 1,
+                        containerName: "g2_subs",
+                        contentOffset: 0,
+                        contentLength: 0,
+                        content,
+                    }),
+                    text,
+                );
+                if (!r.ok && r.reason !== "superseded") {
+                    subtitleFailureCount++;
+                    console.warn(
+                        `[Scene Engine] Subtitle send failed (${r.reason}, ` +
+                        `conn:${deviceConnectType}, q:${bleQueueDepthNow()})`,
+                    );
+                }
+                return r;
             }
 
             async function runScenePipeline() {
@@ -1142,6 +1098,11 @@ import { buildSceneList, thinScenes } from "./scenes";
                 if (sceneAbortController) {
                     sceneAbortController.abort();
                 }
+                // Anything already handed to the link is no longer wanted. The
+                // pipeline stopping and the QUEUE stopping are different
+                // things, and only aborting the first is why a pause used to be
+                // followed by several seconds of stale frames still arriving.
+                ble.abandonQueued();
             }
 
             // Periodic one-line health summary while playing, so link state and
@@ -1157,7 +1118,7 @@ import { buildSceneList, thinScenes } from "./scenes";
                         ? ((performance.now() - lastImageSuccessWall) / 1000).toFixed(1)
                         : "?";
                     console.log(
-                        `[Stats] pos:${(currentTimeMs / 1000).toFixed(0)}s conn:${deviceConnectType} battery:${deviceBatteryLevel ?? "?"}% wearing:${deviceIsWearing} queue:${bleQueueDepth} img:${imageSuccessCount}ok/${imageFailureCount}fail(${failPct}%) subFail:${subtitleFailureCount} lastGoodImg:${sinceGood}s ago${consecutiveImageFailures > 0 ? ` FROZEN x${consecutiveImageFailures}` : ""}`,
+                        `[Stats] pos:${(currentTimeMs / 1000).toFixed(0)}s conn:${deviceConnectType} battery:${deviceBatteryLevel ?? "?"}% wearing:${deviceIsWearing} queue:${bleQueueDepthNow()} img:${imageSuccessCount}ok/${imageFailureCount}fail(${failPct}%) subFail:${subtitleFailureCount} lastGoodImg:${sinceGood}s ago${consecutiveImageFailures > 0 ? ` FROZEN x${consecutiveImageFailures}` : ""}`,
                     );
                 }, 10000);
             }
