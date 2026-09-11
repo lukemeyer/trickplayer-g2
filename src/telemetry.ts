@@ -349,6 +349,18 @@ export function analyse(session) {
             `(${Math.round(out.imageWriteMs.p50)}ms): the pipeline is outrunning the link. ` +
             `Pace scenes off the measured write time rather than sending sooner.`);
     }
+    // Preparing a frame is supposed to be cheap next to sending it. When it is
+    // not, it is not a cost hiding beside the write — it BLOCKS the pipeline,
+    // because the next frame cannot start until the decode finishes.
+    if (out.prepareMs.n >= 5 && out.prepareMs.p90 > 1000 &&
+        out.prepareMs.p90 > 0.5 * Math.max(1, out.imageWriteMs.p50)) {
+        f.push(`Preparing a frame reached ${Math.round(out.prepareMs.p90)}ms at p90 ` +
+            `(median ${Math.round(out.prepareMs.p50)}ms) against a ` +
+            `${Math.round(out.imageWriteMs.p50)}ms write. Decode and dither run on the main ` +
+            `thread, so a tail like that stalls the pipeline outright — worth chasing before ` +
+            `the link.`);
+    }
+
     const c = out.contention;
     if (c && c.contended.n >= 3 && c.clear.n >= 3) {
         const factor = c.contended.p50 / Math.max(1, c.clear.p50);

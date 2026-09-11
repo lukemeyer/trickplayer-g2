@@ -256,6 +256,24 @@ def("it measures contention, and stays quiet when there is none", async () => {
     };
 });
 
+def("it flags a decode slow enough to block the pipeline", async () => {
+    // From a real session: prepare p90 of 4040ms against a ~1650ms write. That
+    // is not a cost beside the write, it is the pipeline stopped.
+    const rec = createRecorder();
+    const put = (kind, startedAt, durationMs, extra = {}) => rec.event({
+        id: 0, kind, ok: true, enqueuedAt: startedAt, startedAt,
+        endedAt: startedAt + durationMs, queuedMs: 0, durationMs,
+        depthAtEnqueue: 1, ...extra,
+    });
+    for (let i = 0; i < 10; i++) {
+        put("image", i * 6000, 1650, { bytes: 14000 });
+        put("prepare", i * 6000 - 200, i === 3 ? 4040 : 52, { frameIndex: i });
+    }
+    const a = analyse(rec.session());
+    const hit = a.findings.find((x) => /stalls the pipeline outright/.test(x));
+    return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
+});
+
 def("the report renders and carries its findings", async () => {
     const s = await session({ link: makeLink({ imageMs: 3000 }), frames: 20, gap: 1000 });
     const text = formatReport(s);

@@ -264,6 +264,18 @@ async function autoPlay() {
  * on a desk being watched over adb. Everything the button does, without one.
  */
 if (new URLSearchParams(location.search).has("play")) setTimeout(autoPlay, 2500);
+
+/**
+ * `?stuck=1` reproduces the measured freeze: the host pauses playback and never
+ * sends us back. What should happen is the watchdog noticing that the page is
+ * visible while playback is wanted, and resuming without being told.
+ */
+if (new URLSearchParams(location.search).has("stuck")) {
+    setTimeout(() => {
+        recorder.mark("injected-host-pause");
+        engine.simulateHostPause();
+    }, 20000);
+}
 if (new URLSearchParams(location.search).has("probe")) {
     setTimeout(() => $("tlm-probe").click(), 2500);
     setTimeout(() => $("tlm-report").click(), 90_000);

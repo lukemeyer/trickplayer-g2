@@ -1375,9 +1375,15 @@ import { createBleTransport } from "./bletransport";
                 noteLifecycle("app-paused", { reason: "background" });
             }
 
-            function resumeFromBackground() {
+            function resumeFromBackground(reason = "foreground") {
                 if (!backgroundedWhilePlaying) return;
                 backgroundedWhilePlaying = false;
+                // What is on the glasses right now is whatever was there when
+                // we stopped, and the transport will skip re-sending identical
+                // text. After an outage that dedupe is wrong: the wearer has
+                // been staring at a stale line and needs it redrawn, even
+                // though it has not changed.
+                ble.forgetText();
                 if (!bifs || bifs.length === 0) return;
                 isPlaying = true;
                 playBtn.innerText = "Pause";
@@ -1389,10 +1395,30 @@ import { createBleTransport } from "./bletransport";
                 console.log(
                     "[Lifecycle] Foregrounded — refreshing and resuming pipeline",
                 );
-                noteLifecycle("app-resumed", { reason: "foreground" });
+                noteLifecycle("app-resumed", { reason });
                 sendOneShotUpdate().catch(() => {});
                 runScenePipeline();
             }
+
+            /**
+             * Never stay paused while the page is visible.
+             *
+             * The host is expected to send FOREGROUND_ENTER after its
+             * FOREGROUND_EXIT, and a measured session shows it does not always:
+             * the app paused at 47s and sat there for 150s with the link
+             * connected the whole time, because the only thing that could have
+             * restarted it was an event that never arrived.
+             *
+             * Waiting for a message that may not come is not a resume path. If
+             * we are paused, the page is visible, and playback was wanted, then
+             * resume — whatever did or did not fire.
+             */
+            setInterval(() => {
+                if (backgroundedWhilePlaying && !document.hidden) {
+                    console.warn("[Lifecycle] Still paused while visible — resuming");
+                    resumeFromBackground("watchdog");
+                }
+            }, 5000);
 
             // Defense in depth: the glasses host is expected to fire
             // FOREGROUND_ENTER/EXIT_EVENT (below), but the generic Page
@@ -1418,7 +1444,7 @@ import { createBleTransport } from "./bletransport";
                 }
                 noteLifecycle("phone-screen-on", {});
                 // Still a resume path, for when something else did pause us.
-                resumeFromBackground();
+                resumeFromBackground("phone-screen-on");
             });
 
             // Event routing for Even Hub.
@@ -1591,6 +1617,19 @@ import { createBleTransport } from "./bletransport";
              * and the decode/dither, timed on the same clock as the writes, so
              * the overlap between them stops being a hypothesis.
              */
+            /**
+             * Reproduce the host pausing us and never sending us back.
+             *
+             * The measured freeze was FOREGROUND_EXIT with no matching ENTER,
+             * which is a host event and cannot be injected from outside. This
+             * is how the recovery path gets exercised without waiting for a
+             * pair of glasses to misbehave again — the telemetry page drives it
+             * behind ?stuck=1.
+             */
+            export function simulateHostPause() {
+                pauseForBackground();
+            }
+
             let workObserver = null;
             export function setWorkObserver(fn) { workObserver = fn; }
 
@@ -1785,6 +1824,12 @@ import { createBleTransport } from "./bletransport";
             }
 
             export function seekTo(ms) {
+                // Touching the transport at all is a statement that the wearer
+                // is here and wants it running. Seeking used to fire a single
+                // frame and leave playback stopped, which is why a frozen
+                // session could be nudged into sending images one drag at a
+                // time and never actually resume.
+                if (backgroundedWhilePlaying) resumeFromBackground("seek");
                 const wasPlaying = isPlaying;
                 if (wasPlaying) stopScenePipeline();
                 currentTimeMs = Number(ms);
