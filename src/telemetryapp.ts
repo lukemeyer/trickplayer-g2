@@ -301,6 +301,18 @@ if (new URLSearchParams(location.search).has("stuck")) {
         engine.simulateHostPause();
     }, 20000);
 }
+/**
+ * `?notext=1` reproduces the other half of the reported freeze: images come
+ * back and text does not. Text writes start failing and keep failing until
+ * something re-declares the containers — which is what a dropped link leaves
+ * behind, and what nothing used to do.
+ */
+if (new URLSearchParams(location.search).has("notext")) {
+    setTimeout(() => {
+        recorder.mark("injected-container-loss");
+        engine.simulateContainerLoss();
+    }, 25000);
+}
 if (new URLSearchParams(location.search).has("probe")) {
     setTimeout(() => $("tlm-probe").click(), 2500);
     setTimeout(() => $("tlm-report").click(), 90_000);

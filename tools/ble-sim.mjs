@@ -66,18 +66,28 @@ function makeLink(opts = {}) {
     const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
     let writes = 0;
     let connected = true;
+    // The glasses hold two containers, declared once at startup. A dropped link
+    // takes them with it, and nothing about a text write to a container that is
+    // no longer there distinguishes itself from a text write to a busy link:
+    // both come back false. That is the whole reason the reported failure was
+    // invisible — "images started sending again, but no text".
+    let container = true;
     return {
         get connected() { return connected; },
         get writes() { return writes; },
+        get container() { return container; },
         setBackground(on) { cfg.background = on; },
         disconnect() { connected = false; },
         reconnect() { connected = true; },
+        loseContainer() { container = false; },
+        declareContainers() { container = true; },
         async write(kind) {
             writes++;
             if (writes >= cfg.disconnectAfter) connected = false;
             const base = kind === "image" ? cfg.imageMs : cfg.textMs;
             await wait(cfg.background ? base * cfg.backgroundFactor : base);
             if (!connected) return false;
+            if (kind === "text" && !container) return false;
             if (rand() < cfg.throwRate) throw new Error("BLE write threw");
             return rand() >= cfg.failRate;
         },
@@ -228,6 +238,87 @@ def("reconnecting re-sends the text, because the screen was cleared", async ({ m
     t.sendText(() => link.write("text"), "on screen");
     await settle();
     return { pass: link.writes > before, detail: `${link.writes - before} write(s) after reconnect` };
+});
+
+/**
+ * The app-side rule from `main.ts`: after two text failures in a row, with
+ * images still landing, re-declare the containers.
+ *
+ * `repair: false` is the shipped behaviour — containers were declared exactly
+ * once, at bridge init — so the two cases below can run the same scenario
+ * against both and the difference is a measurement rather than a claim. The
+ * repair lives in the app, not the transport, which is why it is modelled here
+ * rather than being read out of `createBleTransport`.
+ *
+ * The image condition is the load-bearing half. Repeated text failures are also
+ * exactly what a struggling link looks like, and adding a container write to a
+ * queue that is already failing makes a bad session worse.
+ */
+function makeSubtitleSender(t, link, { repair = true } = {}) {
+    let consecutiveTextFailures = 0;
+    let imagesHealthy = true;
+    let repairs = 0;
+    return {
+        get repairs() { return repairs; },
+        imagesFailing(v) { imagesHealthy = !v; },
+        async send(text) {
+            const r = await t.sendText(() => link.write("text"), text);
+            if (r.ok) { consecutiveTextFailures = 0; return r; }
+            consecutiveTextFailures++;
+            if (repair && consecutiveTextFailures >= 2 && imagesHealthy) {
+                repairs++;
+                link.declareContainers();
+                t.forgetText();     // nothing we "sent" was ever drawn
+                consecutiveTextFailures = 0;
+            }
+            return r;
+        },
+    };
+}
+
+/** The reported session: link drops, comes back, containers do not. */
+async function afterAContainerLoss(t, link, opts) {
+    const subs = makeSubtitleSender(t, link, opts);
+    await subs.send("before the drop");
+    await settle();
+    link.disconnect(); link.reconnect(); link.loseContainer();
+
+    let landed = 0;
+    for (const line of ["line one", "line two", "line three", "line four"]) {
+        const r = await subs.send(line);
+        await settle();
+        if (r.ok) landed++;
+    }
+    return { landed, repairs: subs.repairs };
+}
+
+def("a lost container is repaired, so text comes back with the images", async ({ make }) => {
+    // Images resume on their own after a reconnect; text does not, because the
+    // container it addresses is gone. Both runs see the identical link.
+    const without = await afterAContainerLoss(make().t, make().link, { repair: false });
+    const a = make();
+    const withRepair = await afterAContainerLoss(a.t, a.link, { repair: true });
+
+    return {
+        pass: without.landed === 0 && withRepair.landed >= 2 && withRepair.repairs === 1,
+        detail: `declared once: ${without.landed}/4 lines — text is dead for the rest of the session; ` +
+                `re-declared on evidence: ${withRepair.landed}/4 after ${withRepair.repairs} repair(s)`,
+    };
+});
+
+def("a bad link is not mistaken for a lost container", async ({ make }) => {
+    // Same symptom, different cause: every write fails. Re-declaring containers
+    // here fixes nothing and costs a write on a queue that is already losing.
+    const { t, link } = make({ failRate: 1 });
+    const subs = makeSubtitleSender(t, link);
+    subs.imagesFailing(true);
+    for (const line of ["a", "b", "c", "d", "e"]) { await subs.send(line); await settle(); }
+    return {
+        pass: subs.repairs === 0,
+        detail: subs.repairs === 0
+            ? "no repair attempted while images were failing too"
+            : `${subs.repairs} pointless container write(s) onto a failing link`,
+    };
 });
 
 def("a long session holds its failure rate without drifting", async ({ make }) => {

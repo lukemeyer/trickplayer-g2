@@ -321,6 +321,18 @@ import { toGlassesGrey } from "./pixels";
                             // the same text.
                             if (prev !== "unknown" && deviceConnectType !== prev) {
                                 ble.forgetText();
+                                // A link that moved is the most likely moment
+                                // for the containers to have gone with it, so
+                                // drop the repair cooldown: the safety net
+                                // should fire on the next couple of failures
+                                // rather than waiting out a window sized for a
+                                // steady link. The repair is still evidence-led
+                                // — nothing is re-declared unless text actually
+                                // starts failing while images land — because
+                                // there is no reason to trust that every way of
+                                // losing a container announces itself here.
+                                lastContainerRepairAt = 0;
+                                consecutiveSubtitleFailures = 0;
                             }
                             if (linkObserver) {
                                 linkObserver({
@@ -358,12 +370,7 @@ import { toGlassesGrey } from "./pixels";
                         containerName: "g2_bif",
                     };
 
-                    const result =
-                        await bridgeInstance.createStartUpPageContainer({
-                            containerTotalNum: 2,
-                            textObject: [glassesSubtitleContainer],
-                            imageObject: [glassesImageContainer],
-                        });
+                    const result = await createGlassesContainers();
 
                     if (result === 0) {
                         setStatus("G2 Glass Engine Connected via BLE!", "active");
@@ -837,6 +844,84 @@ import { toGlassesGrey } from "./pixels";
                 return r.ok ? r.duration : 0;
             }
 
+            /**
+             * Declare the two containers the glasses draw into.
+             *
+             * Deliberately callable more than once. It used to run exactly
+             * once, at bridge init, which was right up until the link dropped:
+             * a disconnect takes the containers with it, and the image path
+             * re-establishes itself while `textContainerUpgrade` keeps
+             * addressing a container ID that is no longer there. That is
+             * precisely the reported symptom — "images started sending again,
+             * but no text" — and it is silent, because a text write that names
+             * a dead container fails the same way a busy link does.
+             */
+            async function createGlassesContainers() {
+                containerLossInjected = false;
+                return await bridgeInstance.createStartUpPageContainer({
+                    containerTotalNum: 2,
+                    textObject: [glassesSubtitleContainer],
+                    imageObject: [glassesImageContainer],
+                });
+            }
+
+            let lastContainerRepairAt = 0;
+            let consecutiveSubtitleFailures = 0;
+            const CONTAINER_REPAIR_AFTER = 2;      // failures in a row
+            const CONTAINER_REPAIR_COOLDOWN_MS = 15000;
+
+            /**
+             * Re-declare the containers when the evidence says text is dead and
+             * the link is not.
+             *
+             * The trigger is deliberately not "we saw a disconnect event": the
+             * session that produced this had a genuine hardware disconnect AND
+             * an unrelated Bluetooth device dropping, and there is no reason to
+             * trust that every way of losing a container announces itself.
+             * Repeated text failures while images keep landing is the symptom
+             * itself, and it is available without knowing the cause.
+             */
+            async function repairContainersIfTextIsDead() {
+                if (!bridgeInstance) return false;
+                if (consecutiveSubtitleFailures < CONTAINER_REPAIR_AFTER) return false;
+                const now = Date.now();
+                if (now - lastContainerRepairAt < CONTAINER_REPAIR_COOLDOWN_MS) return false;
+                // If images are failing too, this is the link, not a container,
+                // and re-declaring them adds a write to a queue that is already
+                // struggling.
+                if (consecutiveImageFailures > 0) return false;
+
+                lastContainerRepairAt = now;
+                try {
+                    const result = await createGlassesContainers();
+                    console.warn(
+                        `[Recovery] Text failed ${consecutiveSubtitleFailures}x while images ` +
+                        `kept landing — re-declared the containers (${result === 0 ? "ok" : `code ${result}`})`,
+                    );
+                    noteLifecycle("containers-repaired", {
+                        result, afterFailures: consecutiveSubtitleFailures,
+                    });
+                    // Whatever the glasses are showing now is not ours, and the
+                    // line we most recently "sent" was never drawn.
+                    ble.forgetText();
+                    return result === 0;
+                } catch (e) {
+                    console.error(`[Recovery] Container re-declaration threw: ${e?.message || e}`);
+                    return false;
+                }
+            }
+
+            /**
+             * Reproduce the failure above without unplugging anything: text
+             * writes fail until the containers are re-declared, which is what a
+             * lost container does. Driven by the telemetry page's `?notext=1`.
+             */
+            let containerLossInjected = false;
+            export function simulateContainerLoss() {
+                containerLossInjected = true;
+                noteLifecycle("injected-container-loss");
+            }
+
             async function sendSubtitleToGlasses(text) {
                 if (!bridgeInstance) return;
 
@@ -844,22 +929,42 @@ import { toGlassesGrey } from "./pixels";
                 // line once the write SUCCEEDED. Recording it here, before the
                 // send, is what used to leave the glasses showing the previous
                 // line for ever after a single rejected write.
+                //
+                // `textUpgradeResult` is local, and has to be: the image path
+                // has a variable of its own with almost the same name, and this
+                // function used to read THAT one. It is a `let` inside
+                // `sendImageToGlasses`, so every subtitle failure threw a
+                // ReferenceError out of the diagnostic that was supposed to
+                // explain it — swallowed by the caller and logged as
+                // `Subtitle send failed: {}`, which is how a text channel can
+                // die for a whole session without ever saying why.
+                let textUpgradeResult;
                 const r = await ble.sendText(
-                    (content) => bridgeInstance.textContainerUpgrade({
-                        containerID: 1,
-                        containerName: "g2_subs",
-                        contentOffset: 0,
-                        contentLength: 0,
-                        content,
-                    }),
+                    async (content) => {
+                        if (containerLossInjected) return false;
+                        textUpgradeResult = await bridgeInstance.textContainerUpgrade({
+                            containerID: 1,
+                            containerName: "g2_subs",
+                            contentOffset: 0,
+                            contentLength: 0,
+                            content,
+                        });
+                        return textUpgradeResult;
+                    },
                     text,
                 );
                 if (!r.ok && r.reason !== "superseded") {
                     subtitleFailureCount++;
+                    consecutiveSubtitleFailures++;
                     console.warn(
-                        `[Scene Engine] Subtitle send failed (${r.reason}, ` +
-                        `${lastResult && lastResult !== "success" ? lastResult + ", " : ""}conn:${deviceConnectType}, q:${bleQueueDepthNow()})`,
+                        `[Scene Engine] Subtitle send failed (${r.reason}` +
+                        `${r.error ? `: ${r.error}` : ""}, bridge:${String(textUpgradeResult)}, ` +
+                        `conn:${deviceConnectType}, q:${bleQueueDepthNow()}, ` +
+                        `${consecutiveSubtitleFailures} in a row)`,
                     );
+                    await repairContainersIfTextIsDead();
+                } else if (r.ok) {
+                    consecutiveSubtitleFailures = 0;
                 }
                 return r;
             }
