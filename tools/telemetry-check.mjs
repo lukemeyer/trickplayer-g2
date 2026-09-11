@@ -274,6 +274,76 @@ def("it flags a decode slow enough to block the pipeline", async () => {
     return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
 });
 
+def("it names which phase of prepare is the expensive one", async () => {
+    // The point of splitting prepare into decode/pixels/encode: a 4-second
+    // prepare used to produce the advice "chase it", which is not an address.
+    // Two sessions with the SAME total prepare cost, differing only in which
+    // phase owns it, must produce two different instructions.
+    const build = (owner) => {
+        const rec = createRecorder();
+        const put = (kind, startedAt, durationMs, extra = {}) => rec.event({
+            id: 0, kind, ok: true, enqueuedAt: startedAt, startedAt,
+            endedAt: startedAt + durationMs, queuedMs: 0, durationMs,
+            depthAtEnqueue: 1, ...extra,
+        });
+        for (let i = 0; i < 10; i++) {
+            put("image", i * 6000, 1650, { bytes: 14000 });
+            const total = i === 3 ? 4040 : 52;
+            put("prepare", i * 6000 - 200, total, { frameIndex: i });
+            // The owner takes 90% of it; the other two split the rest.
+            const big = Math.round(total * 0.9), small = Math.round(total * 0.05);
+            let t = i * 6000 - 200;
+            for (const name of ["decode", "pixels", "encode"]) {
+                const d = name === owner ? big : small;
+                put(name, t, d, { frameIndex: i });
+                t += d;
+            }
+        }
+        return analyse(rec.session());
+    };
+
+    const byDecode = build("decode");
+    const byEncode = build("encode");
+    const byPixels = build("pixels");
+    const says = (a, re) => a.findings.some((x) => re.test(x));
+
+    const ok =
+        says(byDecode, /decode is the expensive phase/) &&
+        says(byEncode, /encode is the expensive phase/) &&
+        says(byPixels, /pixels is the expensive phase/) &&
+        // and each names a DIFFERENT remedy, which is the whole point
+        says(byDecode, /createImageBitmap/) &&
+        says(byEncode, /PNG handed to the bridge/) &&
+        says(byPixels, /main thread being taken away/) &&
+        byDecode.phases.decode.p90 > byDecode.phases.encode.p90 &&
+        byEncode.phases.encode.p90 > byEncode.phases.decode.p90;
+
+    const line = byDecode.findings.find((x) => /expensive phase/.test(x)) || "MISSED";
+    return { pass: ok, detail: line.slice(0, 140) };
+});
+
+def("the report shows the phase split under prepare", async () => {
+    const rec = createRecorder();
+    const put = (kind, startedAt, durationMs, extra = {}) => rec.event({
+        id: 0, kind, ok: true, enqueuedAt: startedAt, startedAt,
+        endedAt: startedAt + durationMs, queuedMs: 0, durationMs,
+        depthAtEnqueue: 1, ...extra,
+    });
+    for (let i = 0; i < 8; i++) {
+        put("image", i * 6000, 1400, { bytes: 14000 });
+        put("prepare", i * 6000 - 300, 120, { frameIndex: i });
+        put("decode", i * 6000 - 300, 90, { frameIndex: i });
+        put("pixels", i * 6000 - 210, 1, { frameIndex: i });
+        put("encode", i * 6000 - 209, 29, { frameIndex: i });
+    }
+    const text = formatReport(rec.session());
+    const has = (n) => new RegExp(`^\\s+${n}\\s+n=8`, "m").test(text);
+    return {
+        pass: has("decode") && has("pixels") && has("encode"),
+        detail: text.split("\n").filter((l) => /decode|pixels|encode/.test(l)).join(" / ").slice(0, 140),
+    };
+});
+
 def("the report renders and carries its findings", async () => {
     const s = await session({ link: makeLink({ imageMs: 3000 }), frames: 20, gap: 1000 });
     const text = formatReport(s);

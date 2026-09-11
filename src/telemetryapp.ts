@@ -222,6 +222,31 @@ $("tlm-probe").onclick = async () => {
     }
 };
 
+$("tlm-prep").onclick = async () => {
+    // Deliberately usable with nothing connected. The prepare tail was the
+    // largest unexplained number in the last hardware session, and needing a
+    // paired link to measure it made it the hardest one to reproduce.
+    const btn = $("tlm-prep");
+    btn.disabled = true;
+    $("tlm-hint").textContent = "Preparing synthetic frames…";
+    try {
+        recorder.mark("prep-probe-start");
+        const r = await engine.probePrepare();
+        recorder.mark("prep-probe-end");
+        $("tlm-hint").textContent =
+            `${r.runs} frames: p50 ${r.p50}ms, p90 ${r.p90}ms, max ${r.max}ms ` +
+            `(${(r.sourceBytes / 1024).toFixed(1)}KB in, ${(r.outBytes / 1024).toFixed(1)}KB out). ` +
+            `Decoders ${r.decodeMaxDelta === null ? "n/a" : r.decodeMaxDelta === 0
+                ? "agree exactly" : `DIFFER by up to ${r.decodeMaxDelta}/255`}. ` +
+            `Generate the report for the per-phase split.`;
+    } catch (e) {
+        $("tlm-hint").textContent = `Prepare probe failed: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+        refresh();
+    }
+};
+
 $("tlm-reset").onclick = () => {
     discarded = true;
     try { localStorage.removeItem(KEY); } catch (e) {}
@@ -279,6 +304,24 @@ if (new URLSearchParams(location.search).has("stuck")) {
 if (new URLSearchParams(location.search).has("probe")) {
     setTimeout(() => $("tlm-probe").click(), 2500);
     setTimeout(() => $("tlm-report").click(), 90_000);
+}
+
+/**
+ * `?prep=1` times the prepare path and prints the phase split to the console.
+ *
+ * Needs no link, so unlike every other flag here this one is fully meaningful
+ * in the simulator — it is how the image path gets exercised end to end when
+ * there is no account to authenticate against.
+ */
+if (new URLSearchParams(location.search).has("prep")) {
+    setTimeout(async () => {
+        $("tlm-prep").click();
+        // The click is async; wait for it to release the button again.
+        while ($("tlm-prep").disabled) await new Promise((r) => setTimeout(r, 100));
+        const a = analyse(recorder.session(device()));
+        console.log("[prep-probe]", $("tlm-hint").textContent);
+        console.log("[prep-phases]", JSON.stringify(a.phases));
+    }, 2500);
 }
 
 // Last, so the recorder and the link observer are attached before the app can

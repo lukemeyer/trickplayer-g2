@@ -6,6 +6,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
+import { toGlassesGrey } from "./pixels";
 
             // --- UI HOOKS ---
             //
@@ -449,197 +450,98 @@ import { createBleTransport } from "./bletransport";
                 lastSentImageTimestampMs = 0;
             }
 
-            function resizeAndPrepareImage(blob, targetWidth, targetHeight) {
+            // A frame is prepared in three separable phases: decode the
+            // provider's JPEG, run the pixel arithmetic, encode a PNG for the
+            // bridge. `prepare` used to time all three as one number, and that
+            // number reached 4040ms at p90 on hardware — larger than the BLE
+            // write it was supposed to be hiding behind.
+            //
+            // One number cannot be acted on. `tools/pixel-bench.mjs` measures
+            // the middle phase at 0.52ms median for this frame size, so the
+            // arithmetic was never the cost; it is decode or encode or the main
+            // thread being busy elsewhere, and those have different fixes. Each
+            // phase is therefore timed separately (F-046).
+            //
+            // Two changes come from the same measurement:
+            //   - `createImageBitmap` where it exists, instead of an <img> and
+            //     an object URL. It decodes off the main thread, so a slow
+            //     decode stops blocking the timers that drive the pipeline.
+            //   - one canvas for the whole session instead of one per frame.
+            //     At a scene every few seconds that is a lot of allocation for
+            //     a surface whose size never changes.
+            let prepCanvas = null;
+            let prepCtx = null;
+
+            function prepSurface(w, h) {
+                if (!prepCanvas) {
+                    prepCanvas = document.createElement("canvas");
+                    prepCtx = prepCanvas.getContext("2d", { willReadFrequently: true });
+                }
+                if (prepCanvas.width !== w || prepCanvas.height !== h) {
+                    prepCanvas.width = w;
+                    prepCanvas.height = h;
+                }
+                return { canvas: prepCanvas, ctx: prepCtx };
+            }
+
+            /** Decode to something drawable, preferring the off-thread path. */
+            async function decodeFrame(blob) {
+                if (typeof createImageBitmap === "function") {
+                    // `resize` options are not universally honoured, so the
+                    // scaling stays in drawImage where it always works.
+                    return await createImageBitmap(blob);
+                }
+                const objectUrl = URL.createObjectURL(blob);
+                try {
+                    return await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => resolve(img);
+                        img.onerror = (err) => reject(err);
+                        img.src = objectUrl;
+                    });
+                } finally {
+                    URL.revokeObjectURL(objectUrl);
+                }
+            }
+
+            function encodeFrame(canvas) {
                 return new Promise((resolve, reject) => {
-                    const img = new Image();
-                    const objectUrl = URL.createObjectURL(blob);
-                    img.onload = () => {
-                        URL.revokeObjectURL(objectUrl);
-                        try {
-                            const canvas = document.createElement("canvas");
-                            canvas.width = targetWidth;
-                            canvas.height = targetHeight;
-                            const ctx = canvas.getContext("2d");
-                            ctx.clearRect(0, 0, targetWidth, targetHeight);
-                            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-
-                            const imgData = ctx.getImageData(
-                                0,
-                                0,
-                                targetWidth,
-                                targetHeight,
-                            );
-                            const data = imgData.data;
-                            const w = targetWidth;
-                            const h = targetHeight;
-
-                            const gray = new Float32Array(w * h);
-                            // Precalculate contrast factor
-                            const contrastFactor =
-                                (259 * (contrastValue + 255)) /
-                                (255 * (259 - contrastValue));
-
-                            for (let i = 0; i < w * h; i++) {
-                                const r = data[i * 4];
-                                const g = data[i * 4 + 1];
-                                const b = data[i * 4 + 2];
-
-                                // Convert to luminance greyscale
-                                let v = 0.299 * r + 0.587 * g + 0.114 * b;
-
-                                // 1. Apply Brightness
-                                v += brightnessValue;
-
-                                // 2. Apply Contrast
-                                v = contrastFactor * (v - 128) + 128;
-
-                                // 3. Apply Gamma
-                                if (gammaValue !== 1.0) {
-                                    v =
-                                        255 *
-                                        Math.pow(
-                                            Math.max(0, v) / 255,
-                                            1 / gammaValue,
-                                        );
-                                }
-
-                                // Clamp intermediate values
-                                gray[i] = Math.max(0, Math.min(255, v));
-                            }
-
-                            // Apply selected dithering algorithm
-                            if (ditherAlgorithm === "floyd-steinberg") {
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        // Quantize to 16 levels (0-15, mapped to 0-255)
-                                        let level = Math.round(oldVal / 17);
-                                        if (level < 0) level = 0;
-                                        if (level > 15) level = 15;
-                                        const newVal = level * 17;
-                                        gray[idx] = newVal;
-
-                                        const err = oldVal - newVal;
-
-                                        // Diffuse error
-                                        if (x + 1 < w) {
-                                            gray[idx + 1] += (err * 7) / 16;
-                                        }
-                                        if (y + 1 < h) {
-                                            if (x - 1 >= 0) {
-                                                gray[idx + w - 1] +=
-                                                    (err * 3) / 16;
-                                            }
-                                            gray[idx + w] += (err * 5) / 16;
-                                            if (x + 1 < w) {
-                                                gray[idx + w + 1] +=
-                                                    (err * 1) / 16;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if (ditherAlgorithm === "atkinson") {
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        let level = Math.round(oldVal / 17);
-                                        if (level < 0) level = 0;
-                                        if (level > 15) level = 15;
-                                        const newVal = level * 17;
-                                        gray[idx] = newVal;
-
-                                        const err = oldVal - newVal;
-                                        const errPart = err / 8;
-
-                                        // Atkinson diffuses only 3/8ths of the total error to immediate neighbors
-                                        if (x + 1 < w) gray[idx + 1] += errPart;
-                                        if (x + 2 < w) gray[idx + 2] += errPart;
-                                        if (y + 1 < h) {
-                                            if (x - 1 >= 0)
-                                                gray[idx + w - 1] += errPart;
-                                            gray[idx + w] += errPart;
-                                            if (x + 1 < w)
-                                                gray[idx + w + 1] += errPart;
-                                        }
-                                        if (y + 2 < h) {
-                                            gray[idx + 2 * w] += errPart;
-                                        }
-                                    }
-                                }
-                            } else if (ditherAlgorithm === "ordered-4x4") {
-                                const BAYER_4X4 = [
-                                    [0, 8, 2, 10],
-                                    [12, 4, 14, 6],
-                                    [3, 11, 1, 9],
-                                    [15, 7, 13, 5],
-                                ];
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        const level = Math.floor(oldVal / 17);
-                                        const remainder = (oldVal % 17) / 17;
-                                        const threshold =
-                                            (BAYER_4X4[y % 4][x % 4] + 0.5) /
-                                            16;
-
-                                        const newVal =
-                                            (remainder > threshold
-                                                ? level + 1
-                                                : level) * 17;
-                                        gray[idx] = Math.min(255, newVal);
-                                    }
-                                }
-                            } else {
-                                // Threshold / High Contrast (No Dither)
-                                for (let i = 0; i < w * h; i++) {
-                                    let level = Math.round(gray[i] / 17);
-                                    if (level < 0) level = 0;
-                                    if (level > 15) level = 15;
-                                    gray[i] = level * 17;
-                                }
-                            }
-
-                            // Write the dithered greyscale values back to image data array
-                            for (let i = 0; i < w * h; i++) {
-                                const val = Math.min(
-                                    255,
-                                    Math.max(0, Math.round(gray[i])),
-                                );
-                                data[i * 4] = val;
-                                data[i * 4 + 1] = val;
-                                data[i * 4 + 2] = val;
-                                data[i * 4 + 3] = 255; // fully opaque
-                            }
-                            ctx.putImageData(imgData, 0, 0);
-
-                            canvas.toBlob(async (blob) => {
-                                if (!blob) {
-                                    reject(new Error("Canvas toBlob failed"));
-                                    return;
-                                }
-                                try {
-                                    const buffer = await blob.arrayBuffer();
-                                    resolve(buffer);
-                                } catch (e) {
-                                    reject(e);
-                                }
-                            }, "image/png");
-                        } catch (err) {
-                            reject(err);
+                    canvas.toBlob(async (out) => {
+                        if (!out) {
+                            reject(new Error("Canvas toBlob failed"));
+                            return;
                         }
-                    };
-                    img.onerror = (err) => {
-                        URL.revokeObjectURL(objectUrl);
-                        reject(err);
-                    };
-                    img.src = objectUrl;
+                        try {
+                            resolve(await out.arrayBuffer());
+                        } catch (e) {
+                            reject(e);
+                        }
+                    }, "image/png");
                 });
+            }
+
+            async function resizeAndPrepareImage(blob, targetWidth, targetHeight, meta = {}) {
+                const bitmap = await timed("decode", meta, () => decodeFrame(blob));
+                try {
+                    const { canvas, ctx } = prepSurface(targetWidth, targetHeight);
+                    const imgData = await timed("pixels", meta, () => {
+                        ctx.clearRect(0, 0, targetWidth, targetHeight);
+                        ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+                        const d = ctx.getImageData(0, 0, targetWidth, targetHeight);
+                        toGlassesGrey(d.data, targetWidth, targetHeight, {
+                            brightness: brightnessValue,
+                            contrast: contrastValue,
+                            gamma: gammaValue,
+                            dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
+                        });
+                        ctx.putImageData(d, 0, 0);
+                        return d;
+                    });
+                    void imgData;
+                    return await timed("encode", meta, () => encodeFrame(canvas));
+                } finally {
+                    if (bitmap && typeof bitmap.close === "function") bitmap.close();
+                }
             } // --- SCENE PIPELINE HELPERS ---
 
             function sleep(ms, signal) {
@@ -857,6 +759,7 @@ import { createBleTransport } from "./bletransport";
                         assets.blob,
                         GLASSES_IMAGE_WIDTH,
                         GLASSES_IMAGE_HEIGHT,
+                        { frameIndex },
                     ),
                 );
 
@@ -1672,6 +1575,121 @@ import { createBleTransport } from "./bletransport";
              * The payloads are grey noise at the real geometry, so they
              * compress to something like a real frame rather than to nothing.
              */
+            /**
+             * Time the prepare path on synthetic frames, with no link and no
+             * source involved.
+             *
+             * The companion to `probeLink`, and needed for the same reason. A
+             * real session's prepare numbers are entangled with everything else
+             * the phone was doing; this runs the SAME code — `decodeFrame`,
+             * the pixel loop, the PNG encode — on frames it makes itself, so
+             * the phases can be compared against `tools/pixel-bench.mjs`, which
+             * says the arithmetic is half a millisecond. A phone that reports
+             * seconds here is not doing arithmetic slowly.
+             *
+             * It needs no glasses, so it also runs in the simulator, which is
+             * how the image path gets exercised at all when there is no account
+             * to authenticate against.
+             */
+            export async function probePrepare({
+                runs = 12,
+                sourceWidth = 320,
+                sourceHeight = 180,
+            } = {}) {
+                const src = document.createElement("canvas");
+                src.width = sourceWidth;
+                src.height = sourceHeight;
+                const sctx = src.getContext("2d");
+
+                // Something with gradients and edges, because a flat field
+                // dithers to nothing and compresses to nothing — neither the
+                // encode nor the decode would be doing representative work.
+                const g = sctx.createLinearGradient(0, 0, sourceWidth, sourceHeight);
+                g.addColorStop(0, "#101820");
+                g.addColorStop(0.5, "#c8d0d8");
+                g.addColorStop(1, "#201810");
+                sctx.fillStyle = g;
+                sctx.fillRect(0, 0, sourceWidth, sourceHeight);
+                for (let i = 0; i < 40; i++) {
+                    sctx.fillStyle = `rgba(${(i * 37) % 256},${(i * 91) % 256},${(i * 53) % 256},0.5)`;
+                    sctx.fillRect(
+                        (i * 71) % sourceWidth, (i * 43) % sourceHeight,
+                        8 + (i % 17), 6 + (i % 13),
+                    );
+                }
+                // JPEG, because that is what a provider hands over, and a JPEG
+                // decode is not a PNG decode.
+                const blob = await new Promise((r) => src.toBlob(r, "image/jpeg", 0.8));
+
+                // Does the faster decode path give the SAME pixels?
+                //
+                // `createImageBitmap` replaced an <img> and an object URL to get
+                // the decode off the main thread. That is only a free win if
+                // the two decoders agree, and a WebView is not obliged to make
+                // them agree — colour management and premultiplication are both
+                // "default" here, which means implementation-defined. So it is
+                // checked on the device rather than assumed on mine.
+                const decodeAgrees = await (async () => {
+                    if (typeof createImageBitmap !== "function") return null;
+                    const draw = async (via) => {
+                        const c = document.createElement("canvas");
+                        c.width = GLASSES_IMAGE_WIDTH;
+                        c.height = GLASSES_IMAGE_HEIGHT;
+                        const x = c.getContext("2d", { willReadFrequently: true });
+                        x.drawImage(via, 0, 0, c.width, c.height);
+                        return x.getImageData(0, 0, c.width, c.height).data;
+                    };
+                    const bmp = await createImageBitmap(blob);
+                    const a = await draw(bmp);
+                    if (bmp.close) bmp.close();
+                    const url = URL.createObjectURL(blob);
+                    try {
+                        const el = await new Promise((res, rej) => {
+                            const i = new Image();
+                            i.onload = () => res(i);
+                            i.onerror = rej;
+                            i.src = url;
+                        });
+                        const b = await draw(el);
+                        let worst = 0;
+                        for (let i = 0; i < a.length; i++) {
+                            const d = Math.abs(a[i] - b[i]);
+                            if (d > worst) worst = d;
+                        }
+                        return worst;
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                })();
+
+                const totals = [];
+                let outBytes = 0;
+                for (let n = 0; n < runs; n++) {
+                    const t0 = Date.now();
+                    const out = await resizeAndPrepareImage(
+                        blob, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT, { probe: true },
+                    );
+                    totals.push(Date.now() - t0);
+                    outBytes = out.byteLength;
+                    // Yield between runs: back to back they would all land in
+                    // one task and measure a burst nothing in the app performs.
+                    await new Promise((r) => setTimeout(r, 0));
+                }
+                totals.sort((a, b) => a - b);
+                return {
+                    runs,
+                    sourceBytes: blob.size,
+                    outBytes,
+                    // null = no createImageBitmap here; 0 = the two decoders
+                    // agree exactly; anything else is the worst channel
+                    // disagreement in 0-255, and worth knowing about.
+                    decodeMaxDelta: decodeAgrees,
+                    p50: totals[Math.floor(runs * 0.5)],
+                    p90: totals[Math.floor(runs * 0.9)],
+                    max: totals[runs - 1],
+                };
+            }
+
             export async function probeLink({ densities = null, perSize = 4 } = {}) {
                 // Noise density, not a byte target: what a PNG of dithered grey
                 // actually compresses to is not something to predict, and the

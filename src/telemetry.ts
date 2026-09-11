@@ -249,6 +249,31 @@ export function analyse(session) {
         return f.length ? (100 * f.filter((e) => e.cached).length) / f.length : 0;
     })();
 
+    // 6d. WHAT INSIDE `prepare` IS EXPENSIVE
+    //
+    //     `prepare` is three different jobs wearing one number: decode the
+    //     provider's JPEG, run the pixel arithmetic, encode a PNG for the
+    //     bridge. A session reported it at 4040ms p90 and the report could say
+    //     nothing more useful than "chase it" — because a slow decode, slow
+    //     arithmetic and a slow encode have three different fixes.
+    //
+    //     `tools/pixel-bench.mjs` pins the middle one at ~0.5ms for this frame
+    //     size, off-hardware, so if `pixels` shows up large here the phone is
+    //     not doing arithmetic slowly, it is being interrupted. That makes the
+    //     phase split diagnostic rather than merely descriptive.
+    const PHASES = ["decode", "pixels", "encode"];
+    out.phases = null;
+    {
+        const per = {};
+        let any = 0;
+        for (const name of PHASES) {
+            const d = ev.filter((e) => e.kind === name && e.ok).map((e) => e.durationMs);
+            per[name] = summarise(d);
+            any += d.length;
+        }
+        if (any) out.phases = per;
+    }
+
     if (work.length >= 4 && ok(images).length >= 4) {
         const overlapMs = (a0, a1) =>
             work.reduce((t, w) =>
@@ -359,6 +384,32 @@ export function analyse(session) {
             `${Math.round(out.imageWriteMs.p50)}ms write. Decode and dither run on the main ` +
             `thread, so a tail like that stalls the pipeline outright — worth chasing before ` +
             `the link.`);
+
+        // And say WHICH phase, when the session recorded them. A bare
+        // instruction to "chase the decode" was the weakest line in this
+        // report; the phase split turns it into an address.
+        const ph = out.phases;
+        if (ph) {
+            const named = PHASES
+                .filter((k) => ph[k].n >= 3)
+                .sort((a, b) => ph[b].p90 - ph[a].p90);
+            const worst = named[0];
+            if (worst) {
+                const share = named.reduce((t, k) => t + ph[k].p90, 0);
+                f.push(`Inside that, ${worst} is the expensive phase: p90 ${Math.round(ph[worst].p90)}ms ` +
+                    `of ${Math.round(share)}ms across ${named.join(" + ")}. ` +
+                    (worst === "pixels"
+                        ? `The arithmetic itself benchmarks at well under a millisecond for this ` +
+                          `frame size, so time spent there is the main thread being taken away, ` +
+                          `not the loop being slow — look at what else runs during a scene.`
+                        : worst === "decode"
+                        ? `Decoding is the provider's JPEG. It already runs off-thread via ` +
+                          `createImageBitmap where the WebView supports it; if it is still slow, ` +
+                          `the frames themselves are larger than the link needs.`
+                        : `Encoding is the PNG handed to the bridge. A cheaper encoding, or ` +
+                          `handing raw bytes across, removes it outright.`));
+            }
+        }
     }
 
     const c = out.contention;
@@ -495,6 +546,13 @@ export function formatReport(session, a = analyse(session)) {
         L.push(`fetch        n=${a.fetchMs.n}  p50 ${ms(a.fetchMs.p50)}  p90 ${ms(a.fetchMs.p90)}  ` +
             `${a.fetchCachedPct.toFixed(0)}% already cached`);
         L.push(`prepare      n=${a.prepareMs.n}  p50 ${ms(a.prepareMs.p50)}  p90 ${ms(a.prepareMs.p90)}`);
+        if (a.phases) {
+            for (const name of ["decode", "pixels", "encode"]) {
+                const ph = a.phases[name];
+                if (!ph.n) continue;
+                L.push(`  ${name.padEnd(9)}  n=${ph.n}  p50 ${ms(ph.p50)}  p90 ${ms(ph.p90)}  max ${ms(ph.max)}`);
+            }
+        }
     }
     if (a.contention) {
         L.push(`write alone  n=${a.contention.clear.n}  p50 ${ms(a.contention.clear.p50)}`);
