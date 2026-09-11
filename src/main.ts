@@ -328,13 +328,24 @@ import { createBleTransport } from "./bletransport";
                     if (result === 0) {
                         setStatus("G2 Glass Engine Connected via BLE!", "active");
                     } else {
+                        // 0 success, 1 invalid, 2 oversize, 3 outOfMemory.
                         throw new Error(
-                            `Startup container creation failed with result ${result}`,
+                            `Startup container creation returned ` +
+                            `${["success", "invalid", "oversize", "outOfMemory"][result] ?? result}`,
                         );
                     }
                 } catch (err) {
+                    // Say WHICH step failed. "Offline" covered both a bridge
+                    // that never appeared and a bridge that appeared and then
+                    // threw during wiring, which are different problems.
+                    console.error(
+                        `[Bridge] init failed after ${bridgeInstance ? "connecting" : "waiting"}: ${err?.message || err}`,
+                        err,
+                    );
                     setStatus(
-                        "G2 App Bridge Offline (Browser Preview Loop Active)",
+                        bridgeInstance
+                            ? "G2 bridge connected but wiring failed — see console"
+                            : "G2 App Bridge Offline (Browser Preview Loop Active)",
                         "error",
                     );
                 }
