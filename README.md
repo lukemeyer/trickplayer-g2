@@ -155,6 +155,77 @@ That filter is a Plex limitation rather than a rule about media, which matters
 for the roadmap: Jellyfin converts and serves embedded subtitles on demand, so
 the same filter there would hide most of a library.
 
+## Measuring the link
+
+`telemetry.html` is a **separate entry point**, not a flag on the player.
+Recording every BLE operation costs something, and a wearer who is just
+watching an episode should not pay it. It does not duplicate the app's markup
+either — it fetches `index.html` at runtime and injects the body, so there is
+one copy of the flow and the two cannot drift.
+
+Play something for five minutes, then **Generate report**. Fifteen minutes
+gives better tail estimates. The report goes to the clipboard and to the
+console, because a phone in a pocket has neither a clipboard the wearer can
+reach nor a console — `adb logcat`, or the simulator's `/api/console`.
+
+Three buttons do work of their own:
+
+| | |
+|---|---|
+| **Sweep payload sizes** | Sends synthetic payloads from ~0 to ~44 KB. Real frames all cluster around 15 KB, so a normal session has almost no range to fit a regression against; the sweep gives the analysis its spread in about a minute. |
+| **Time the prepare path** | Runs decode → pixels → encode on frames it generates itself. **Needs no glasses and no account**, so it also runs in the simulator. |
+| **Discard session** | The session survives reloads on purpose; this is how you start a clean one. |
+
+Query flags drive the same things from a harness, since neither the EvenHub
+simulator nor a phone on a desk has a pointer into the WebView:
+
+    ?play=1      start the first playable item and leave it running
+    ?probe=1     sweep on load, print the report at 90s
+    ?prep=1      time the prepare path, print the phase split
+    ?stuck=1     inject the host pause that froze a real session
+    ?notext=1    inject the container loss that killed text but not images
+
+The last two are reproductions of reported failures. Neither can be induced
+any other way — you cannot make a host suspend you on demand, and you cannot
+unplug a container.
+
+### What the report will tell you
+
+```
+    image write  n=211  p50 3ms  p90 6ms
+    fetch        n=148  p50 4ms  p90 10ms  8% already cached
+    prepare      n=148  p50 5ms  p90 9ms
+      decode     n=169  p50 1ms  p90 2ms
+      pixels     n=169  p50 2ms  p90 3ms
+      encode     n=169  p50 1ms  p90 2ms
+    write alone  n=208  p50 3ms
+    write busy   n=3    p50 2ms  (1% of writes)
+      under prepare  n=3  p50 2ms
+```
+
+Everything in it is split by **which fix it would imply**, which is the one
+design rule here. `prepare` was a single number for a while, hit 4 seconds on
+real hardware, and could only produce the advice "chase it" — a decode, a pixel
+loop and a PNG encode have three different remedies and one number cannot
+choose between them (F-046). The same applies to contention: a fetch under a
+write and a decode under a write are opposite problems, because the decode can
+wait and the prefetch is the only thing hiding the network.
+
+`tools/pixel-bench.mjs` pins the middle phase off-device at ~0.5 ms, so a phone
+reporting milliseconds there is fine and a phone reporting seconds is being
+interrupted, not computing slowly.
+
+### The suites
+
+    npm run ble-sim           the transport against a simulated link
+    npm run telemetry-check   plant a defect, require the report to find it
+    npm run conformance       the shared corpus
+    node tools/pixel-bench.mjs
+
+`telemetry-check` is the unusual one: every case plants a known fault and fails
+if the report does not name it *and* prescribe the remedy that belongs to it.
+An analysis that cannot be wrong is not measuring anything.
+
 ## What is not in this repo
 
 No frames, stills or screenshots of real media — they are stills from a TV

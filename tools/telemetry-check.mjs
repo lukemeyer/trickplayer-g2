@@ -187,6 +187,51 @@ def("it tells throttled timers apart from a dead page", async () => {
     };
 });
 
+def("a gap that spans a page reload is not blamed on the pipeline", async () => {
+    // The session survives a reload on purpose, so a wearer whose WebView is
+    // discarded keeps their measurements. The cost is that the quiet minute
+    // between "the page went away" and "something is playing again" reads as
+    // the pipeline stalling — and a false one of those buries the real ones.
+    //
+    // A stepped clock rather than the scaled one the link cases use: gap
+    // detection compares against an absolute threshold, and there is no link
+    // here to pace against.
+    const build = (withReload) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        const put = () => {
+            rec.event({
+                id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+                endedAt: clock + 1200, queuedMs: 0, durationMs: 1200,
+                depthAtEnqueue: 1, bytes: 15000,
+            });
+            clock += 6000;
+        };
+        for (let i = 0; i < 6; i++) put();
+        // 90 quiet seconds, with the heartbeat ticking throughout.
+        for (let i = 0; i < 18; i++) {
+            rec.tick({ playing: true });
+            clock += 5000;
+            if (withReload && i === 8) rec.mark("page-reloaded", { priorMs: 60000 });
+        }
+        for (let i = 0; i < 6; i++) put();
+        return analyse(rec.session());
+    };
+
+    const plain = build(false);
+    const reloaded = build(true);
+    const kinds = (a) => a.gaps.map((g) => g.kind).join(",");
+
+    return {
+        pass: kinds(plain).includes("pipeline idle") &&
+              kinds(reloaded).includes("session restarted") &&
+              !kinds(reloaded).includes("pipeline idle") &&
+              reloaded.findings.some((x) => /spans a page RELOAD/.test(x)) &&
+              !reloaded.findings.some((x) => /and it is ours/.test(x)),
+        detail: `without a reload: [${kinds(plain)}] — with one: [${kinds(reloaded)}]`,
+    };
+});
+
 def("it separates what the payload costs from what playback costs", async () => {
     // Rebuilt from a real hardware session: a synthetic sweep that is cleanly
     // linear in size, and real frames at a size in the middle of that range

@@ -368,7 +368,16 @@ export function analyse(session) {
             proofOfLife.some((m) => m.at > a + 2000 && m.at < b - 2000)
                 ? "timers throttled" : "page stopped";
         add(fromMs, first, deadOr(fromMs, first), false);
-        add(first, last, "pipeline idle", inside.some((t) => t.playing));
+        // Unless the page was RELOADED in the middle of it. The session
+        // survives a reload on purpose — a wearer whose WebView is discarded
+        // and restored should not lose their measurements — and the cost is
+        // that the quiet minute between "the page went away" and "something
+        // was playing again" reads as the pipeline stalling. It is not ours,
+        // and mislabelling it as ours buries the gaps that are.
+        const reloaded = allMarks.some(
+            (m) => m.name === "page-reloaded" && m.at >= fromMs && m.at <= toMs);
+        add(first, last, reloaded ? "session restarted" : "pipeline idle",
+            !reloaded && inside.some((t) => t.playing));
         add(last, toMs, deadOr(last, toMs), false);
     };
 
@@ -549,6 +558,16 @@ export function analyse(session) {
                 `${idle.length} of those: the page kept ticking and still sent nothing` +
                 `${idle.some((g) => g.playing) ? " WHILE THE APP BELIEVED IT WAS PLAYING" : ""} — ` +
                 `that is the scene pipeline stopping, and it is ours.`);
+        }
+        // Said last, because it is the one kind of silence nobody needs to act
+        // on — and unsaid, it inflates every other number in this section.
+        const restarted = out.gaps.filter((g) => g.kind === "session restarted");
+        if (restarted.length) {
+            const restartMs = restarted.reduce((t, g) => t + g.ms, 0);
+            f.push(`${(restartMs / 1000).toFixed(0)}s of that silence spans a page RELOAD ` +
+                `(${restarted.length} of the gaps). The session deliberately survives a reload, ` +
+                `so the quiet between the page going away and something playing again is counted ` +
+                `but is not a fault — discount it before reading the rest.`);
         }
     }
     if (!f.length) f.push("Nothing stands out — the link kept up with the pipeline.");
