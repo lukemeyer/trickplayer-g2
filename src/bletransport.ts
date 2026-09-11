@@ -159,7 +159,11 @@ export function createBleTransport(opts = {}) {
                 if (attempt < cfg.maxAttempts) await sleep(cfg.retryDelayMs);
             }
             return { ok: false, reason: "failed", attempts: attempt, tried };
-        }, { generationAtEnqueue: gen, meta: { kind: "image", bytes: meta?.bytes ?? null, tsMs: meta?.tsMs ?? null } });
+            // The caller's whole meta rides along, not a chosen few fields.
+            // Cherry-picking dropped the `probe` flag, which is what separates
+            // a synthetic payload from a real frame — and that separation is
+            // where the interesting comparison lives.
+        }, { generationAtEnqueue: gen, meta: { ...meta, kind: "image" } });
 
         pendingImages = pendingImages.filter((m) => m !== meta);
 

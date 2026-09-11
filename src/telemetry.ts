@@ -197,6 +197,41 @@ export function analyse(session) {
     out.stalls = stalls;
     out.longestStallMs = stalls.reduce((m, s) => Math.max(m, s.ms), 0);
 
+    // 6b. SYNTHETIC against REAL, at the same size.
+    //
+    //     The sweep sends payloads the app never would, back to back, with
+    //     nothing else happening. Playback sends real frames while it is also
+    //     fetching, decoding and dithering the next one. If the two disagree at
+    //     comparable sizes then payload size is NOT what costs the time, and
+    //     shrinking the image — the obvious optimisation, and the one this
+    //     report kept recommending — would buy far less than the size curve
+    //     promises.
+    const probes = ok(images).filter((e) => e.probe);
+    const realFrames = ok(images).filter((e) => !e.probe && e.bytes);
+    if (probes.length >= 3 && realFrames.length >= 3) {
+        // Fit ms = fixed + perKb*KB over the synthetic points, then ask what it
+        // predicts for the size the real frames actually are.
+        const pts = probes.map((e) => [e.bytes / 1024, e.durationMs]);
+        const n = pts.length;
+        const sx = pts.reduce((t, p) => t + p[0], 0);
+        const sy = pts.reduce((t, p) => t + p[1], 0);
+        const sxx = pts.reduce((t, p) => t + p[0] * p[0], 0);
+        const sxy = pts.reduce((t, p) => t + p[0] * p[1], 0);
+        const denom = n * sxx - sx * sx;
+        if (denom !== 0) {
+            const perKb = (n * sxy - sx * sy) / denom;
+            const fixed = (sy - perKb * sx) / n;
+            const realKb = realFrames.reduce((t, e) => t + e.bytes, 0) / realFrames.length / 1024;
+            const predicted = fixed + perKb * realKb;
+            const actual = summarise(realFrames.map((e) => e.durationMs)).p50;
+            out.synthetic = {
+                fixedMs: fixed, perKbMs: perKb,
+                realKb, predictedMs: predicted, actualMs: actual,
+                ratio: predicted > 0 ? actual / predicted : 0,
+            };
+        }
+    }
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -280,6 +315,15 @@ export function analyse(session) {
         f.push(`Queue wait (p90 ${Math.round(out.imageQueueMs.p90)}ms) exceeds a typical write ` +
             `(${Math.round(out.imageWriteMs.p50)}ms): the pipeline is outrunning the link. ` +
             `Pace scenes off the measured write time rather than sending sooner.`);
+    }
+    if (out.synthetic && out.synthetic.ratio > 1.5) {
+        const y = out.synthetic;
+        f.push(`Real frames cost ${y.ratio.toFixed(1)}x what their SIZE explains: ` +
+            `${Math.round(y.actualMs)}ms against ${Math.round(y.predictedMs)}ms predicted at ` +
+            `${y.realKb.toFixed(0)}KB by the synthetic sweep (${Math.round(y.fixedMs)}ms fixed + ` +
+            `${y.perKbMs.toFixed(0)}ms/KB). The difference is NOT the payload — it is whatever ` +
+            `else playback is doing while the write is in flight, so shrinking the image would ` +
+            `buy roughly ${y.perKbMs.toFixed(0)}ms per KB saved and no more.`);
     }
     if (out.bySize.length > 1) {
         const lo = out.bySize[0], hi = out.bySize[out.bySize.length - 1];
@@ -369,6 +413,13 @@ export function formatReport(session, a = analyse(session)) {
             L.push(`  ${String(b.kb).padStart(3)}KB  n=${String(b.n).padStart(4)}  ` +
                 `ok ${b.successPct.toFixed(0).padStart(3)}%  p50 ${ms(b.writeMs.p50)}`);
         }
+    }
+    if (a.synthetic) {
+        const y = a.synthetic;
+        L.push("");
+        L.push(`synthetic fit   ${Math.round(y.fixedMs)}ms fixed + ${y.perKbMs.toFixed(1)}ms/KB`);
+        L.push(`real frames     ${y.realKb.toFixed(0)}KB -> ${Math.round(y.actualMs)}ms actual ` +
+            `vs ${Math.round(y.predictedMs)}ms predicted  (${y.ratio.toFixed(2)}x)`);
     }
     L.push("");
     L.push("retry yield");

@@ -187,6 +187,35 @@ def("it tells throttled timers apart from a dead page", async () => {
     };
 });
 
+def("it separates what the payload costs from what playback costs", async () => {
+    // Rebuilt from a real hardware session: a synthetic sweep that is cleanly
+    // linear in size, and real frames at a size in the middle of that range
+    // costing more than twice what the line predicts. The report used to answer
+    // "shrink the image", which the sweep itself shows would barely help.
+    const rec = createRecorder();
+    const ev = (bytes, durationMs, probe) => rec.event({
+        id: 0, kind: "image", ok: true, bytes, probe,
+        enqueuedAt: 0, startedAt: 0, endedAt: durationMs,
+        queuedMs: 0, durationMs, depthAtEnqueue: 1,
+    });
+    // 240ms fixed + ~37ms/KB, as measured.
+    for (const [kb, ms] of [[0, 240], [4, 457], [12, 841], [28, 1380], [44, 1856]]) {
+        for (let i = 0; i < 4; i++) ev(kb * 1024, ms, true);
+    }
+    // Real 16KB frames at 1923ms — 2.3x what that line predicts.
+    for (let i = 0; i < 23; i++) ev(16 * 1024, 1923, false);
+
+    const a = analyse(rec.session());
+    const hit = a.findings.find((x) => /what their SIZE explains/.test(x));
+    return {
+        pass: !!hit && a.synthetic.ratio > 2 && a.synthetic.perKbMs > 20 && a.synthetic.perKbMs < 60,
+        detail: hit
+            ? `fit ${Math.round(a.synthetic.fixedMs)}ms + ${a.synthetic.perKbMs.toFixed(0)}ms/KB, ` +
+              `ratio ${a.synthetic.ratio.toFixed(2)}x`
+            : a.findings.join(" | ").slice(0, 120),
+    };
+});
+
 def("the report renders and carries its findings", async () => {
     const s = await session({ link: makeLink({ imageMs: 3000 }), frames: 20, gap: 1000 });
     const text = formatReport(s);
