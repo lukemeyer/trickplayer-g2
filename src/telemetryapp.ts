@@ -238,6 +238,9 @@ $("tlm-prep").onclick = async () => {
             `(${(r.sourceBytes / 1024).toFixed(1)}KB in, ${(r.outBytes / 1024).toFixed(1)}KB out). ` +
             `Decoders ${r.decodeMaxDelta === null ? "n/a" : r.decodeMaxDelta === 0
                 ? "agree exactly" : `DIFFER by up to ${r.decodeMaxDelta}/255`}. ` +
+            `Our ${r.pngBitDepth}-bit PNG ${r.pngReadsBack === null ? "unchecked"
+                : r.pngReadsBack === 0 ? "reads back exactly"
+                : `READS BACK WRONG (${r.pngReadsBack})`}. ` +
             `Generate the report for the per-phase split.`;
     } catch (e) {
         $("tlm-hint").textContent = `Prepare probe failed: ${e.message}`;

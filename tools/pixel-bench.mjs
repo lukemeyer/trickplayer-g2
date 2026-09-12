@@ -160,7 +160,18 @@ for (const opts of [
 console.log(`  equivalence with the previous inline code: ` +
     (mismatches ? `${mismatches} MISMATCH(ES)` : "byte-identical across 15 cases"));
 
-console.log(`\n  A ${fs50.toFixed(2)}ms median means a 4,040ms 'prepare' was ` +
-    `${Math.round(4040 / fs50).toLocaleString()}x this work —\n  so it was not the arithmetic. ` +
-    `It was decode, encode, or the main thread being busy elsewhere.\n`);
+// Answered. The phone was asked, with the phases timed separately, and said:
+//
+//     decode  p50   17ms
+//     pixels  p50   17ms
+//     encode  p50 4022ms   max 13018ms
+//
+// So this bench did its job — it eliminated the arithmetic before a hardware
+// session was spent on it, and the session that followed could spend its whole
+// budget on the two phases still in question. `canvas.toBlob` was the answer,
+// and src/png.ts replaced it at 0.07ms. The number below stays because it is
+// what a regression here would be measured against.
+console.log(`\n  A ${fs50.toFixed(2)}ms median against the 17ms this phase cost on a Pixel 10 —\n` +
+    `  a ${(17 / fs50).toFixed(0)}x gap, which is a phone being a phone. The 4,040ms 'prepare'\n` +
+    `  that prompted this bench turned out to be the PNG encode, not any of it.\n`);
 fs.rmSync(TMP, { recursive: true, force: true });

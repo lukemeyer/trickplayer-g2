@@ -11,7 +11,9 @@
     "simulate": "evenhub-simulator http://localhost:5173",
     "conformance": "node tools/conformance.mjs",
     "ble-sim": "node tools/ble-sim.mjs",
-    "telemetry-check": "node tools/telemetry-check.mjs"
+    "telemetry-check": "node tools/telemetry-check.mjs",
+    "png-check": "node tools/png-check.mjs",
+    "pixel-bench": "node tools/pixel-bench.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.14"

@@ -192,16 +192,19 @@ unplug a container.
 ### What the report will tell you
 
 ```
-    image write  n=211  p50 3ms  p90 6ms
-    fetch        n=148  p50 4ms  p90 10ms  8% already cached
-    prepare      n=148  p50 5ms  p90 9ms
-      decode     n=169  p50 1ms  p90 2ms
-      pixels     n=169  p50 2ms  p90 3ms
-      encode     n=169  p50 1ms  p90 2ms
-    write alone  n=208  p50 3ms
-    write busy   n=3    p50 2ms  (1% of writes)
-      under prepare  n=3  p50 2ms
+    image write  n=32  p50 2219ms  p90 2901ms
+    fetch        n=32  p50   36ms  p90   73ms  28% already cached
+    prepare      n=32  p50 4068ms  p90 4109ms
+      decode     p50   17ms
+      pixels     p50   17ms
+      encode     p50 4022ms  max 13018ms
 ```
+
+That is a real session on a Pixel 10 Pro Fold, and it is what the split is
+for: four seconds in `prepare`, and the report can say **which** four seconds.
+`encode` was `canvas.toBlob` — a request handed to the host whose callback
+comes back whenever the task queue allows, on a phone also driving a BLE
+radio. It is now a PNG written directly, at 0.07ms (F-048).
 
 Everything in it is split by **which fix it would imply**, which is the one
 design rule here. `prepare` was a single number for a while, hit 4 seconds on
@@ -219,8 +222,9 @@ interrupted, not computing slowly.
 
     npm run ble-sim           the transport against a simulated link
     npm run telemetry-check   plant a defect, require the report to find it
+    npm run png-check         the PNG writer, against zlib and Node's crc32
+    npm run pixel-bench       the dither, against the code it replaced
     npm run conformance       the shared corpus
-    node tools/pixel-bench.mjs
 
 `telemetry-check` is the unusual one: every case plants a known fault and fails
 if the report does not name it *and* prescribe the remedy that belongs to it.

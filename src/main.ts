@@ -6,7 +6,8 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
-import { toGlassesGrey } from "./pixels";
+import { toGlassesLevels } from "./pixels";
+import { encodeGreyPng, fallbackBitDepth } from "./png";
 
             // --- UI HOOKS ---
             //
@@ -511,41 +512,44 @@ import { toGlassesGrey } from "./pixels";
                 }
             }
 
-            function encodeFrame(canvas) {
-                return new Promise((resolve, reject) => {
-                    canvas.toBlob(async (out) => {
-                        if (!out) {
-                            reject(new Error("Canvas toBlob failed"));
-                            return;
-                        }
-                        try {
-                            resolve(await out.arrayBuffer());
-                        } catch (e) {
-                            reject(e);
-                        }
-                    }, "image/png");
-                });
+            /**
+             * 4 unless the host has told us it cannot read a 4-bit PNG.
+             *
+             * Not a preference — 4-bit greyscale is the display's own format,
+             * and its samples scale by exactly the 17 the dither quantises to.
+             * The retreat exists because the decoder lives in someone else's
+             * firmware, and because the bridge says so out loud when it fails
+             * rather than returning a plausible-looking success.
+             */
+            let pngBitDepth = 4;
+
+            /** Did the glasses fail to READ what we sent, rather than fail to receive it? */
+            function isUnreadableImage(result) {
+                return result === "imageException" || result === "imageToGray4Failed";
             }
 
             async function resizeAndPrepareImage(blob, targetWidth, targetHeight, meta = {}) {
                 const bitmap = await timed("decode", meta, () => decodeFrame(blob));
                 try {
-                    const { canvas, ctx } = prepSurface(targetWidth, targetHeight);
-                    const imgData = await timed("pixels", meta, () => {
+                    const { ctx } = prepSurface(targetWidth, targetHeight);
+                    const levels = await timed("pixels", meta, () => {
                         ctx.clearRect(0, 0, targetWidth, targetHeight);
                         ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
                         const d = ctx.getImageData(0, 0, targetWidth, targetHeight);
-                        toGlassesGrey(d.data, targetWidth, targetHeight, {
+                        return toGlassesLevels(d.data, targetWidth, targetHeight, {
                             brightness: brightnessValue,
                             contrast: contrastValue,
                             gamma: gammaValue,
                             dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
                         });
-                        ctx.putImageData(d, 0, 0);
-                        return d;
                     });
-                    void imgData;
-                    return await timed("encode", meta, () => encodeFrame(canvas));
+                    // Synchronous, and about a tenth of a millisecond. The
+                    // canvas is not asked to encode anything: `toBlob` handed
+                    // the job to the host and its callback came back four
+                    // seconds later on real hardware, which is not something
+                    // the app can schedule around. See src/png.ts.
+                    return await timed("encode", meta, () =>
+                        encodeGreyPng(levels, targetWidth, targetHeight, pngBitDepth));
                 } finally {
                     if (bitmap && typeof bitmap.close === "function") bitmap.close();
                 }
@@ -805,6 +809,21 @@ import { toGlassesGrey } from "./pixels";
                     payload,
                     { tsMs: frame.tsMs, bytes: preparedBytes.byteLength },
                 );
+
+                // The glasses can fail to READ a frame rather than fail to
+                // receive it, and they say which. 4-bit greyscale is the
+                // display's own format, but the decoder is in someone else's
+                // firmware — so the exact format is tried, the answer is
+                // watched, and the session drops to 8-bit if it has to.
+                if (isUnreadableImage(lastResult) && pngBitDepth !== fallbackBitDepth) {
+                    const was = pngBitDepth;
+                    pngBitDepth = fallbackBitDepth;
+                    console.warn(
+                        `[Image] Glasses returned ${lastResult} for a ${was}-bit PNG — ` +
+                        `falling back to ${fallbackBitDepth}-bit for the rest of the session`,
+                    );
+                    noteLifecycle("png-depth-fallback", { result: lastResult, was });
+                }
 
                 if (r.reason === "superseded") {
                     console.log(
@@ -1767,6 +1786,41 @@ import { toGlassesGrey } from "./pixels";
                     }
                 })();
 
+                // Does a real decoder read what our own PNG writer produced?
+                //
+                // `canvas.toBlob` was replaced because it cost four seconds on
+                // hardware; what replaced it is a hand-written encoder, and a
+                // hand-written container format is exactly the kind of thing
+                // that works where it was written and fails where it is read.
+                // `tools/png-check.mjs` verifies it against Node's zlib; this
+                // verifies it against the WebView's own image decoder, on the
+                // phone, with the bytes the glasses are actually handed.
+                const pngReadsBack = await (async () => {
+                    if (typeof createImageBitmap !== "function") return null;
+                    const w = 64, h = 32;
+                    const levels = new Uint8Array(w * h);
+                    for (let i = 0; i < levels.length; i++) levels[i] = i % 16;
+                    const png = encodeGreyPng(levels, w, h, pngBitDepth);
+                    try {
+                        const bmp = await createImageBitmap(
+                            new Blob([png], { type: "image/png" }));
+                        const c = document.createElement("canvas");
+                        c.width = w; c.height = h;
+                        const x = c.getContext("2d", { willReadFrequently: true });
+                        x.drawImage(bmp, 0, 0);
+                        if (bmp.close) bmp.close();
+                        const px = x.getImageData(0, 0, w, h).data;
+                        let worst = 0;
+                        for (let i = 0; i < levels.length; i++) {
+                            const d = Math.abs(px[i << 2] - levels[i] * 17);
+                            if (d > worst) worst = d;
+                        }
+                        return worst;
+                    } catch (e) {
+                        return `threw: ${e?.message || e}`;
+                    }
+                })();
+
                 const totals = [];
                 let outBytes = 0;
                 for (let n = 0; n < runs; n++) {
@@ -1789,6 +1843,9 @@ import { toGlassesGrey } from "./pixels";
                     // agree exactly; anything else is the worst channel
                     // disagreement in 0-255, and worth knowing about.
                     decodeMaxDelta: decodeAgrees,
+                    // 0 = the WebView's decoder reproduces our levels exactly.
+                    pngBitDepth,
+                    pngReadsBack,
                     p50: totals[Math.floor(runs * 0.5)],
                     p90: totals[Math.floor(runs * 0.9)],
                     max: totals[runs - 1],

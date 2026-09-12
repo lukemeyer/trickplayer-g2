@@ -32,10 +32,15 @@ const clampLevel = (v) => (v < 0 ? 0 : v > LEVELS ? LEVELS : v);
 /**
  * Luminance, tone controls, then quantisation with the chosen dither.
  *
- * @param data  RGBA bytes, modified in place.
- * @returns the same buffer, for chaining.
+ * Produces the QUANTISED PLANE — one value per pixel, already snapped to a
+ * multiple of STEP. Everything downstream wants that plane rather than an RGBA
+ * buffer: the encoder writes it straight out, and writing it back into RGBA
+ * only to read it again was work nobody needed.
+ *
+ * @param data  RGBA bytes, read only.
+ * @returns Float32Array of w*h quantised values in 0..255.
  */
-export function toGlassesGrey(data, w, h, opts = {}) {
+function quantisePlane(data, w, h, opts = {}) {
     const brightness = opts.brightness ?? 0;
     const contrast = opts.contrast ?? 0;
     const gamma = opts.gamma ?? 1;
@@ -109,6 +114,39 @@ export function toGlassesGrey(data, w, h, opts = {}) {
         }
     }
 
+    return gray;
+}
+
+/**
+ * The plane as LEVELS — 0..15, one byte per pixel.
+ *
+ * This is the form the glasses actually display and the form the PNG encoder
+ * writes, so it is the one the pipeline carries. `level * 17` recovers the
+ * 0..255 value, which is exactly how a 4-bit greyscale PNG is defined to scale
+ * its samples, so nothing is approximated anywhere along the way.
+ */
+export function toGlassesLevels(data, w, h, opts = {}) {
+    const gray = quantisePlane(data, w, h, opts);
+    const out = new Uint8Array(w * h);
+    for (let i = 0; i < out.length; i++) {
+        out[i] = clampLevel(Math.round(gray[i] / STEP));
+    }
+    return out;
+}
+
+/**
+ * The plane written back into the RGBA buffer it came from.
+ *
+ * Kept because it is what `tools/pixel-bench.mjs` proves byte-identical to the
+ * code this replaced, and that proof is the reason any of this can be trusted.
+ * The shipping path uses `toGlassesLevels`.
+ *
+ * @param data  RGBA bytes, modified in place.
+ * @returns the same buffer, for chaining.
+ */
+export function toGlassesGrey(data, w, h, opts = {}) {
+    const gray = quantisePlane(data, w, h, opts);
+    const n = w * h;
     for (let i = 0; i < n; i++) {
         let v = Math.round(gray[i]);
         v = v < 0 ? 0 : v > 255 ? 255 : v;
