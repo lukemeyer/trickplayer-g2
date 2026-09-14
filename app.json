@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.3",
+      "notes": [
+        "The logging session survives a relaunch. It was being written to browser storage, which a packaged app discards \u2014 the same thing that used to lose your server \u2014 so a crash took the recording of the crash with it.",
+        "Logging stays on across relaunches once you turn it on, and starts recording before the app does anything, so the launch itself is inside the session. A new \"Stop logging\" button turns it off.",
+        "A session that recorded a freeze is no longer thrown away. An outage is an absence of writes, and the resume rule only kept sessions that had writes in them."
+      ]
+    },
     {
       "version": "0.9.2",
       "notes": [

@@ -37,6 +37,10 @@ const KEYS = [
     "trickplayer.sources",
     "trickplayer.lastSource",
     "trickplayer.pendingAuth",
+    // Small on purpose — just "was the recorder on". The session it belongs to
+    // is far too big to hydrate for everyone, so it goes through the bulk
+    // accessors below instead.
+    "trickplayer.logging",
 ];
 
 const mem = new Map();
@@ -115,4 +119,49 @@ export function removeItem(key) {
     // The host store has no delete, and "" is what it returns for a key that
     // was never set — so writing "" IS deleting, as far as any reader knows.
     if (host) { try { Promise.resolve(host.setLocalStorage(key, "")).catch(() => {}); } catch (e) {} }
+}
+
+// ------------------------------------------------------------------ bulk
+//
+// For things too big to hold in the boot hydrate: a recorded telemetry session
+// is tens to hundreds of KB, and a wearer who never turns logging on should not
+// read it at startup — or at all.
+//
+// Same destination as everything else, just async and on demand. It matters
+// that it IS the same destination: the recorded session was the last thing
+// still being written to `localStorage`, and a packaged app discards that, so a
+// tester who hit a disconnect lost the log of the disconnect.
+
+/** Read a large value. Returns null when absent — the host says "" for that. */
+export async function readBulk(key) {
+    if (host) {
+        try {
+            const v = await host.getLocalStorage(key);
+            if (v) return v;
+        } catch (e) { /* fall through */ }
+    }
+    try { return localStorage.getItem(key) || null; } catch (e) { return null; }
+}
+
+/**
+ * Write a large value.
+ *
+ * Awaitable, because the caller may be in a `pagehide` handler with very little
+ * time left and needs to know whether to bother with anything else.
+ */
+export async function writeBulk(key, value) {
+    let ok = false;
+    if (host) {
+        try { ok = (await host.setLocalStorage(key, value)) !== false; }
+        catch (e) { ok = false; }
+    }
+    // Always mirror locally too: it costs nothing, and it is what makes the
+    // browser build behave the same as the packaged one.
+    try { localStorage.setItem(key, value); } catch (e) { /* quota */ }
+    return ok;
+}
+
+export async function clearBulk(key) {
+    try { localStorage.removeItem(key); } catch (e) {}
+    if (host) { try { await host.setLocalStorage(key, ""); } catch (e) {} }
 }

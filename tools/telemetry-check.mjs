@@ -24,7 +24,7 @@ async function load(name) {
     return import(pathToFileURL(out).href);
 }
 const { createBleTransport } = await load("bletransport.ts");
-const { createRecorder, analyse, formatReport } = await load("telemetry.ts");
+const { createRecorder, analyse, formatReport, isResumable } = await load("telemetry.ts");
 
 const SCALE = 50;
 const ms = (r) => Math.max(1, Math.round(r / SCALE));
@@ -336,6 +336,45 @@ def("it flags a decode slow enough to block the pipeline", async () => {
     const a = analyse(rec.session());
     const hit = a.findings.find((x) => /stalls the pipeline outright/.test(x));
     return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
+});
+
+def("a session of pure silence is still worth resuming", async () => {
+    // The rule that decides whether a stored session survives a relaunch. It
+    // used to be `events.length`, and that is backwards: a freeze is an ABSENCE
+    // of writes, so the session that captured one has heartbeats and lifecycle
+    // marks and no events at all. Under the old rule the app threw it away on
+    // the way back up — losing the recording of the outage and keeping only
+    // the sessions where nothing was wrong.
+    let clock = 1_700_000_000_000;
+    const quiet = createRecorder({ now: () => clock });
+    for (let i = 0; i < 12; i++) { quiet.tick({ playing: true }); clock += 5000; }
+    quiet.mark("pagehide");
+
+    const busy = createRecorder({ now: () => clock });
+    busy.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+        endedAt: clock + 1200, queuedMs: 0, durationMs: 1200, depthAtEnqueue: 1 });
+
+    const empty = createRecorder({ now: () => clock });
+
+    // And resuming must CONTINUE the clock, not restart it — the silence
+    // BETWEEN the two halves is the thing being measured, and a recorder that
+    // starts from zero puts the outage in the crack between two sessions where
+    // no gap detector can see it.
+    const prior = quiet.session();
+    let c2 = clock;                                   // the relaunch happens here
+    const after = createRecorder({ now: () => c2, resume: prior });
+    c2 += 60000;                                      // a minute passes after it
+    const continued = after.session().durationMs >= prior.durationMs + 60000;
+
+    return {
+        pass: isResumable(prior) && isResumable(busy.session()) &&
+              !isResumable(empty.session()) && !isResumable(null) && continued,
+        detail: `silent session (${prior.marks.length} marks, ${prior.events.length} events): ` +
+            `${isResumable(prior) ? "kept" : "DISCARDED"}; empty: ` +
+            `${isResumable(empty.session()) ? "WRONGLY KEPT" : "dropped"}; ` +
+            `${(prior.durationMs / 1000).toFixed(0)}s + 60s across the relaunch reads as ` +
+            `${(after.session().durationMs / 1000).toFixed(0)}s`,
+    };
 });
 
 def("it explains a dead image container instead of blaming the link", async () => {

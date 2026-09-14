@@ -129,7 +129,7 @@ for (const btn of document.querySelectorAll("[data-logging]")) {
         btn.textContent = "Starting the recorder…";
         try {
             const { enableLogging } = await import("./logging");
-            enableLogging(engine);
+            await enableLogging(engine);
             // Both of them — the offer appears on the server list and on the
             // add-a-server step, and once the recorder is on neither is an
             // offer any more.
@@ -616,6 +616,18 @@ engine.setUiHooks({
     // ask for a fresh Plex code on every launch. The wait is bounded, so the
     // browser build (where there is no bridge) still boots immediately.
     await store.init(await engine.whenBridgeReady());
+
+    // If a previous launch turned the recorder on, turn it on again — before
+    // anything else, so the launch itself is inside the recording. A tester
+    // enables logging because they are chasing something that crashes, and a
+    // crash is exactly when nobody is there to press the button a second time.
+    // The flag is read from the store rather than from the recorder module, so
+    // that a launch which is NOT logging never loads the recorder at all.
+    if (store.getItem("trickplayer.logging") === "1") {
+        const { enableLogging } = await import("./logging");
+        await enableLogging(engine);
+        for (const b of document.querySelectorAll("[data-logging]")) b.remove();
+    }
 
     if (resumePendingAuth()) return;
 

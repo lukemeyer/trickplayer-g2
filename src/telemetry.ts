@@ -29,6 +29,20 @@
 
 export const TELEMETRY_VERSION = 1;
 
+/**
+ * Is a stored session worth picking back up?
+ *
+ * The rule is "did it record anything at all", and it has to count MARKS as
+ * well as events. Testing `events.length` alone throws away exactly the
+ * sessions worth keeping: an outage is an ABSENCE of writes, so the session
+ * that captured one has heartbeats and lifecycle marks and few or no events.
+ * Resuming only the busy sessions loses every quiet failure — which is the
+ * category this whole report was built to see.
+ */
+export function isResumable(prev) {
+    return !!(prev && (prev.events?.length || prev.marks?.length));
+}
+
 export function createRecorder({ max = 20000, now = () => Date.now(), resume = null } = {}) {
     // A session CONTINUES across a reload rather than starting again.
     //
@@ -635,6 +649,10 @@ export function formatReport(session, a = analyse(session)) {
     const L = [];
     L.push(`Trickplayer BLE session — ${(a.durationMs / 60000).toFixed(1)} min`);
     L.push("=".repeat(58));
+    if (session.truncated) {
+        L.push("(this session spans a relaunch and its oldest records were dropped " +
+            "to fit — the totals below cover what survived, not the whole run)");
+    }
     if (session.device) L.push(`device      ${JSON.stringify(session.device)}`);
     L.push(`images      ${a.counts.imagesSent} sent, ${a.counts.imagesFailed} failed, ` +
         `${a.counts.imagesSuperseded} superseded`);

@@ -40,7 +40,7 @@ async function mountProductionApp() {
 // AFTER the markup exists. Mount, then engine, then the recorder, then the app.
 await mountProductionApp();
 const engine = await import("./main");
-const recorder = enableLogging(engine);
+const recorder = await enableLogging(engine);
 
 /** `?play=1` starts the first playable item and leaves it running. */
 async function autoPlay() {

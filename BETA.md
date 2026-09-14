@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.2
+# Trickplayer for G2 — beta 0.9.3
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.2.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.3.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -62,6 +62,19 @@ The first two are the ones worth trying to break:
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
 
+## Fixed in 0.9.3
+
+- **The logging session survives a relaunch.** It was being written to browser
+  storage, which a packaged app discards — the same fault that used to lose
+  your server — so a crash took the recording of the crash with it.
+- **Logging stays on once you turn it on**, and starts before the app does
+  anything, so the launch itself is inside the session. There is a **Stop
+  logging** button for when you are done.
+- **A session that recorded a freeze is no longer thrown away.** An outage is
+  an *absence* of writes, and the rule for keeping a session only kept ones
+  that had writes in them — so the quiet failures, which are the interesting
+  ones, were discarded on the way back up.
+
 ## Fixed in 0.9.2
 
 - **"Connect with logging" no longer ends the app.** It used to open a second
@@ -94,7 +107,9 @@ From the first round of beta feedback:
 
 ## If something goes wrong
 
-Tap **Connect with logging** on the first screen. The recorder panel appears
+Tap **Connect with logging** on the first screen. You only need to do this
+once — it stays on across relaunches, and the session keeps accumulating, so a
+crash or a disconnect is recorded rather than lost. **Stop logging** ends it. The recorder panel appears
 above the app and everything keeps working — it does not leave the page, and it
 does not disturb the glasses. Play as normal, then **Generate report** and
 **Copy report**.

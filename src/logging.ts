@@ -17,11 +17,14 @@
 // payload sizes, the real retry policy. A measurement of a cut-down player
 // would be a measurement of the wrong thing.
 
-import { createRecorder, analyse, formatReport } from "./telemetry";
+import { createRecorder, analyse, formatReport, isResumable } from "./telemetry";
 import * as store from "./store";
 
 const $ = (id) => document.getElementById(id);
 const KEY = "trickplayer.telemetry";
+// Read by `ui.ts` STRAIGHT FROM THE STORE at boot rather than through this
+// module, so that a launch which is not logging never loads the recorder.
+const LOGGING_KEY = "trickplayer.logging";
 
 /**
  * The panel, as markup.
@@ -44,12 +47,14 @@ const PANEL = `
   <button class="btn-secondary" id="tlm-copy">Copy report</button>
   <button class="btn-secondary" id="tlm-json">Copy raw JSON</button>
   <button class="btn-danger" id="tlm-reset">Discard session</button>
-  <button class="btn-link" id="tlm-hide">Hide this panel</button>
+  <button class="btn-link" id="tlm-hide">Hide this panel (keep recording)</button>
+  <button class="btn-link" id="tlm-stop">Stop logging</button>
   <pre id="tlm-out" class="tlm-out"></pre>
 </div>`;
 
 let recorder = null;
 let started = false;
+let running = false;
 let discarded = false;
 let lastReport = "";
 
@@ -75,15 +80,51 @@ function device() {
  * away. Nothing reloads now, but the guard stays — every write goes through
  * here, so one check closes all of them.
  */
-function persist() {
-    if (discarded || !recorder) return;
-    try {
-        localStorage.setItem(KEY, JSON.stringify(recorder.session(device())));
-    } catch (e) {
-        // Quota: the session is long enough already. Stop growing it rather
-        // than throwing away what is there.
-        console.warn("[telemetry] could not persist:", e.message);
+/**
+ * How much of a session is worth carrying across a relaunch.
+ *
+ * The ring buffer holds 20,000 events, which at roughly 200 bytes each is
+ * megabytes — too much to push through the host bridge every fifteen seconds.
+ * The newest events are the ones that explain what just went wrong, and MARKS
+ * are kept whole regardless: they are small, and they are what turns a silence
+ * into a measurable gap. Dropping them would lose the outage while keeping the
+ * writes either side of it.
+ */
+const PERSIST_MAX_EVENTS = 4000;
+
+/**
+ * And a cap on marks, because a session now OUTLIVES the launch.
+ *
+ * A heartbeat every five seconds is 720 marks an hour, and the session
+ * accumulates across every relaunch until it is discarded — so without a
+ * ceiling the thing being written through the bridge every fifteen seconds
+ * grows without bound. 4,000 is about five hours of heartbeat, which is longer
+ * than any session anyone is going to sit through, and the newest are kept
+ * because they are the ones next to whatever just went wrong.
+ */
+const PERSIST_MAX_MARKS = 4000;
+
+function persistable() {
+    const s = recorder.session(device());
+    if (s.events.length > PERSIST_MAX_EVENTS) {
+        s.events = s.events.slice(-PERSIST_MAX_EVENTS);
+        s.truncated = true;
     }
+    if (s.marks.length > PERSIST_MAX_MARKS) {
+        s.marks = s.marks.slice(-PERSIST_MAX_MARKS);
+        s.truncated = true;
+    }
+    return s;
+}
+
+function persist() {
+    if (discarded || !recorder || !running) return;
+    // Through the STORE, not localStorage. A packaged app discards its own
+    // browser storage on relaunch — the same thing that used to lose the Plex
+    // sign-in — so a tester who hit a disconnect lost the recording of the
+    // disconnect, which is the only part anyone wanted.
+    store.writeBulk(KEY, JSON.stringify(persistable())).catch((e) =>
+        console.warn("[telemetry] could not persist:", e?.message || e));
 }
 
 function refresh(engine) {
@@ -131,15 +172,21 @@ async function copy(text, label) {
  *   which imports the engine itself for ordering reasons.
  * @param opts.resume pick up a previous session from storage (the default).
  */
-export function enableLogging(engine, { resume = true } = {}) {
+export async function enableLogging(engine, { resume = true } = {}) {
     if (started) { showPanel(); return recorder; }
     started = true;
+    running = true;
+
+    // Remembered, so the next launch records without being asked. A tester who
+    // turned logging on wants the session that spans the crash, and a crash is
+    // precisely when nobody is there to press the button again.
+    store.setItem(LOGGING_KEY, "1");
 
     let resumeFrom = null;
     if (resume) {
         try {
-            const prev = JSON.parse(localStorage.getItem(KEY) || "null");
-            if (prev?.events?.length) resumeFrom = prev;
+            const prev = JSON.parse((await store.readBulk(KEY)) || "null");
+            if (isResumable(prev)) resumeFrom = prev;
         } catch (e) { /* nothing recoverable */ }
     }
 
@@ -192,7 +239,7 @@ export function enableLogging(engine, { resume = true } = {}) {
      * ticks is a page that was not running; a span with ticks and no images
      * while the app believed it was playing is the pipeline stopping.
      */
-    setInterval(() => recorder.tick(engine.playbackState()), 5000);
+    setInterval(() => { if (running) recorder.tick(engine.playbackState()); }, 5000);
     setInterval(persist, 15000);
     window.addEventListener("beforeunload", persist);
 
@@ -229,6 +276,22 @@ function mountPanel(engine) {
     $("tlm-json").onclick = () =>
         copy(JSON.stringify(recorder.session(device())), "Raw session JSON");
     $("tlm-hide").onclick = () => $("tlm-panel").classList.add("hidden");
+
+    $("tlm-stop").onclick = () => {
+        // Otherwise it is on for ever: enabling it now outlives the launch, so
+        // there has to be something that undoes that. The session is left in
+        // storage — stopping is not discarding, and the report is still there
+        // to copy next time.
+        persist();
+        running = false;
+        store.removeItem(LOGGING_KEY);
+        engine.setEventSink(null);
+        engine.setWorkObserver(null);
+        engine.setLifecycleObserver(null);
+        engine.setLinkObserver(null);
+        $("tlm-panel").classList.add("hidden");
+        console.log("[telemetry] logging stopped; it will not resume on the next launch");
+    };
 
     $("tlm-probe").onclick = async () => {
         const btn = $("tlm-probe");
@@ -281,7 +344,7 @@ function mountPanel(engine) {
         // the picture never came back. Nothing needs reloading — the sinks read
         // a variable, so a fresh recorder is a new session.
         discarded = true;
-        try { localStorage.removeItem(KEY); } catch (e) {}
+        store.clearBulk(KEY);
         recorder = createRecorder();
         recorder.setContext({ foreground: !document.hidden });
         recorder.mark("session-discarded");
