@@ -1,27 +1,32 @@
 {
-  "package_id": "com.lukemeyer.plexbifviewer",
+  "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "1.0.0",
-  "min_sdk_version": "0.0.10",
+  "version": "0.9.0",
+  "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
-  "description": "Watch an episode as trick-play frames and subtitles on your Even Realities G2 glasses.",
+  "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
   "developer_name": "Luke Meyer",
   "entrypoint": "index.html",
   "permissions": [
     {
       "name": "network",
-      "desc": "Required to connect to your local or remote Plex server to download BIF and subtitle files.",
+      "desc": "Connects to plex.tv to sign in, and to your own Plex server to download trick-play frames and subtitles. Nothing is sent anywhere else.",
       "whitelist": [
+        "https://plex.tv",
         "*.plex.direct"
       ]
     }
   ],
   "changelog": [
     {
-      "version": "1.0.0",
+      "version": "0.9.0",
       "notes": [
-        "Initial release."
+        "First beta.",
+        "Plex sign-in by four-character code — no keyboard, no password on the glasses.",
+        "Continuous playback: frames advance on the measured link speed rather than a fixed timer.",
+        "Rebuilt Bluetooth transport — newest frame wins a backlog, a failed line is re-sent instead of being remembered as delivered, and a dropped link no longer leaves the subtitles dead for the rest of the session.",
+        "Frames are prepared about 50x faster, which was four seconds a frame on some phones."
       ]
     }
   ],
