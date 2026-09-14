@@ -338,6 +338,44 @@ def("it flags a decode slow enough to block the pipeline", async () => {
     return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
 });
 
+def("it explains a dead image container instead of blaming the link", async () => {
+    // The exact session a beta sent back: 0 images sent, 20 failed, every
+    // write timing 0ms, text landing throughout. The old report said only
+    // "second attempts rarely help — consider failing faster", which is advice
+    // about a link that was working perfectly.
+    // A stepped clock, so the recorder's own idea of "now" agrees with the
+    // timestamps on the events. With raw offsets against the wall clock the
+    // session looks decades long and the gap detector invents an outage that
+    // then leads the findings — which would make the assertion below pass or
+    // fail for reasons that have nothing to do with what is being tested.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    for (let i = 0; i < 20; i++) {
+        // Refused before the radio: no time passes, and the SDK says why.
+        rec.event({
+            id: 0, kind: "image", ok: false, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock, queuedMs: 0, durationMs: 0, depthAtEnqueue: 1,
+            bytes: 16000, reason: "failed", result: "imageException",
+        });
+        rec.event({
+            id: 0, kind: "text", ok: true, enqueuedAt: clock + 100,
+            startedAt: clock + 100, endedAt: clock + 469,
+            queuedMs: 0, durationMs: 369, depthAtEnqueue: 1,
+        });
+        clock += 3000;
+    }
+    const a = analyse(rec.session());
+    const hit = a.findings.find((x) => /image CONTAINER is gone/.test(x));
+    const text = formatReport(rec.session(), a);
+    return {
+        pass: !!hit && /imageException x20/.test(hit) && /text kept landing/.test(hit) &&
+              // and it must LEAD, not sit under advice about retry budgets
+              a.findings[0] === hit &&
+              /imageException\s+x20/.test(text),
+        detail: hit ? hit.slice(0, 150) : a.findings.join(" | ").slice(0, 150),
+    };
+});
+
 def("it names WHICH work is underneath the slow writes", async () => {
     // A fetch under a write and a decode under a write have opposite remedies:
     // the decode is free to move, the prefetch is what hides the network. The

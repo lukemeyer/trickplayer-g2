@@ -311,6 +311,29 @@ export function analyse(session) {
         };
     }
 
+    // 6e. WHY THE WRITES FAILED, in the device's own words.
+    //
+    //     A session came back reading "images 0 sent, 20 failed" and nothing
+    //     else, and the cause had to be reasoned out from every write timing
+    //     0ms. The SDK had answered with a reason on all twenty of them and the
+    //     app was discarding it. Now it rides along on the record.
+    //
+    //     The distinction that matters: `imageException`, `imageToGray4Failed`
+    //     and `imageSizeInvalid` come back BEFORE the radio is touched, so they
+    //     cost no time and are not a link problem at all. `sendFailed` is a
+    //     transmission that was attempted and lost.
+    out.failureReasons = (() => {
+        const failed = images.filter((e) => !e.ok && e.reason !== "superseded");
+        const byReason = {};
+        for (const e of failed) {
+            const k = e.result || e.reason || "unknown";
+            byReason[k] = (byReason[k] || 0) + 1;
+        }
+        const total = failed.length;
+        return total ? { total, byReason, instantPct:
+            (100 * failed.filter((e) => e.durationMs <= 1).length) / total } : null;
+    })();
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -440,6 +463,30 @@ export function analyse(session) {
                           `handing raw bytes across, removes it outright.`));
             }
         }
+    }
+
+    // Every image rejected, instantly, while text kept landing. That is not a
+    // link and no amount of pacing or payload work touches it: the glasses have
+    // no image container to put anything in.
+    const fr = out.failureReasons;
+    if (fr && fr.total >= 5 && out.counts.imagesSent === 0) {
+        const named = Object.entries(fr.byReason).sort((a, b) => b[1] - a[1]);
+        const local = ["imageException", "imageToGray4Failed", "imageSizeInvalid"];
+        const instant = fr.instantPct > 80;
+        const refused = named.some(([k]) => local.includes(k));
+        f.unshift(
+            `EVERY image failed (${fr.total}) and none succeeded, while text ` +
+            `${ok(texts).length ? `kept landing (${ok(texts).length} sent)` : "was not tried"}. ` +
+            `Reasons: ${named.map(([k, n]) => `${k} x${n}`).join(", ")}.` +
+            (instant || refused
+                ? ` These are refusals, not failed transmissions — ${instant
+                    ? `${fr.instantPct.toFixed(0)}% took under a millisecond, so nothing was `
+                    : "the SDK answers them before the radio is touched, so nothing was "}` +
+                  `sent. The image CONTAINER is gone; the link is fine. Re-declare the ` +
+                  `containers, and look at what tore them down — a navigation, a reload, or ` +
+                  `the host ending the feature.`
+                : ""),
+        );
     }
 
     const c = out.contention;
@@ -612,6 +659,15 @@ export function formatReport(session, a = analyse(session)) {
         L.push(`synthetic fit   ${Math.round(y.fixedMs)}ms fixed + ${y.perKbMs.toFixed(1)}ms/KB`);
         L.push(`real frames     ${y.realKb.toFixed(0)}KB -> ${Math.round(y.actualMs)}ms actual ` +
             `vs ${Math.round(y.predictedMs)}ms predicted  (${y.ratio.toFixed(2)}x)`);
+    }
+    if (a.failureReasons) {
+        L.push("");
+        L.push(`failed writes  ${a.failureReasons.total}  ` +
+            `(${a.failureReasons.instantPct.toFixed(0)}% instant — refused, not sent)`);
+        for (const [k, n] of Object.entries(a.failureReasons.byReason)
+                .sort((x, y) => y[1] - x[1])) {
+            L.push(`  ${String(k).padEnd(20)} x${n}`);
+        }
     }
     if (a.fetchMs.n || a.prepareMs.n) {
         L.push("");

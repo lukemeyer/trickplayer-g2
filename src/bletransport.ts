@@ -163,7 +163,12 @@ export function createBleTransport(opts = {}) {
             // Cherry-picking dropped the `probe` flag, which is what separates
             // a synthetic payload from a real frame — and that separation is
             // where the interesting comparison lives.
-        }, { generationAtEnqueue: gen, meta: { ...meta, kind: "image" } });
+            // The caller's meta object is passed by REFERENCE, not copied, so
+            // a field it can only fill in once the write has returned — the
+            // SDK's reason string — is present when the record is written. A
+            // copy taken here captured it before it existed, which is how a
+            // session came back saying "20 failed" and nothing else.
+        }, { generationAtEnqueue: gen, meta: Object.assign(meta, { kind: "image" }) });
 
         pendingImages = pendingImages.filter((m) => m !== meta);
 

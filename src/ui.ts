@@ -113,11 +113,46 @@ async function openSource(rec) {
     await showBrowse();
 }
 
-// The logging build. A relative URL on purpose: this page is served from "/"
-// in the packaged app and from "/trickplayer-g2/" on GitHub Pages, and an
-// absolute path is wrong in one of those.
+// Turn the recorder on, HERE, without going anywhere.
+//
+// This used to be `location.href = "telemetry.html"`, and on the glasses that
+// is not a navigation — it is the end of the app. The G2 prompts "End this
+// feature", the startup containers go with it, and every image write after that
+// is refused instantly while text carries on. A beta caught it exactly:
+// 0 images sent, 20 failed, every write timing 0ms.
+//
+// So the recorder comes to the app instead. Loaded on demand, so a wearer who
+// never taps it does not carry the code.
 for (const btn of document.querySelectorAll("[data-logging]")) {
-    btn.onclick = () => { location.href = "telemetry.html"; };
+    btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "Starting the recorder…";
+        try {
+            const { enableLogging } = await import("./logging");
+            enableLogging(engine);
+            // Both of them — the offer appears on the server list and on the
+            // add-a-server step, and once the recorder is on neither is an
+            // offer any more.
+            for (const b of document.querySelectorAll("[data-logging]")) b.remove();
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = "Connect with logging";
+            console.error(`[logging] could not start: ${e.message}`);
+        }
+    };
+}
+
+// `?logging=1` turns the recorder on at boot. For the simulator and for a
+// phone on a desk: neither has a way to tap a button, and this path is now the
+// one every tester uses, so it has to be drivable from a harness.
+const harness = new URLSearchParams(location.search);
+if (harness.has("logging")) {
+    setTimeout(() => document.querySelector("[data-logging]")?.click(), 1500);
+}
+// `?play=1` starts the first playable item, so a harness can measure the real
+// pipeline rather than an idle page.
+if (harness.has("play")) {
+    setTimeout(() => { firstPlayable(); }, 2500);
 }
 
 $("add-source-btn").onclick = () => startAddSource();

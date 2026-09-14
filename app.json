@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.2",
+      "notes": [
+        "\"Connect with logging\" no longer ends the app. It used to open a second page, and on the glasses opening a page is a navigation \u2014 the G2 offers to end the feature, the display containers go with it, and the picture never comes back. The recorder now switches on where you are, without going anywhere.",
+        "Discard session did the same thing for the same reason, and no longer does.",
+        "When an image write is refused, the report now says what the glasses actually answered instead of only how many failed."
+      ]
+    },
     {
       "version": "0.9.1",
       "notes": [

@@ -838,13 +838,23 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                 // Mapping it with `!== false` would report every one of those
                 // failures as a delivery, which is worse than the failure.
                 let lastResult = "";
+                // Filled in by the send below and read by the transport when it
+                // writes the record — which is why it is one object rather than
+                // a value passed in.
+                const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength };
                 const r = await ble.sendImage(
                     async (p) => {
                         lastResult = await bridgeInstance.updateImageRawData(p);
+                        imageMeta.result = lastResult;
                         return lastResult === "success";
                     },
                     payload,
-                    { tsMs: frame.tsMs, bytes: preparedBytes.byteLength },
+                    // `result` rides along so the REPORT can say why, not just
+                    // how many. A session came back reading "0 sent, 20 failed"
+                    // with no other clue, and the cause had to be inferred from
+                    // the write times all being 0ms. The SDK told us the reason
+                    // every single time; we were throwing it away.
+                    imageMeta,
                 );
 
                 // The glasses can fail to READ a frame rather than fail to
@@ -886,11 +896,7 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                     consecutiveImageFailures = 0;
                     lastImageSuccessWall = performance.now();
                 } else {
-                    consecutiveImageFailures++;
-                    imageFailureCount++;
-                    // The mirror of the text case, and the one the first beta
-                    // hit: the picture stopped while subtitles carried on.
-                    await repairContainersIfOneChannelIsDead("image");
+                    await noteImageResult(false, lastResult);
                 }
 
                 const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
@@ -946,6 +952,27 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
              * Repeated text failures while images keep landing is the symptom
              * itself, and it is available without knowing the cause.
              */
+            /**
+             * One place every image outcome passes through, whoever sent it.
+             *
+             * Made shared because the payload sweep was not using it: a sweep
+             * run against a dead image container produced twenty rejections,
+             * attempted no recovery, and reported a link problem that was not
+             * one.
+             */
+            async function noteImageResult(ok, result) {
+                if (ok) { consecutiveImageFailures = 0; return; }
+                consecutiveImageFailures++;
+                imageFailureCount++;
+                // The mirror of the text case, and the one the beta hit: the
+                // picture stopped while subtitles carried on. An instant
+                // rejection — the SDK answering before the radio is touched,
+                // which is why those writes time at 0ms — is the clearest
+                // version of the same signal.
+                void result;
+                await repairContainersIfOneChannelIsDead("image");
+            }
+
             async function repairContainersIfOneChannelIsDead(dead) {
                 if (!bridgeInstance) return false;
                 // The evidence is the ASYMMETRY: one channel failing while the
@@ -1934,12 +1961,22 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                                       containerID: 2, containerName: "g2_bif", imageData: bytes,
                                   })
                                 : { containerID: 2, containerName: "g2_bif", imageData: bytes };
-                        await ble.sendImage(
-                            async (p) =>
-                                (await bridgeInstance.updateImageRawData(p)) === "success",
+                        let probeResult = "";
+                        const probeMeta = { bytes: bytes.byteLength, probe: true };
+                        const pr = await ble.sendImage(
+                            async (p) => {
+                                probeResult = await bridgeInstance.updateImageRawData(p);
+                                probeMeta.result = probeResult;
+                                return probeResult === "success";
+                            },
                             payload,
-                            { bytes: bytes.byteLength, probe: true },
+                            probeMeta,
                         );
+                        // The sweep used to bypass every failure path in the
+                        // app, so a sweep against a dead image container
+                        // measured twenty rejections and repaired nothing. It
+                        // is the same channel; it gets the same bookkeeping.
+                        await noteImageResult(pr.ok, probeResult);
                         await ble.sendText(
                             (content) => bridgeInstance.textContainerUpgrade({
                                 containerID: 1, containerName: "g2_subs",

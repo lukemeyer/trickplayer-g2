@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.1
+# Trickplayer for G2 — beta 0.9.2
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.1.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.2.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -62,6 +62,20 @@ The first two are the ones worth trying to break:
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
 
+## Fixed in 0.9.2
+
+- **"Connect with logging" no longer ends the app.** It used to open a second
+  page, and on the glasses opening a page is a navigation: the G2 offers to end
+  the feature, the display containers go with it, and the picture never comes
+  back even if you dismiss the prompt. The recorder now switches on where you
+  are, without going anywhere. **Discard session** did the same thing for the
+  same reason and no longer does.
+- **A refused image write now says why.** The glasses answer with a reason
+  every time and the app was throwing it away, so a report could only say
+  "0 sent, 20 failed". It now names the reason and, when every image is refused
+  instantly while text keeps landing, says outright that the container is gone
+  rather than blaming the link.
+
 ## Fixed in 0.9.1
 
 From the first round of beta feedback:
@@ -80,9 +94,12 @@ From the first round of beta feedback:
 
 ## If something goes wrong
 
-Tap **Connect with logging** on the first screen. It is the same app with a
-recorder attached, and it is the fastest way to turn "it froze" into something
-fixable. (In a browser: `/telemetry.html`.)
+Tap **Connect with logging** on the first screen. The recorder panel appears
+above the app and everything keeps working — it does not leave the page, and it
+does not disturb the glasses. Play as normal, then **Generate report** and
+**Copy report**.
+
+(In a browser, `/telemetry.html` does the same thing.)
 
 Play as normal for five minutes — fifteen is better — then **Generate report**
 and **Copy report**, and send it over. It captures write times, failures,
