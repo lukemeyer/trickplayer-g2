@@ -597,3 +597,23 @@
                 color: var(--primary);
                 background: rgba(229, 160, 13, 0.1);
             }
+
+            /* --- TELEMETRY PAGE ---
+               A report is read, copied and pasted into an issue; it is not a
+               dashboard. Monospace so the columns line up, selectable so it
+               can leave the device at all. */
+            .tlm-out {
+                margin-top: 16px;
+                padding: 12px;
+                background: rgba(0, 0, 0, 0.5);
+                border: 1px solid var(--card-border);
+                border-radius: 8px;
+                font-family: ui-monospace, Menlo, Consolas, monospace;
+                font-size: 0.72rem;
+                line-height: 1.45;
+                color: var(--text);
+                white-space: pre;
+                overflow-x: auto;
+                user-select: text;
+                -webkit-user-select: text;
+            }

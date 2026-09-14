@@ -5,6 +5,9 @@ import {
     OsEventTypeList
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
+import { createBleTransport } from "./bletransport";
+import { toGlassesLevels } from "./pixels";
+import { encodeGreyPng, fallbackBitDepth } from "./png";
 
             // --- UI HOOKS ---
             //
@@ -48,19 +51,13 @@ import { buildSceneList, thinScenes } from "./scenes";
             let pollIntervalId = null;
 
             // --- BLE SERIAL QUEUE ---
-            // All BLE writes go through here so they never overlap on the channel.
-            let bleQueue = Promise.resolve();
-            let bleQueueDepth = 0; // pending BLE ops — a backpressure / saturation gauge
-            function bleEnqueue(fn) {
-                bleQueueDepth++;
-                bleQueue = bleQueue
-                    .then(() => fn())
-                    .catch(() => {})
-                    .finally(() => {
-                        bleQueueDepth--;
-                    });
-                return bleQueue;
-            }
+            //
+            // The link is the least reliable thing in this product, so its
+            // rules live in one testable place: src/bletransport.ts, driven
+            // against a modelled link by tools/ble-sim.mjs. Five defects that
+            // the inline version had are scenarios there now.
+            const ble = createBleTransport();
+            function bleQueueDepthNow() { return ble.depth; }
 
             // --- BLE / DEVICE DIAGNOSTICS ---
             // Tracked so every send can be annotated with the link state, which
@@ -81,7 +78,6 @@ import { buildSceneList, thinScenes } from "./scenes";
             let renderDurations = []; // last 5 image render durations (ms)
             let averageRenderDuration = 1500; // moving avg, clamped 1000–8000ms
             let lastSentImageTimestampMs = 0;
-            let lastPushedSubText = "";
 
             // --- GLASSES SUBTITLE DISPLAY CONSTRAINTS ---
             // The G2 subtitle container is 432×132 px. We merge consecutive SRT
@@ -270,12 +266,44 @@ import { buildSceneList, thinScenes } from "./scenes";
                 else if (state === "error") indicator.classList.add("error");
             }
 
+            /**
+             * Fail loudly if the bridge does not have what this app calls.
+             *
+             * A misspelt SDK method is not a crash — it is `undefined`, and
+             * calling it throws inside the transport's per-attempt try/catch,
+             * which turns it into "every image failed, three attempts each,
+             * forever". That is indistinguishable from a bad radio, and it cost
+             * a session to find: `imageRawDataUpgrade` invented by symmetry with
+             * the real `textContainerUpgrade`.
+             *
+             * Names are data the SDK owns and we can only get wrong, so check
+             * them once, at the one moment there is something to check against.
+             */
+            const REQUIRED_BRIDGE_METHODS = [
+                "updateImageRawData",
+                "textContainerUpgrade",
+                "createStartUpPageContainer",
+            ];
+
+            function assertBridgeContract(bridge) {
+                const missing = REQUIRED_BRIDGE_METHODS.filter(
+                    (m) => typeof bridge?.[m] !== "function",
+                );
+                if (missing.length) {
+                    throw new Error(
+                        `SDK is missing ${missing.join(", ")} — this build calls ` +
+                        `methods the bridge does not have`,
+                    );
+                }
+            }
+
             async function initEvenBridge() {
                 try {
                     setStatus(
                         "Searching for active G2 Webview Environment Hook...",
                     );
                     bridgeInstance = await waitForEvenAppBridge();
+                    assertBridgeContract(bridgeInstance);
 
                     // Wire tap/double-tap/exit event routing now that the
                     // bridge instance actually exists.
@@ -288,9 +316,35 @@ import { buildSceneList, thinScenes } from "./scenes";
                             deviceConnectType = status?.connectType ?? "unknown";
                             deviceBatteryLevel = status?.batteryLevel ?? null;
                             deviceIsWearing = status?.isWearing ?? null;
+                            // A link that went away and came back cleared the
+                            // glasses; what we believe is on screen is no longer
+                            // true, so the next line must be sent even if it is
+                            // the same text.
+                            if (prev !== "unknown" && deviceConnectType !== prev) {
+                                ble.forgetText();
+                                // A link that moved is the most likely moment
+                                // for the containers to have gone with it, so
+                                // drop the repair cooldown: the safety net
+                                // should fire on the next couple of failures
+                                // rather than waiting out a window sized for a
+                                // steady link. The repair is still evidence-led
+                                // — nothing is re-declared unless text actually
+                                // starts failing while images land — because
+                                // there is no reason to trust that every way of
+                                // losing a container announces itself here.
+                                lastContainerRepairAt = 0;
+                                consecutiveSubtitleFailures = 0;
+                            }
+                            if (linkObserver) {
+                                linkObserver({
+                                    connectType: deviceConnectType,
+                                    batteryLevel: deviceBatteryLevel,
+                                    isWearing: deviceIsWearing,
+                                });
+                            }
                             if (deviceConnectType !== prev) {
                                 console.warn(
-                                    `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepth})`,
+                                    `[Device] connection ${prev} -> ${deviceConnectType} (battery: ${deviceBatteryLevel ?? "?"}%, wearing: ${deviceIsWearing}, queue: ${bleQueueDepthNow()})`,
                                 );
                             }
                         });
@@ -317,23 +371,29 @@ import { buildSceneList, thinScenes } from "./scenes";
                         containerName: "g2_bif",
                     };
 
-                    const result =
-                        await bridgeInstance.createStartUpPageContainer({
-                            containerTotalNum: 2,
-                            textObject: [glassesSubtitleContainer],
-                            imageObject: [glassesImageContainer],
-                        });
+                    const result = await createGlassesContainers();
 
                     if (result === 0) {
                         setStatus("G2 Glass Engine Connected via BLE!", "active");
                     } else {
+                        // 0 success, 1 invalid, 2 oversize, 3 outOfMemory.
                         throw new Error(
-                            `Startup container creation failed with result ${result}`,
+                            `Startup container creation returned ` +
+                            `${["success", "invalid", "oversize", "outOfMemory"][result] ?? result}`,
                         );
                     }
                 } catch (err) {
+                    // Say WHICH step failed. "Offline" covered both a bridge
+                    // that never appeared and a bridge that appeared and then
+                    // threw during wiring, which are different problems.
+                    console.error(
+                        `[Bridge] init failed after ${bridgeInstance ? "connecting" : "waiting"}: ${err?.message || err}`,
+                        err,
+                    );
                     setStatus(
-                        "G2 App Bridge Offline (Browser Preview Loop Active)",
+                        bridgeInstance
+                            ? "G2 bridge connected but wiring failed — see console"
+                            : "G2 App Bridge Offline (Browser Preview Loop Active)",
                         "error",
                     );
                 }
@@ -396,200 +456,103 @@ import { buildSceneList, thinScenes } from "./scenes";
                 renderDurations = [];
                 averageRenderDuration = 1500;
                 lastSentImageTimestampMs = 0;
-                lastPushedSubText = "";
             }
 
-            function resizeAndPrepareImage(blob, targetWidth, targetHeight) {
-                return new Promise((resolve, reject) => {
-                    const img = new Image();
-                    const objectUrl = URL.createObjectURL(blob);
-                    img.onload = () => {
-                        URL.revokeObjectURL(objectUrl);
-                        try {
-                            const canvas = document.createElement("canvas");
-                            canvas.width = targetWidth;
-                            canvas.height = targetHeight;
-                            const ctx = canvas.getContext("2d");
-                            ctx.clearRect(0, 0, targetWidth, targetHeight);
-                            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+            // A frame is prepared in three separable phases: decode the
+            // provider's JPEG, run the pixel arithmetic, encode a PNG for the
+            // bridge. `prepare` used to time all three as one number, and that
+            // number reached 4040ms at p90 on hardware — larger than the BLE
+            // write it was supposed to be hiding behind.
+            //
+            // One number cannot be acted on. `tools/pixel-bench.mjs` measures
+            // the middle phase at 0.52ms median for this frame size, so the
+            // arithmetic was never the cost; it is decode or encode or the main
+            // thread being busy elsewhere, and those have different fixes. Each
+            // phase is therefore timed separately (F-046).
+            //
+            // Two changes come from the same measurement:
+            //   - `createImageBitmap` where it exists, instead of an <img> and
+            //     an object URL. It decodes off the main thread, so a slow
+            //     decode stops blocking the timers that drive the pipeline.
+            //   - one canvas for the whole session instead of one per frame.
+            //     At a scene every few seconds that is a lot of allocation for
+            //     a surface whose size never changes.
+            let prepCanvas = null;
+            let prepCtx = null;
 
-                            const imgData = ctx.getImageData(
-                                0,
-                                0,
-                                targetWidth,
-                                targetHeight,
-                            );
-                            const data = imgData.data;
-                            const w = targetWidth;
-                            const h = targetHeight;
+            function prepSurface(w, h) {
+                if (!prepCanvas) {
+                    prepCanvas = document.createElement("canvas");
+                    prepCtx = prepCanvas.getContext("2d", { willReadFrequently: true });
+                }
+                if (prepCanvas.width !== w || prepCanvas.height !== h) {
+                    prepCanvas.width = w;
+                    prepCanvas.height = h;
+                }
+                return { canvas: prepCanvas, ctx: prepCtx };
+            }
 
-                            const gray = new Float32Array(w * h);
-                            // Precalculate contrast factor
-                            const contrastFactor =
-                                (259 * (contrastValue + 255)) /
-                                (255 * (259 - contrastValue));
+            /** Decode to something drawable, preferring the off-thread path. */
+            async function decodeFrame(blob) {
+                if (typeof createImageBitmap === "function") {
+                    // `resize` options are not universally honoured, so the
+                    // scaling stays in drawImage where it always works.
+                    return await createImageBitmap(blob);
+                }
+                const objectUrl = URL.createObjectURL(blob);
+                try {
+                    return await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => resolve(img);
+                        img.onerror = (err) => reject(err);
+                        img.src = objectUrl;
+                    });
+                } finally {
+                    URL.revokeObjectURL(objectUrl);
+                }
+            }
 
-                            for (let i = 0; i < w * h; i++) {
-                                const r = data[i * 4];
-                                const g = data[i * 4 + 1];
-                                const b = data[i * 4 + 2];
+            /**
+             * 4 unless the host has told us it cannot read a 4-bit PNG.
+             *
+             * Not a preference — 4-bit greyscale is the display's own format,
+             * and its samples scale by exactly the 17 the dither quantises to.
+             * The retreat exists because the decoder lives in someone else's
+             * firmware, and because the bridge says so out loud when it fails
+             * rather than returning a plausible-looking success.
+             */
+            let pngBitDepth = 4;
 
-                                // Convert to luminance greyscale
-                                let v = 0.299 * r + 0.587 * g + 0.114 * b;
+            /** Did the glasses fail to READ what we sent, rather than fail to receive it? */
+            function isUnreadableImage(result) {
+                return result === "imageException" || result === "imageToGray4Failed";
+            }
 
-                                // 1. Apply Brightness
-                                v += brightnessValue;
-
-                                // 2. Apply Contrast
-                                v = contrastFactor * (v - 128) + 128;
-
-                                // 3. Apply Gamma
-                                if (gammaValue !== 1.0) {
-                                    v =
-                                        255 *
-                                        Math.pow(
-                                            Math.max(0, v) / 255,
-                                            1 / gammaValue,
-                                        );
-                                }
-
-                                // Clamp intermediate values
-                                gray[i] = Math.max(0, Math.min(255, v));
-                            }
-
-                            // Apply selected dithering algorithm
-                            if (ditherAlgorithm === "floyd-steinberg") {
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        // Quantize to 16 levels (0-15, mapped to 0-255)
-                                        let level = Math.round(oldVal / 17);
-                                        if (level < 0) level = 0;
-                                        if (level > 15) level = 15;
-                                        const newVal = level * 17;
-                                        gray[idx] = newVal;
-
-                                        const err = oldVal - newVal;
-
-                                        // Diffuse error
-                                        if (x + 1 < w) {
-                                            gray[idx + 1] += (err * 7) / 16;
-                                        }
-                                        if (y + 1 < h) {
-                                            if (x - 1 >= 0) {
-                                                gray[idx + w - 1] +=
-                                                    (err * 3) / 16;
-                                            }
-                                            gray[idx + w] += (err * 5) / 16;
-                                            if (x + 1 < w) {
-                                                gray[idx + w + 1] +=
-                                                    (err * 1) / 16;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if (ditherAlgorithm === "atkinson") {
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        let level = Math.round(oldVal / 17);
-                                        if (level < 0) level = 0;
-                                        if (level > 15) level = 15;
-                                        const newVal = level * 17;
-                                        gray[idx] = newVal;
-
-                                        const err = oldVal - newVal;
-                                        const errPart = err / 8;
-
-                                        // Atkinson diffuses only 3/8ths of the total error to immediate neighbors
-                                        if (x + 1 < w) gray[idx + 1] += errPart;
-                                        if (x + 2 < w) gray[idx + 2] += errPart;
-                                        if (y + 1 < h) {
-                                            if (x - 1 >= 0)
-                                                gray[idx + w - 1] += errPart;
-                                            gray[idx + w] += errPart;
-                                            if (x + 1 < w)
-                                                gray[idx + w + 1] += errPart;
-                                        }
-                                        if (y + 2 < h) {
-                                            gray[idx + 2 * w] += errPart;
-                                        }
-                                    }
-                                }
-                            } else if (ditherAlgorithm === "ordered-4x4") {
-                                const BAYER_4X4 = [
-                                    [0, 8, 2, 10],
-                                    [12, 4, 14, 6],
-                                    [3, 11, 1, 9],
-                                    [15, 7, 13, 5],
-                                ];
-                                for (let y = 0; y < h; y++) {
-                                    for (let x = 0; x < w; x++) {
-                                        const idx = y * w + x;
-                                        const oldVal = gray[idx];
-
-                                        const level = Math.floor(oldVal / 17);
-                                        const remainder = (oldVal % 17) / 17;
-                                        const threshold =
-                                            (BAYER_4X4[y % 4][x % 4] + 0.5) /
-                                            16;
-
-                                        const newVal =
-                                            (remainder > threshold
-                                                ? level + 1
-                                                : level) * 17;
-                                        gray[idx] = Math.min(255, newVal);
-                                    }
-                                }
-                            } else {
-                                // Threshold / High Contrast (No Dither)
-                                for (let i = 0; i < w * h; i++) {
-                                    let level = Math.round(gray[i] / 17);
-                                    if (level < 0) level = 0;
-                                    if (level > 15) level = 15;
-                                    gray[i] = level * 17;
-                                }
-                            }
-
-                            // Write the dithered greyscale values back to image data array
-                            for (let i = 0; i < w * h; i++) {
-                                const val = Math.min(
-                                    255,
-                                    Math.max(0, Math.round(gray[i])),
-                                );
-                                data[i * 4] = val;
-                                data[i * 4 + 1] = val;
-                                data[i * 4 + 2] = val;
-                                data[i * 4 + 3] = 255; // fully opaque
-                            }
-                            ctx.putImageData(imgData, 0, 0);
-
-                            canvas.toBlob(async (blob) => {
-                                if (!blob) {
-                                    reject(new Error("Canvas toBlob failed"));
-                                    return;
-                                }
-                                try {
-                                    const buffer = await blob.arrayBuffer();
-                                    resolve(buffer);
-                                } catch (e) {
-                                    reject(e);
-                                }
-                            }, "image/png");
-                        } catch (err) {
-                            reject(err);
-                        }
-                    };
-                    img.onerror = (err) => {
-                        URL.revokeObjectURL(objectUrl);
-                        reject(err);
-                    };
-                    img.src = objectUrl;
-                });
+            async function resizeAndPrepareImage(blob, targetWidth, targetHeight, meta = {}) {
+                const bitmap = await timed("decode", meta, () => decodeFrame(blob));
+                try {
+                    const { ctx } = prepSurface(targetWidth, targetHeight);
+                    const levels = await timed("pixels", meta, () => {
+                        ctx.clearRect(0, 0, targetWidth, targetHeight);
+                        ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+                        const d = ctx.getImageData(0, 0, targetWidth, targetHeight);
+                        return toGlassesLevels(d.data, targetWidth, targetHeight, {
+                            brightness: brightnessValue,
+                            contrast: contrastValue,
+                            gamma: gammaValue,
+                            dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
+                        });
+                    });
+                    // Synchronous, and about a tenth of a millisecond. The
+                    // canvas is not asked to encode anything: `toBlob` handed
+                    // the job to the host and its callback came back four
+                    // seconds later on real hardware, which is not something
+                    // the app can schedule around. See src/png.ts.
+                    return await timed("encode", meta, () =>
+                        encodeGreyPng(levels, targetWidth, targetHeight, pngBitDepth));
+                } finally {
+                    if (bitmap && typeof bitmap.close === "function") bitmap.close();
+                }
             } // --- SCENE PIPELINE HELPERS ---
 
             function sleep(ms, signal) {
@@ -791,8 +754,10 @@ import { buildSceneList, thinScenes } from "./scenes";
                 // How that fetch happens is the provider's business: a ranged
                 // GET on Plex, a crop out of a cached sheet elsewhere.
                 let assets;
+                const cached = !!peekFrameUrl(frameIndex);
                 try {
-                    assets = await getFrameAssets(frameIndex);
+                    assets = await timed("fetch", { frameIndex, cached },
+                        () => getFrameAssets(frameIndex));
                 } catch (e) {
                     console.warn(
                         `[frame] fetch failed at ${bifs[frameIndex]?.tsMs}ms: ${e.message}`,
@@ -800,143 +765,227 @@ import { buildSceneList, thinScenes } from "./scenes";
                     return 0;
                 }
 
-                const preparedBytes = await resizeAndPrepareImage(
-                    assets.blob,
-                    GLASSES_IMAGE_WIDTH,
-                    GLASSES_IMAGE_HEIGHT,
+                const preparedBytes = await timed("prepare", { frameIndex }, () =>
+                    resizeAndPrepareImage(
+                        assets.blob,
+                        GLASSES_IMAGE_WIDTH,
+                        GLASSES_IMAGE_HEIGHT,
+                        { frameIndex },
+                    ),
                 );
 
-                return new Promise((resolve) => {
-                    bleEnqueue(async () => {
-                        const payload =
-                            typeof ImageRawDataUpdate !== "undefined"
-                                ? new ImageRawDataUpdate({
-                                      containerID: 2,
-                                      containerName: "g2_bif",
-                                      imageData: preparedBytes,
-                                  })
-                                : {
-                                      containerID: 2,
-                                      containerName: "g2_bif",
-                                      imageData: preparedBytes,
-                                  };
+                const payload =
+                    typeof ImageRawDataUpdate !== "undefined"
+                        ? new ImageRawDataUpdate({
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          })
+                        : {
+                              containerID: 2,
+                              containerName: "g2_bif",
+                              imageData: preparedBytes,
+                          };
+                const payloadKB = (preparedBytes.byteLength / 1024).toFixed(1);
 
-                        const payloadKB = (
-                            preparedBytes.byteLength / 1024
-                        ).toFixed(1);
+                // Queue, retry, supersession and the failure bookkeeping all
+                // live in the transport now. What is left here is the part that
+                // is about THIS app: what to log, and how the result feeds the
+                // pacing average.
+                // `updateImageRawData` resolves to a STRING enum, not a
+                // boolean: "success" | "imageException" | "imageSizeInvalid" |
+                // "imageToGray4Failed" | "sendFailed". The transport's contract
+                // is a boolean, so the mapping happens here — it is the only
+                // layer that should know what this SDK calls things.
+                //
+                // Mapping it with `!== false` would report every one of those
+                // failures as a delivery, which is worse than the failure.
+                let lastResult = "";
+                const r = await ble.sendImage(
+                    async (p) => {
+                        lastResult = await bridgeInstance.updateImageRawData(p);
+                        return lastResult === "success";
+                    },
+                    payload,
+                    { tsMs: frame.tsMs, bytes: preparedBytes.byteLength },
+                );
 
-                        // The BLE image transfer fails intermittently (the link
-                        // is flaky). Retry the same frame a few times within this
-                        // queue slot so a transient failure recovers in ~1s rather
-                        // than leaving the image frozen until the next scene.
-                        let result = "sendFailed";
-                        let duration = 0;
-                        const attemptResults = [];
-                        const sendStart = performance.now();
-                        for (
-                            let attempt = 1;
-                            attempt <= IMAGE_SEND_MAX_ATTEMPTS;
-                            attempt++
-                        ) {
-                            // Measure only the actual BLE render, not time spent
-                            // waiting behind other writes in the serial queue.
-                            const start = performance.now();
-                            result = await bridgeInstance.updateImageRawData(payload);
-                            duration = performance.now() - start;
-                            attemptResults.push(`${result}/${duration.toFixed(0)}ms`);
+                // The glasses can fail to READ a frame rather than fail to
+                // receive it, and they say which. 4-bit greyscale is the
+                // display's own format, but the decoder is in someone else's
+                // firmware — so the exact format is tried, the answer is
+                // watched, and the session drops to 8-bit if it has to.
+                if (isUnreadableImage(lastResult) && pngBitDepth !== fallbackBitDepth) {
+                    const was = pngBitDepth;
+                    pngBitDepth = fallbackBitDepth;
+                    console.warn(
+                        `[Image] Glasses returned ${lastResult} for a ${was}-bit PNG — ` +
+                        `falling back to ${fallbackBitDepth}-bit for the rest of the session`,
+                    );
+                    noteLifecycle("png-depth-fallback", { result: lastResult, was });
+                }
 
-                            if (result === "success") break;
-                            // Cap total retry time. Each failed attempt still takes
-                            // ~2-3s, so without this a bad frame blocks the serial
-                            // queue (and the next scene's subtitles) for ~10s.
-                            if (
-                                performance.now() - sendStart >=
-                                IMAGE_SEND_RETRY_BUDGET_MS
-                            ) {
-                                break;
-                            }
-                            if (attempt < IMAGE_SEND_MAX_ATTEMPTS) {
-                                await new Promise((r) =>
-                                    setTimeout(r, IMAGE_SEND_RETRY_DELAY_MS),
-                                );
-                            }
-                        }
+                if (r.reason === "superseded") {
+                    console.log(
+                        `[Scene Engine] Image ${frame.tsMs / 1000}s: skipped — a newer frame is queued`,
+                    );
+                    return 0;
+                }
 
-                        // Only successful renders inform the scene-size average;
-                        // failed-attempt durations aren't real render times. Cap
-                        // any single outlier (e.g. a send that resolved slow
-                        // while the BLE link was congested) so it can't drag
-                        // the pacing average — and therefore scene size — up
-                        // for the next several iterations.
-                        if (result === "success") {
-                            renderDurations.push(
-                                Math.min(duration, RENDER_DURATION_CAP_MS),
-                            );
-                            if (renderDurations.length > 5) renderDurations.shift();
-                            averageRenderDuration = getSceneDuration();
-                            lastSentImageTimestampMs = frame.tsMs;
-                            imageSuccessCount++;
-
-                            // Report how long the image had been frozen.
-                            if (consecutiveImageFailures > 0) {
-                                const frozenMs = lastImageSuccessWall
-                                    ? performance.now() - lastImageSuccessWall
-                                    : 0;
-                                console.warn(
-                                    `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
-                                );
-                            }
-                            consecutiveImageFailures = 0;
-                            lastImageSuccessWall = performance.now();
-                        } else {
-                            consecutiveImageFailures++;
-                            imageFailureCount++;
-                        }
-
-                        const attemptsNote =
-                            attemptResults.length > 1
-                                ? ` attempts[${attemptResults.join(", ")}]`
-                                : "";
-                        const stuckNote =
-                            consecutiveImageFailures > 0
-                                ? ` STUCK x${consecutiveImageFailures}`
-                                : "";
-                        console.log(
-                            `[Scene Engine] Image ${frame.tsMs / 1000}s: ${result} (${duration.toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, q:${bleQueueDepth}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                if (r.ok) {
+                    renderDurations.push(Math.min(r.duration, RENDER_DURATION_CAP_MS));
+                    if (renderDurations.length > 5) renderDurations.shift();
+                    averageRenderDuration = getSceneDuration();
+                    lastSentImageTimestampMs = frame.tsMs;
+                    imageSuccessCount++;
+                    if (consecutiveImageFailures > 0) {
+                        const frozenMs = lastImageSuccessWall
+                            ? performance.now() - lastImageSuccessWall
+                            : 0;
+                        console.warn(
+                            `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
                         );
+                    }
+                    consecutiveImageFailures = 0;
+                    lastImageSuccessWall = performance.now();
+                } else {
+                    consecutiveImageFailures++;
+                    imageFailureCount++;
+                }
 
-                        resolve(duration);
-                    });
+                const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
+                const stuckNote = consecutiveImageFailures > 0 ? ` STUCK x${consecutiveImageFailures}` : "";
+                console.log(
+                    `[Scene Engine] Image ${frame.tsMs / 1000}s: ${r.ok ? "success" : r.reason} ` +
+                    `(${(r.duration ?? 0).toFixed(0)}ms, ${payloadKB}KB, conn:${deviceConnectType}, ` +
+                    `q:${bleQueueDepthNow()}, avg:${averageRenderDuration.toFixed(0)}ms)${attemptsNote}${stuckNote}`,
+                );
+                return r.ok ? r.duration : 0;
+            }
+
+            /**
+             * Declare the two containers the glasses draw into.
+             *
+             * Deliberately callable more than once. It used to run exactly
+             * once, at bridge init, which was right up until the link dropped:
+             * a disconnect takes the containers with it, and the image path
+             * re-establishes itself while `textContainerUpgrade` keeps
+             * addressing a container ID that is no longer there. That is
+             * precisely the reported symptom — "images started sending again,
+             * but no text" — and it is silent, because a text write that names
+             * a dead container fails the same way a busy link does.
+             */
+            async function createGlassesContainers() {
+                containerLossInjected = false;
+                return await bridgeInstance.createStartUpPageContainer({
+                    containerTotalNum: 2,
+                    textObject: [glassesSubtitleContainer],
+                    imageObject: [glassesImageContainer],
                 });
+            }
+
+            let lastContainerRepairAt = 0;
+            let consecutiveSubtitleFailures = 0;
+            const CONTAINER_REPAIR_AFTER = 2;      // failures in a row
+            const CONTAINER_REPAIR_COOLDOWN_MS = 15000;
+
+            /**
+             * Re-declare the containers when the evidence says text is dead and
+             * the link is not.
+             *
+             * The trigger is deliberately not "we saw a disconnect event": the
+             * session that produced this had a genuine hardware disconnect AND
+             * an unrelated Bluetooth device dropping, and there is no reason to
+             * trust that every way of losing a container announces itself.
+             * Repeated text failures while images keep landing is the symptom
+             * itself, and it is available without knowing the cause.
+             */
+            async function repairContainersIfTextIsDead() {
+                if (!bridgeInstance) return false;
+                if (consecutiveSubtitleFailures < CONTAINER_REPAIR_AFTER) return false;
+                const now = Date.now();
+                if (now - lastContainerRepairAt < CONTAINER_REPAIR_COOLDOWN_MS) return false;
+                // If images are failing too, this is the link, not a container,
+                // and re-declaring them adds a write to a queue that is already
+                // struggling.
+                if (consecutiveImageFailures > 0) return false;
+
+                lastContainerRepairAt = now;
+                try {
+                    const result = await createGlassesContainers();
+                    console.warn(
+                        `[Recovery] Text failed ${consecutiveSubtitleFailures}x while images ` +
+                        `kept landing — re-declared the containers (${result === 0 ? "ok" : `code ${result}`})`,
+                    );
+                    noteLifecycle("containers-repaired", {
+                        result, afterFailures: consecutiveSubtitleFailures,
+                    });
+                    // Whatever the glasses are showing now is not ours, and the
+                    // line we most recently "sent" was never drawn.
+                    ble.forgetText();
+                    return result === 0;
+                } catch (e) {
+                    console.error(`[Recovery] Container re-declaration threw: ${e?.message || e}`);
+                    return false;
+                }
+            }
+
+            /**
+             * Reproduce the failure above without unplugging anything: text
+             * writes fail until the containers are re-declared, which is what a
+             * lost container does. Driven by the telemetry page's `?notext=1`.
+             */
+            let containerLossInjected = false;
+            export function simulateContainerLoss() {
+                containerLossInjected = true;
+                noteLifecycle("injected-container-loss");
             }
 
             async function sendSubtitleToGlasses(text) {
                 if (!bridgeInstance) return;
-                const displayText = text || " ";
-                if (displayText === lastPushedSubText) return;
 
-                lastPushedSubText = displayText;
-                return new Promise((resolve) => {
-                    bleEnqueue(async () => {
-                        // textContainerUpgrade resolves to a boolean. Logging text
-                        // failures shows whether a bad patch is the whole BLE link
-                        // or just the image channel.
-                        const ok = await bridgeInstance.textContainerUpgrade({
+                // De-duplication lives in the transport, and it only records a
+                // line once the write SUCCEEDED. Recording it here, before the
+                // send, is what used to leave the glasses showing the previous
+                // line for ever after a single rejected write.
+                //
+                // `textUpgradeResult` is local, and has to be: the image path
+                // has a variable of its own with almost the same name, and this
+                // function used to read THAT one. It is a `let` inside
+                // `sendImageToGlasses`, so every subtitle failure threw a
+                // ReferenceError out of the diagnostic that was supposed to
+                // explain it — swallowed by the caller and logged as
+                // `Subtitle send failed: {}`, which is how a text channel can
+                // die for a whole session without ever saying why.
+                let textUpgradeResult;
+                const r = await ble.sendText(
+                    async (content) => {
+                        if (containerLossInjected) return false;
+                        textUpgradeResult = await bridgeInstance.textContainerUpgrade({
                             containerID: 1,
                             containerName: "g2_subs",
                             contentOffset: 0,
                             contentLength: 0,
-                            content: displayText,
+                            content,
                         });
-                        if (ok === false) {
-                            subtitleFailureCount++;
-                            console.warn(
-                                `[Scene Engine] Subtitle send failed (conn:${deviceConnectType}, q:${bleQueueDepth})`,
-                            );
-                        }
-                        resolve();
-                    });
-                });
+                        return textUpgradeResult;
+                    },
+                    text,
+                );
+                if (!r.ok && r.reason !== "superseded") {
+                    subtitleFailureCount++;
+                    consecutiveSubtitleFailures++;
+                    console.warn(
+                        `[Scene Engine] Subtitle send failed (${r.reason}` +
+                        `${r.error ? `: ${r.error}` : ""}, bridge:${String(textUpgradeResult)}, ` +
+                        `conn:${deviceConnectType}, q:${bleQueueDepthNow()}, ` +
+                        `${consecutiveSubtitleFailures} in a row)`,
+                    );
+                    await repairContainersIfTextIsDead();
+                } else if (r.ok) {
+                    consecutiveSubtitleFailures = 0;
+                }
+                return r;
             }
 
             async function runScenePipeline() {
@@ -1142,6 +1191,11 @@ import { buildSceneList, thinScenes } from "./scenes";
                 if (sceneAbortController) {
                     sceneAbortController.abort();
                 }
+                // Anything already handed to the link is no longer wanted. The
+                // pipeline stopping and the QUEUE stopping are different
+                // things, and only aborting the first is why a pause used to be
+                // followed by several seconds of stale frames still arriving.
+                ble.abandonQueued();
             }
 
             // Periodic one-line health summary while playing, so link state and
@@ -1157,7 +1211,7 @@ import { buildSceneList, thinScenes } from "./scenes";
                         ? ((performance.now() - lastImageSuccessWall) / 1000).toFixed(1)
                         : "?";
                     console.log(
-                        `[Stats] pos:${(currentTimeMs / 1000).toFixed(0)}s conn:${deviceConnectType} battery:${deviceBatteryLevel ?? "?"}% wearing:${deviceIsWearing} queue:${bleQueueDepth} img:${imageSuccessCount}ok/${imageFailureCount}fail(${failPct}%) subFail:${subtitleFailureCount} lastGoodImg:${sinceGood}s ago${consecutiveImageFailures > 0 ? ` FROZEN x${consecutiveImageFailures}` : ""}`,
+                        `[Stats] pos:${(currentTimeMs / 1000).toFixed(0)}s conn:${deviceConnectType} battery:${deviceBatteryLevel ?? "?"}% wearing:${deviceIsWearing} queue:${bleQueueDepthNow()} img:${imageSuccessCount}ok/${imageFailureCount}fail(${failPct}%) subFail:${subtitleFailureCount} lastGoodImg:${sinceGood}s ago${consecutiveImageFailures > 0 ? ` FROZEN x${consecutiveImageFailures}` : ""}`,
                     );
                 }, 10000);
             }
@@ -1208,6 +1262,15 @@ import { buildSceneList, thinScenes } from "./scenes";
             }
 
             function updateUI() {
+                // Every element below belongs to the PREVIEW — the little
+                // monitor beside the player. It is a convenience, and on a page
+                // that does not have it (the telemetry page) these are null.
+                //
+                // Guarded because this runs inside the scene pipeline: an
+                // exception here does not break a preview, it breaks the
+                // GLASSES, by aborting the loop that feeds them. The screen the
+                // wearer sees must not depend on the screen the developer does.
+                if (!imgTag || !subDiv || !timeline || !timeDisplay) return;
                 // Find BIF frame corresponding to current playback time for local preview monitor
                 const frameIndex = bifs.findIndex(
                     (f, i) =>
@@ -1336,15 +1399,22 @@ import { buildSceneList, thinScenes } from "./scenes";
                 stopScenePipeline();
                 try { silentAudio.pause(); } catch (e) {}
                 console.log("[Lifecycle] Backgrounded — pipeline paused");
+                noteLifecycle("app-paused", { reason: "background" });
             }
 
-            function resumeFromBackground() {
+            function resumeFromBackground(reason = "foreground") {
                 if (!backgroundedWhilePlaying) return;
                 backgroundedWhilePlaying = false;
+                // What is on the glasses right now is whatever was there when
+                // we stopped, and the transport will skip re-sending identical
+                // text. After an outage that dedupe is wrong: the wearer has
+                // been staring at a stale line and needs it redrawn, even
+                // though it has not changed.
+                ble.forgetText();
                 if (!bifs || bifs.length === 0) return;
                 isPlaying = true;
                 playBtn.innerText = "Pause";
-                try { silentAudio.play(); } catch (e) {}
+                silentAudio.play().catch(() => {});
                 const title =
                     document.getElementById("playing-title")?.textContent ||
                     "media";
@@ -1352,9 +1422,30 @@ import { buildSceneList, thinScenes } from "./scenes";
                 console.log(
                     "[Lifecycle] Foregrounded — refreshing and resuming pipeline",
                 );
+                noteLifecycle("app-resumed", { reason });
                 sendOneShotUpdate().catch(() => {});
                 runScenePipeline();
             }
+
+            /**
+             * Never stay paused while the page is visible.
+             *
+             * The host is expected to send FOREGROUND_ENTER after its
+             * FOREGROUND_EXIT, and a measured session shows it does not always:
+             * the app paused at 47s and sat there for 150s with the link
+             * connected the whole time, because the only thing that could have
+             * restarted it was an event that never arrived.
+             *
+             * Waiting for a message that may not come is not a resume path. If
+             * we are paused, the page is visible, and playback was wanted, then
+             * resume — whatever did or did not fire.
+             */
+            setInterval(() => {
+                if (backgroundedWhilePlaying && !document.hidden) {
+                    console.warn("[Lifecycle] Still paused while visible — resuming");
+                    resumeFromBackground("watchdog");
+                }
+            }, 5000);
 
             // Defense in depth: the glasses host is expected to fire
             // FOREGROUND_ENTER/EXIT_EVENT (below), but the generic Page
@@ -1362,8 +1453,25 @@ import { buildSceneList, thinScenes } from "./scenes";
             // and costs nothing extra — both handlers are idempotent so it's
             // safe if both fire for the same real transition.
             document.addEventListener("visibilitychange", () => {
-                if (document.hidden) pauseForBackground();
-                else resumeFromBackground();
+                if (document.hidden) {
+                    // **The phone screen turning off is NOT a reason to stop.**
+                    //
+                    // This used to pause playback here, which is backwards for
+                    // a glasses app: the phone is the compute in your pocket
+                    // and its screen being off is the normal wearing state. The
+                    // measured result was exactly what it sounds like —
+                    // playback freezing a little while after the phone slept,
+                    // 110s of a 3.8 min session with nothing sent at all.
+                    //
+                    // The glasses host losing foreground is a real reason to
+                    // stop, and that still pauses: see FOREGROUND_EXIT_EVENT.
+                    noteLifecycle("phone-screen-off", { keptPlaying: isPlaying });
+                    console.log("[Lifecycle] Phone hidden — still playing");
+                    return;
+                }
+                noteLifecycle("phone-screen-on", {});
+                // Still a resume path, for when something else did pause us.
+                resumeFromBackground("phone-screen-on");
             });
 
             // Event routing for Even Hub.
@@ -1396,7 +1504,7 @@ import { buildSceneList, thinScenes } from "./scenes";
                     } else if (bifs && bifs.length > 0) {
                         isPlaying = true;
                         backgroundedWhilePlaying = false;
-                        try { silentAudio.play(); } catch (e) {}
+                        silentAudio.play().catch(() => {});
                         playBtn.innerText = "Pause";
                         setStatus(`Now playing: ${title}`, "active");
                         if (typeof runScenePipeline === 'function') runScenePipeline();
@@ -1500,6 +1608,298 @@ import { buildSceneList, thinScenes } from "./scenes";
 
             export { prepareItem, sceneStats };
 
+            // --- TELEMETRY SEAM ---
+            //
+            // Three functions, used only by the telemetry page. The production
+            // page never calls them and the transport's sink stays null, so
+            // recording costs one null check per BLE operation and nothing
+            // else.
+            export function setEventSink(fn) { ble.setEventSink(fn); }
+            export function bleDepth() { return ble.depth; }
+
+            /**
+             * Report link state changes — the thing every other number has to
+             * be read against, and the one the app cannot infer for itself.
+             */
+            let linkObserver = null;
+            export function setLinkObserver(fn) { linkObserver = fn; }
+
+            /** What the app believes it is doing, for the heartbeat to stamp. */
+            export function playbackState() {
+                return {
+                    playing: isPlaying,
+                    pipeline: scenePipelineRunning,
+                    scene: sceneList.length ? currentTimeMs : null,
+                    bridge: !!bridgeInstance,
+                    hidden: document.hidden,
+                };
+            }
+
+            /**
+             * Where the work AROUND a send is recorded.
+             *
+             * A session showed real frames costing 2.3x what their size
+             * explains, and the only honest answer was "whatever else playback
+             * is doing while the write is in flight". This is that: the fetch
+             * and the decode/dither, timed on the same clock as the writes, so
+             * the overlap between them stops being a hypothesis.
+             */
+            /**
+             * Reproduce the host pausing us and never sending us back.
+             *
+             * The measured freeze was FOREGROUND_EXIT with no matching ENTER,
+             * which is a host event and cannot be injected from outside. This
+             * is how the recovery path gets exercised without waiting for a
+             * pair of glasses to misbehave again — the telemetry page drives it
+             * behind ?stuck=1.
+             */
+            export function simulateHostPause() {
+                pauseForBackground();
+            }
+
+            let workObserver = null;
+            export function setWorkObserver(fn) { workObserver = fn; }
+
+            async function timed(kind, meta, fn) {
+                if (!workObserver) return fn();
+                const startedAt = Date.now();
+                let ok = true;
+                try {
+                    return await fn();
+                } catch (e) {
+                    ok = false;
+                    throw e;
+                } finally {
+                    const endedAt = Date.now();
+                    workObserver({
+                        kind, ok, ...meta,
+                        enqueuedAt: startedAt, startedAt, endedAt,
+                        queuedMs: 0, durationMs: endedAt - startedAt,
+                    });
+                }
+            }
+
+            let lifecycleObserver = null;
+            export function setLifecycleObserver(fn) { lifecycleObserver = fn; }
+            function noteLifecycle(what, detail = {}) {
+                if (lifecycleObserver) lifecycleObserver(what, detail);
+            }
+
+            /**
+             * Send synthetic payloads to characterise the link, with no media
+             * involved.
+             *
+             * Worth having because the interesting question — how write time
+             * and failure rate vary with payload size — is one a normal session
+             * answers badly: real frames cluster around one size, so the
+             * regression has almost no range to fit. A sweep gives the analysis
+             * the spread it needs, in a minute, on a pair of glasses with
+             * nothing configured.
+             *
+             * The payloads are grey noise at the real geometry, so they
+             * compress to something like a real frame rather than to nothing.
+             */
+            /**
+             * Time the prepare path on synthetic frames, with no link and no
+             * source involved.
+             *
+             * The companion to `probeLink`, and needed for the same reason. A
+             * real session's prepare numbers are entangled with everything else
+             * the phone was doing; this runs the SAME code — `decodeFrame`,
+             * the pixel loop, the PNG encode — on frames it makes itself, so
+             * the phases can be compared against `tools/pixel-bench.mjs`, which
+             * says the arithmetic is half a millisecond. A phone that reports
+             * seconds here is not doing arithmetic slowly.
+             *
+             * It needs no glasses, so it also runs in the simulator, which is
+             * how the image path gets exercised at all when there is no account
+             * to authenticate against.
+             */
+            export async function probePrepare({
+                runs = 12,
+                sourceWidth = 320,
+                sourceHeight = 180,
+            } = {}) {
+                const src = document.createElement("canvas");
+                src.width = sourceWidth;
+                src.height = sourceHeight;
+                const sctx = src.getContext("2d");
+
+                // Something with gradients and edges, because a flat field
+                // dithers to nothing and compresses to nothing — neither the
+                // encode nor the decode would be doing representative work.
+                const g = sctx.createLinearGradient(0, 0, sourceWidth, sourceHeight);
+                g.addColorStop(0, "#101820");
+                g.addColorStop(0.5, "#c8d0d8");
+                g.addColorStop(1, "#201810");
+                sctx.fillStyle = g;
+                sctx.fillRect(0, 0, sourceWidth, sourceHeight);
+                for (let i = 0; i < 40; i++) {
+                    sctx.fillStyle = `rgba(${(i * 37) % 256},${(i * 91) % 256},${(i * 53) % 256},0.5)`;
+                    sctx.fillRect(
+                        (i * 71) % sourceWidth, (i * 43) % sourceHeight,
+                        8 + (i % 17), 6 + (i % 13),
+                    );
+                }
+                // JPEG, because that is what a provider hands over, and a JPEG
+                // decode is not a PNG decode.
+                const blob = await new Promise((r) => src.toBlob(r, "image/jpeg", 0.8));
+
+                // Does the faster decode path give the SAME pixels?
+                //
+                // `createImageBitmap` replaced an <img> and an object URL to get
+                // the decode off the main thread. That is only a free win if
+                // the two decoders agree, and a WebView is not obliged to make
+                // them agree — colour management and premultiplication are both
+                // "default" here, which means implementation-defined. So it is
+                // checked on the device rather than assumed on mine.
+                const decodeAgrees = await (async () => {
+                    if (typeof createImageBitmap !== "function") return null;
+                    const draw = async (via) => {
+                        const c = document.createElement("canvas");
+                        c.width = GLASSES_IMAGE_WIDTH;
+                        c.height = GLASSES_IMAGE_HEIGHT;
+                        const x = c.getContext("2d", { willReadFrequently: true });
+                        x.drawImage(via, 0, 0, c.width, c.height);
+                        return x.getImageData(0, 0, c.width, c.height).data;
+                    };
+                    const bmp = await createImageBitmap(blob);
+                    const a = await draw(bmp);
+                    if (bmp.close) bmp.close();
+                    const url = URL.createObjectURL(blob);
+                    try {
+                        const el = await new Promise((res, rej) => {
+                            const i = new Image();
+                            i.onload = () => res(i);
+                            i.onerror = rej;
+                            i.src = url;
+                        });
+                        const b = await draw(el);
+                        let worst = 0;
+                        for (let i = 0; i < a.length; i++) {
+                            const d = Math.abs(a[i] - b[i]);
+                            if (d > worst) worst = d;
+                        }
+                        return worst;
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                })();
+
+                // Does a real decoder read what our own PNG writer produced?
+                //
+                // `canvas.toBlob` was replaced because it cost four seconds on
+                // hardware; what replaced it is a hand-written encoder, and a
+                // hand-written container format is exactly the kind of thing
+                // that works where it was written and fails where it is read.
+                // `tools/png-check.mjs` verifies it against Node's zlib; this
+                // verifies it against the WebView's own image decoder, on the
+                // phone, with the bytes the glasses are actually handed.
+                const pngReadsBack = await (async () => {
+                    if (typeof createImageBitmap !== "function") return null;
+                    const w = 64, h = 32;
+                    const levels = new Uint8Array(w * h);
+                    for (let i = 0; i < levels.length; i++) levels[i] = i % 16;
+                    const png = encodeGreyPng(levels, w, h, pngBitDepth);
+                    try {
+                        const bmp = await createImageBitmap(
+                            new Blob([png], { type: "image/png" }));
+                        const c = document.createElement("canvas");
+                        c.width = w; c.height = h;
+                        const x = c.getContext("2d", { willReadFrequently: true });
+                        x.drawImage(bmp, 0, 0);
+                        if (bmp.close) bmp.close();
+                        const px = x.getImageData(0, 0, w, h).data;
+                        let worst = 0;
+                        for (let i = 0; i < levels.length; i++) {
+                            const d = Math.abs(px[i << 2] - levels[i] * 17);
+                            if (d > worst) worst = d;
+                        }
+                        return worst;
+                    } catch (e) {
+                        return `threw: ${e?.message || e}`;
+                    }
+                })();
+
+                const totals = [];
+                let outBytes = 0;
+                for (let n = 0; n < runs; n++) {
+                    const t0 = Date.now();
+                    const out = await resizeAndPrepareImage(
+                        blob, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT, { probe: true },
+                    );
+                    totals.push(Date.now() - t0);
+                    outBytes = out.byteLength;
+                    // Yield between runs: back to back they would all land in
+                    // one task and measure a burst nothing in the app performs.
+                    await new Promise((r) => setTimeout(r, 0));
+                }
+                totals.sort((a, b) => a - b);
+                return {
+                    runs,
+                    sourceBytes: blob.size,
+                    outBytes,
+                    // null = no createImageBitmap here; 0 = the two decoders
+                    // agree exactly; anything else is the worst channel
+                    // disagreement in 0-255, and worth knowing about.
+                    decodeMaxDelta: decodeAgrees,
+                    // 0 = the WebView's decoder reproduces our levels exactly.
+                    pngBitDepth,
+                    pngReadsBack,
+                    p50: totals[Math.floor(runs * 0.5)],
+                    p90: totals[Math.floor(runs * 0.9)],
+                    max: totals[runs - 1],
+                };
+            }
+
+            export async function probeLink({ densities = null, perSize = 4 } = {}) {
+                // Noise density, not a byte target: what a PNG of dithered grey
+                // actually compresses to is not something to predict, and the
+                // ACTUAL size is what gets recorded. These five bracket the
+                // real operating range — a shipping frame is around 16 KB — so
+                // the analysis has spread either side of it to fit against.
+                const levels = densities || [0.004, 0.02, 0.06, 0.18, 0.5];
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+                const canvas = document.createElement("canvas");
+                canvas.width = GLASSES_IMAGE_WIDTH;
+                canvas.height = GLASSES_IMAGE_HEIGHT;
+                const ctx = canvas.getContext("2d");
+
+                for (const density of levels) {
+                    const img = ctx.createImageData(canvas.width, canvas.height);
+                    for (let i = 0; i < img.data.length; i += 4) {
+                        const v = Math.random() < density ? (Math.random() * 255) | 0 : 128;
+                        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+                        img.data[i + 3] = 255;
+                    }
+                    ctx.putImageData(img, 0, 0);
+                    const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+                    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+                    for (let n = 0; n < perSize; n++) {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({
+                                      containerID: 2, containerName: "g2_bif", imageData: bytes,
+                                  })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        await ble.sendImage(
+                            async (p) =>
+                                (await bridgeInstance.updateImageRawData(p)) === "success",
+                            payload,
+                            { bytes: bytes.byteLength, probe: true },
+                        );
+                        await ble.sendText(
+                            (content) => bridgeInstance.textContainerUpgrade({
+                                containerID: 1, containerName: "g2_subs",
+                                contentOffset: 0, contentLength: 0, content,
+                            }),
+                            `probe ${(bytes.byteLength / 1024).toFixed(0)}KB #${n + 1}`,
+                        );
+                    }
+                }
+            }
+
             export async function initBridge() {
                 await initEvenBridge();
             }
@@ -1582,7 +1982,7 @@ import { buildSceneList, thinScenes } from "./scenes";
                 isPlaying = true;
                 backgroundedWhilePlaying = false;
                 playBtn.innerText = "Pause";
-                try { silentAudio.play(); } catch (e) {}
+                silentAudio.play().catch(() => {});
                 setStatus(`Now playing: ${currentItem?.title || "media"}`, "active");
                 ui.playing(true);
                 // The pipeline drives the timeline — no clock needed.
@@ -1604,6 +2004,12 @@ import { buildSceneList, thinScenes } from "./scenes";
             }
 
             export function seekTo(ms) {
+                // Touching the transport at all is a statement that the wearer
+                // is here and wants it running. Seeking used to fire a single
+                // frame and leave playback stopped, which is why a frozen
+                // session could be nudged into sending images one drag at a
+                // time and never actually resume.
+                if (backgroundedWhilePlaying) resumeFromBackground("seek");
                 const wasPlaying = isPlaying;
                 if (wasPlaying) stopScenePipeline();
                 currentTimeMs = Number(ms);
@@ -1630,5 +2036,9 @@ import { buildSceneList, thinScenes } from "./scenes";
 
             // The player's own two controls stay wired here: they act on engine
             // state and have no flow meaning, unlike every other button.
-            playBtn.onclick = togglePlay;
-            timeline.oninput = (e) => seekTo(e.target.value);
+            //
+            // Guarded, because importing this module must not depend on a
+            // particular page's markup. The telemetry page found that the hard
+            // way: it has no transport bar, and the engine threw at import.
+            if (playBtn) playBtn.onclick = togglePlay;
+            if (timeline) timeline.oninput = (e) => seekTo(e.target.value);

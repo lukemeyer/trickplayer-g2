@@ -533,6 +533,29 @@ $("item-play").onclick = () => { show("panel-player"); engine.play(); };
 
 $("close-player-btn").onclick = () => engine.stop();
 
+/**
+ * Open and play the first item the current source can actually show.
+ *
+ * Exported for the telemetry page, which needs a long unattended session and
+ * has no fingertip. It drives the SAME path a tap does — resolve, open, play —
+ * rather than a shortcut, because a measurement of a different path would
+ * measure the wrong thing.
+ */
+export async function firstPlayable() {
+    if (!account) return null;
+    for (const root of await account.listRoots()) {
+        const children = await account.listChildren(root.ref);
+        for (const item of children.filter((c) => c.kind === "item")) {
+            const p = await account.resolvePlayable(item).catch(() => null);
+            if (!p) continue;
+            await openItem(p);
+            $("item-play").click();
+            return p;
+        }
+    }
+    return null;
+}
+
 // =================================================================== BOOT
 
 engine.setUiHooks({
