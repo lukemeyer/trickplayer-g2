@@ -16,6 +16,7 @@
 import * as engine from "./main";
 import { createPlexAccount } from "./plexaccount";
 import { createJellyfinAccount } from "./jellyfinaccount";
+import * as store from "./store";
 
 // ---------------------------------------------------------------- plumbing
 
@@ -62,7 +63,7 @@ const STORE_KEY = "trickplayer.sources";
 const LAST_KEY = "trickplayer.lastSource";
 
 function loadSaved() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); }
+    try { return JSON.parse(store.getItem(STORE_KEY) || "[]"); }
     catch (e) { return []; }
 }
 
@@ -70,8 +71,8 @@ function saveSource(account) {
     const rec = account.persist();
     const all = loadSaved().filter((s) => !(s.provider === rec.provider && s.id === rec.id));
     all.push(rec);
-    localStorage.setItem(STORE_KEY, JSON.stringify(all));
-    localStorage.setItem(LAST_KEY, `${rec.provider}:${rec.id}`);
+    store.setItem(STORE_KEY, JSON.stringify(all));
+    store.setItem(LAST_KEY, `${rec.provider}:${rec.id}`);
 }
 
 /** The only place a persisted record becomes a live account. */
@@ -107,9 +108,16 @@ function showSources() {
 
 async function openSource(rec) {
     account = accountFrom(rec);
-    localStorage.setItem(LAST_KEY, `${rec.provider}:${rec.id}`);
+    store.setItem(LAST_KEY, `${rec.provider}:${rec.id}`);
     stack = [];
     await showBrowse();
+}
+
+// The logging build. A relative URL on purpose: this page is served from "/"
+// in the packaged app and from "/trickplayer-g2/" on GitHub Pages, and an
+// absolute path is wrong in one of those.
+for (const btn of document.querySelectorAll("[data-logging]")) {
+    btn.onclick = () => { location.href = "telemetry.html"; };
 }
 
 $("add-source-btn").onclick = () => startAddSource();
@@ -126,7 +134,7 @@ function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = 
 
 function startAddSource() {
     stopPolling();
-    localStorage.removeItem(PENDING_KEY);
+    store.removeItem(PENDING_KEY);
     setHidden("add-step-provider", false);
     setHidden("add-step-address", true);
     setHidden("add-step-server", true);
@@ -187,7 +195,7 @@ async function beginAuth(resuming) {
         $("code-display").textContent = auth.code;
         $("code-instruction").textContent = `Enter this code at ${auth.enterAt}`;
         $("code-status").textContent = "Waiting for you to approve it…";
-        localStorage.setItem(PENDING_KEY, JSON.stringify({
+        store.setItem(PENDING_KEY, JSON.stringify({
             provider: account.provider,
             serverUrl: account.serverUrl,
             state: auth.state,
@@ -198,7 +206,7 @@ async function beginAuth(resuming) {
                 const result = await auth.poll();
                 if (result === "pending") return;
                 stopPolling();
-                localStorage.removeItem(PENDING_KEY);
+                store.removeItem(PENDING_KEY);
                 if (result === "expired") {
                     // Said out loud rather than left spinning: an expired code
                     // looks exactly like one the user has not typed yet.
@@ -215,7 +223,7 @@ async function beginAuth(resuming) {
         // been backgrounded the timer may simply not have run.
         $("code-check-now").onclick = check;
     } catch (e) {
-        localStorage.removeItem(PENDING_KEY);
+        store.removeItem(PENDING_KEY);
         $("code-status").textContent = `Could not start sign-in: ${e.message}`;
     }
 }
@@ -223,7 +231,7 @@ async function beginAuth(resuming) {
 /** Re-attach to a code minted before a reload, if there is one. @returns true */
 function resumePendingAuth() {
     let pending = null;
-    try { pending = JSON.parse(localStorage.getItem(PENDING_KEY) || "null"); }
+    try { pending = JSON.parse(store.getItem(PENDING_KEY) || "null"); }
     catch (e) { /* fall through to a fresh sign-in */ }
     if (!pending || !pending.state) return false;
 
@@ -567,13 +575,20 @@ engine.setUiHooks({
     // browsing works around, and its status line is already on screen.
     engine.initBridge();
 
+    // Then the store, and this one IS awaited. Everything below reads saved
+    // sources, and in a packaged app those live in the HOST's store rather than
+    // the WebView's — reading before it is hydrated is what made the first beta
+    // ask for a fresh Plex code on every launch. The wait is bounded, so the
+    // browser build (where there is no bridge) still boots immediately.
+    await store.init(await engine.whenBridgeReady());
+
     if (resumePendingAuth()) return;
 
     const saved = loadSaved();
     if (!saved.length) return startAddSource();
 
     // The last-used source is the default, and browsing starts there.
-    const last = localStorage.getItem(LAST_KEY);
+    const last = store.getItem(LAST_KEY);
     const rec = saved.find((s) => `${s.provider}:${s.id}` === last) || saved[0];
     if (saved.length === 1 || rec) return openSource(rec);
     showSources();

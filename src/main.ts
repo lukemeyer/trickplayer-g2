@@ -66,6 +66,9 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
             let deviceBatteryLevel = null;
             let deviceIsWearing = null;
             let consecutiveImageFailures = 0; // length of the current image freeze
+            /** Frames come off the network; subtitles do not. See sendImageToGlasses. */
+            let consecutiveFetchFailures = 0;
+            const FETCH_FAILURES_BEFORE_SAYING_SO = 3;
             let lastImageSuccessWall = 0; // performance.now() of last good image
             let imageSuccessCount = 0;
             let imageFailureCount = 0;
@@ -759,10 +762,44 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                     assets = await timed("fetch", { frameIndex, cached },
                         () => getFrameAssets(frameIndex));
                 } catch (e) {
+                    // A frame comes off the network every scene; the subtitles
+                    // were parsed once at load and live in memory. So when the
+                    // server becomes unreachable — the token expired, the phone
+                    // moved off the WiFi the plex.direct address points at, the
+                    // connection went stale over a long sleep — the picture
+                    // freezes and the dialogue carries on as if nothing is
+                    // wrong. That is exactly what the first beta reported, and
+                    // this used to be a console warning nobody could see.
+                    consecutiveFetchFailures++;
                     console.warn(
-                        `[frame] fetch failed at ${bifs[frameIndex]?.tsMs}ms: ${e.message}`,
+                        `[frame] fetch failed at ${bifs[frameIndex]?.tsMs}ms ` +
+                        `(${consecutiveFetchFailures} in a row): ${e.message}`,
                     );
+                    noteLifecycle("frame-fetch-failed", {
+                        frameIndex, run: consecutiveFetchFailures, error: String(e?.message || e),
+                    });
+                    if (consecutiveFetchFailures === FETCH_FAILURES_BEFORE_SAYING_SO) {
+                        // Said once, at a threshold, rather than on every frame:
+                        // one failed fetch is a blip worth retrying silently,
+                        // and a run of them is a broken session the wearer is
+                        // otherwise given no reason to suspect.
+                        setStatus(
+                            "Picture stopped — cannot reach the server. Subtitles are from memory.",
+                            "error",
+                        );
+                    }
                     return 0;
+                }
+                if (consecutiveFetchFailures > 0) {
+                    console.log(
+                        `[frame] fetch recovered after ${consecutiveFetchFailures} failure(s)`,
+                    );
+                    if (consecutiveFetchFailures >= FETCH_FAILURES_BEFORE_SAYING_SO) {
+                        const title =
+                            document.getElementById("playing-title")?.textContent || "media";
+                        setStatus(`Now playing: ${title}`, "active");
+                    }
+                    consecutiveFetchFailures = 0;
                 }
 
                 const preparedBytes = await timed("prepare", { frameIndex }, () =>
@@ -851,6 +888,9 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                 } else {
                     consecutiveImageFailures++;
                     imageFailureCount++;
+                    // The mirror of the text case, and the one the first beta
+                    // hit: the picture stopped while subtitles carried on.
+                    await repairContainersIfOneChannelIsDead("image");
                 }
 
                 const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
@@ -890,8 +930,14 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
             const CONTAINER_REPAIR_COOLDOWN_MS = 15000;
 
             /**
-             * Re-declare the containers when the evidence says text is dead and
-             * the link is not.
+             * Re-declare the containers when the evidence says ONE channel is
+             * dead and the link is not.
+             *
+             * Originally this only ran one way — text dead, images alive — and
+             * the first beta produced the mirror image: the picture froze while
+             * subtitles carried on for the rest of the session, with nothing in
+             * the code able to notice. The asymmetry is the signal whichever
+             * way round it points, so the direction is a parameter.
              *
              * The trigger is deliberately not "we saw a disconnect event": the
              * session that produced this had a genuine hardware disconnect AND
@@ -900,25 +946,30 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
              * Repeated text failures while images keep landing is the symptom
              * itself, and it is available without knowing the cause.
              */
-            async function repairContainersIfTextIsDead() {
+            async function repairContainersIfOneChannelIsDead(dead) {
                 if (!bridgeInstance) return false;
-                if (consecutiveSubtitleFailures < CONTAINER_REPAIR_AFTER) return false;
+                // The evidence is the ASYMMETRY: one channel failing while the
+                // other keeps landing. Both failing is the link, and
+                // re-declaring containers there adds a write to a queue that is
+                // already struggling.
+                const failures = dead === "text" ? consecutiveSubtitleFailures : consecutiveImageFailures;
+                const otherIsFine = dead === "text" ? consecutiveImageFailures === 0
+                                                    : consecutiveSubtitleFailures === 0;
+                if (failures < CONTAINER_REPAIR_AFTER) return false;
+                if (!otherIsFine) return false;
                 const now = Date.now();
                 if (now - lastContainerRepairAt < CONTAINER_REPAIR_COOLDOWN_MS) return false;
-                // If images are failing too, this is the link, not a container,
-                // and re-declaring them adds a write to a queue that is already
-                // struggling.
-                if (consecutiveImageFailures > 0) return false;
 
                 lastContainerRepairAt = now;
                 try {
                     const result = await createGlassesContainers();
                     console.warn(
-                        `[Recovery] Text failed ${consecutiveSubtitleFailures}x while images ` +
-                        `kept landing — re-declared the containers (${result === 0 ? "ok" : `code ${result}`})`,
+                        `[Recovery] ${dead === "text" ? "Text" : "Images"} failed ${failures}x while ` +
+                        `${dead === "text" ? "images" : "text"} kept landing — re-declared the ` +
+                        `containers (${result === 0 ? "ok" : `code ${result}`})`,
                     );
                     noteLifecycle("containers-repaired", {
-                        result, afterFailures: consecutiveSubtitleFailures,
+                        result, dead, afterFailures: failures,
                     });
                     // Whatever the glasses are showing now is not ours, and the
                     // line we most recently "sent" was never drawn.
@@ -981,7 +1032,7 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                         `conn:${deviceConnectType}, q:${bleQueueDepthNow()}, ` +
                         `${consecutiveSubtitleFailures} in a row)`,
                     );
-                    await repairContainersIfTextIsDead();
+                    await repairContainersIfOneChannelIsDead("text");
                 } else if (r.ok) {
                     consecutiveSubtitleFailures = 0;
                 }
@@ -1902,6 +1953,27 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
 
             export async function initBridge() {
                 await initEvenBridge();
+            }
+
+            /**
+             * The bridge, once it exists — or null if it does not arrive in time.
+             *
+             * The flow needs it for one thing before anything is on screen: the
+             * host-backed store, which is the only place a Plex sign-in
+             * survives a relaunch. But there is no bridge at all in the browser
+             * build, so waiting for one unconditionally would hang the page
+             * that is easiest to test in. Hence a deadline rather than an
+             * await.
+             */
+            export function whenBridgeReady(timeoutMs = 2000) {
+                if (bridgeInstance) return Promise.resolve(bridgeInstance);
+                return new Promise((resolve) => {
+                    const started = Date.now();
+                    const tick = setInterval(() => {
+                        if (bridgeInstance) { clearInterval(tick); resolve(bridgeInstance); }
+                        else if (Date.now() - started >= timeoutMs) { clearInterval(tick); resolve(null); }
+                    }, 50);
+                });
             }
 
             /** Skip scenes with no subtitles — a rebuild, not a playback flag. */

@@ -24,6 +24,7 @@
       <div id="source-list"></div>
       <button class="btn-secondary" id="add-source-btn">Add a server</button>
       <button class="btn-secondary hidden" id="sources-back">Back</button>
+      <button class="btn-link" data-logging>Connect with logging</button>
     </div>
 
     <!-- ========================== ADD SOURCE =========================== -->
@@ -34,6 +35,11 @@
         <p class="text-muted">Which kind of server?</p>
         <button class="btn-secondary" data-provider="plex">Plex</button>
         <button class="btn-secondary" data-provider="jellyfin">Jellyfin</button>
+        <!-- The same app with the link recorder attached. Here because a
+             tester who hits something has no other way in: the recorder is a
+             separate page, and a packaged app has no address bar to type it
+             into. -->
+        <button class="btn-link" data-logging>Connect with logging</button>
       </div>
 
       <!-- Jellyfin only: the address IS the identity, so it comes before

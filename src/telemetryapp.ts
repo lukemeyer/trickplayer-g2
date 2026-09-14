@@ -12,6 +12,7 @@
 // every record has to be read against, and render the report at the end.
 
 import { createRecorder, analyse, formatReport } from "./telemetry";
+import * as store from "./store";
 
 const $ = (id) => document.getElementById(id);
 const KEY = "trickplayer.telemetry";
@@ -170,6 +171,13 @@ function refresh() {
         ? `${sent} sent / ${images.length - sent} not`
         : "—";
     $("tlm-depth").textContent = String(engine.bleDepth());
+    // Polled rather than set once: the store hydrates asynchronously during
+    // boot, so reading it the moment the flow loads always says "not loaded".
+    $("tlm-store").textContent = !store.isReady()
+        ? "loading…"
+        : store.isHostBacked()
+            ? "kept by the host — survives a relaunch"
+            : "browser only — forgotten in a packaged app";
 }
 setInterval(refresh, 1000);
 
@@ -342,6 +350,14 @@ if (new URLSearchParams(location.search).has("prep")) {
 // Last, so the recorder and the link observer are attached before the app can
 // send anything.
 import("./ui").then(() => {
+    // index.html's markup came across with the "Connect with logging" buttons
+    // in it, and on THIS page they would lead back here. Point them home
+    // instead, so the logging build is a round trip rather than a trap.
+    for (const btn of document.querySelectorAll("[data-logging]")) {
+        btn.textContent = "Back to the normal app";
+        btn.onclick = () => { location.href = "index.html"; };
+    }
+    refresh();
     $("tlm-hint").textContent =
         "Play something on the glasses for a few minutes, then generate the report. " +
         "Five minutes is enough to be useful; fifteen gives better tail estimates.";

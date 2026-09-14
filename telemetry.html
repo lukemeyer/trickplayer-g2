@@ -23,6 +23,11 @@
       <div class="control-row"><span>Operations recorded</span><span id="tlm-count">0</span></div>
       <div class="control-row"><span>Images</span><span id="tlm-images">—</span></div>
       <div class="control-row"><span>Queue depth</span><span id="tlm-depth">0</span></div>
+      <!-- Whether sign-in will survive a relaunch. A packaged app's own
+           localStorage does not persist, so the flow keeps its state in the
+           HOST's store; if that is not answering, the next launch asks for a
+           fresh Plex code and there is otherwise no way to tell in advance. -->
+      <div class="control-row"><span>Saved state</span><span id="tlm-store">—</span></div>
 
       <button class="btn-secondary" id="tlm-probe">Sweep payload sizes (~1 min)</button>
       <button class="btn-secondary" id="tlm-prep">Time the prepare path (no glasses needed)</button>

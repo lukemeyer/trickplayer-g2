@@ -617,3 +617,22 @@
                 user-select: text;
                 -webkit-user-select: text;
             }
+
+/* A way out of the flow rather than a step in it — the logging build, and
+   anything else that is offered but never the thing to tap next. Deliberately
+   quieter than .btn-secondary so it does not compete with "Add a server". */
+.btn-link {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted, #8a8f98);
+  font: inherit;
+  font-size: 0.9em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.btn-link:active { color: var(--text, #e6e8eb); }

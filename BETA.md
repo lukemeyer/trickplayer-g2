@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.0
+# Trickplayer for G2 — beta 0.9.1
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.0.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.1.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -62,12 +62,27 @@ The first two are the ones worth trying to break:
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
 
+## Fixed in 0.9.1
+
+From the first round of beta feedback:
+
+- **Your server is remembered.** A packaged app does not keep its own browser
+  storage, which is why it asked for a fresh Plex code every launch. Sign-in is
+  now held by the host and survives a relaunch.
+- **The picture no longer freezes in silence.** Frames come off the network
+  every few seconds; subtitles are parsed once and held in memory. So when the
+  server became unreachable — a stale connection after a long sleep, a network
+  change — the picture stopped and the dialogue carried on as if nothing was
+  wrong, with nothing said. It now says so on screen and recovers on its own.
+- **Link recovery works in both directions.** A dropped link can kill either
+  channel and leave the other running; recovery previously only handled one of
+  the two, and the beta hit the other one.
+
 ## If something goes wrong
 
-There is a second page that records every Bluetooth operation and writes a
-report:
-
-**https://lukemeyer.github.io/trickplayer-g2/telemetry.html**
+Tap **Connect with logging** on the first screen. It is the same app with a
+recorder attached, and it is the fastest way to turn "it froze" into something
+fixable. (In a browser: `/telemetry.html`.)
 
 Play as normal for five minutes — fifteen is better — then **Generate report**
 and **Copy report**, and send it over. It captures write times, failures,
@@ -77,3 +92,7 @@ the cause was. No media, no credentials, no server addresses in it.
 **Time the prepare path** on that page needs no glasses and no sign-in at all,
 so it is worth a tap on any phone: it reports how long your device takes to
 get a frame ready, which is the number that was four seconds.
+
+**Saved state** on that page says whether this build will remember your server.
+It should read "kept by the host". If it says "browser only", sign-in will not
+survive a relaunch and that is worth reporting on its own.

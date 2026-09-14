@@ -71,7 +71,10 @@ function makeLink(opts = {}) {
     // no longer there distinguishes itself from a text write to a busy link:
     // both come back false. That is the whole reason the reported failure was
     // invisible — "images started sending again, but no text".
-    let container = true;
+    // Two containers, and they are lost independently — which is the whole
+    // point. A dropped link can take either, and the surviving channel carries
+    // on looking healthy.
+    let container = { text: true, image: true };
     return {
         get connected() { return connected; },
         get writes() { return writes; },
@@ -79,15 +82,15 @@ function makeLink(opts = {}) {
         setBackground(on) { cfg.background = on; },
         disconnect() { connected = false; },
         reconnect() { connected = true; },
-        loseContainer() { container = false; },
-        declareContainers() { container = true; },
+        loseContainer(which = "text") { container[which] = false; },
+        declareContainers() { container = { text: true, image: true }; },
         async write(kind) {
             writes++;
             if (writes >= cfg.disconnectAfter) connected = false;
             const base = kind === "image" ? cfg.imageMs : cfg.textMs;
             await wait(cfg.background ? base * cfg.backgroundFactor : base);
             if (!connected) return false;
-            if (kind === "text" && !container) return false;
+            if (!container[kind === "image" ? "image" : "text"]) return false;
             if (rand() < cfg.throwRate) throw new Error("BLE write threw");
             return rand() >= cfg.failRate;
         },
@@ -254,55 +257,75 @@ def("reconnecting re-sends the text, because the screen was cleared", async ({ m
  * exactly what a struggling link looks like, and adding a container write to a
  * queue that is already failing makes a bad session worse.
  */
-function makeSubtitleSender(t, link, { repair = true } = {}) {
-    let consecutiveTextFailures = 0;
-    let imagesHealthy = true;
+function makeChannels(t, link, { repair = true } = {}) {
+    const runs = { text: 0, image: 0 };
     let repairs = 0;
+    const other = (k) => (k === "text" ? "image" : "text");
+
+    const after = (kind, ok) => {
+        if (ok) { runs[kind] = 0; return; }
+        runs[kind]++;
+        // The asymmetry is the evidence, whichever way it points: this channel
+        // failing while the OTHER one still lands. Both failing is the link.
+        if (repair && runs[kind] >= 2 && runs[other(kind)] === 0) {
+            repairs++;
+            link.declareContainers();
+            t.forgetText();     // nothing we "sent" was ever drawn
+            runs[kind] = 0;
+        }
+    };
+
     return {
         get repairs() { return repairs; },
-        imagesFailing(v) { imagesHealthy = !v; },
-        async send(text) {
-            const r = await t.sendText(() => link.write("text"), text);
-            if (r.ok) { consecutiveTextFailures = 0; return r; }
-            consecutiveTextFailures++;
-            if (repair && consecutiveTextFailures >= 2 && imagesHealthy) {
-                repairs++;
-                link.declareContainers();
-                t.forgetText();     // nothing we "sent" was ever drawn
-                consecutiveTextFailures = 0;
-            }
+        async text(s) {
+            const r = await t.sendText(() => link.write("text"), s);
+            after("text", r.ok);
+            return r;
+        },
+        async image(i) {
+            const r = await t.sendImage(() => link.write("image"), { i }, { i });
+            after("image", r.ok);
             return r;
         },
     };
 }
 
 /** The reported session: link drops, comes back, containers do not. */
-async function afterAContainerLoss(t, link, opts) {
-    const subs = makeSubtitleSender(t, link, opts);
-    await subs.send("before the drop");
+async function afterAContainerLoss(t, link, lost, opts) {
+    const ch = makeChannels(t, link, opts);
+    await ch.text("before the drop");
+    await ch.image(0);
     await settle();
-    link.disconnect(); link.reconnect(); link.loseContainer();
+    link.disconnect(); link.reconnect(); link.loseContainer(lost);
 
     let landed = 0;
-    for (const line of ["line one", "line two", "line three", "line four"]) {
-        const r = await subs.send(line);
+    for (let n = 1; n <= 4; n++) {
+        const r = lost === "text" ? await ch.text(`line ${n}`) : await ch.image(n);
         await settle();
         if (r.ok) landed++;
     }
-    return { landed, repairs: subs.repairs };
+    return { landed, repairs: ch.repairs };
 }
 
-def("a lost container is repaired, so text comes back with the images", async ({ make }) => {
-    // Images resume on their own after a reconnect; text does not, because the
-    // container it addresses is gone. Both runs see the identical link.
-    const without = await afterAContainerLoss(make().t, make().link, { repair: false });
-    const a = make();
-    const withRepair = await afterAContainerLoss(a.t, a.link, { repair: true });
-
+def("a lost container is repaired, whichever channel lost it", async ({ make }) => {
+    // Both directions, because the first version of this fix only ran one way
+    // — text dead, images alive — and a beta then produced the mirror image:
+    // the picture froze while subtitles carried on for the whole session, with
+    // nothing in the code able to notice.
+    const out = {};
+    for (const lost of ["text", "image"]) {
+        const a = make(), b = make();
+        out[lost] = {
+            without: await afterAContainerLoss(a.t, a.link, lost, { repair: false }),
+            with: await afterAContainerLoss(b.t, b.link, lost, { repair: true }),
+        };
+    }
+    const good = (o) => o.without.landed === 0 && o.with.landed >= 2 && o.with.repairs === 1;
     return {
-        pass: without.landed === 0 && withRepair.landed >= 2 && withRepair.repairs === 1,
-        detail: `declared once: ${without.landed}/4 lines — text is dead for the rest of the session; ` +
-                `re-declared on evidence: ${withRepair.landed}/4 after ${withRepair.repairs} repair(s)`,
+        pass: good(out.text) && good(out.image),
+        detail: `text lost: ${out.text.without.landed}/4 -> ${out.text.with.landed}/4  |  ` +
+                `image lost: ${out.image.without.landed}/4 -> ${out.image.with.landed}/4 ` +
+                `(declared once, then re-declared on evidence)`,
     };
 });
 
@@ -310,14 +333,13 @@ def("a bad link is not mistaken for a lost container", async ({ make }) => {
     // Same symptom, different cause: every write fails. Re-declaring containers
     // here fixes nothing and costs a write on a queue that is already losing.
     const { t, link } = make({ failRate: 1 });
-    const subs = makeSubtitleSender(t, link);
-    subs.imagesFailing(true);
-    for (const line of ["a", "b", "c", "d", "e"]) { await subs.send(line); await settle(); }
+    const ch = makeChannels(t, link);
+    for (let n = 0; n < 5; n++) { await ch.text(`t${n}`); await ch.image(n); await settle(); }
     return {
-        pass: subs.repairs === 0,
-        detail: subs.repairs === 0
-            ? "no repair attempted while images were failing too"
-            : `${subs.repairs} pointless container write(s) onto a failing link`,
+        pass: ch.repairs === 0,
+        detail: ch.repairs === 0
+            ? "no repair attempted while BOTH channels were failing"
+            : `${ch.repairs} pointless container write(s) onto a failing link`,
     };
 });
 

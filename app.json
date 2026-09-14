@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -20,15 +20,26 @@
   ],
   "changelog": [
     {
+      "version": "0.9.1",
+      "notes": [
+        "Your server is remembered again. A packaged app does not keep its own browser storage, so sign-in is now held by the host \u2014 it survives a relaunch.",
+        "The picture no longer freezes in silence when the server becomes unreachable. Frames come off the network every few seconds while subtitles are held in memory, so losing the server used to stop the picture and leave the dialogue running with no explanation. It now says so, and recovers on its own.",
+        "A dropped link could kill either the picture or the subtitles and leave the other running. Recovery now works in both directions; it previously only handled one.",
+        "\"Connect with logging\" on the first screen opens the build that records the link and writes a report."
+      ]
+    },
+    {
       "version": "0.9.0",
       "notes": [
         "First beta.",
-        "Plex sign-in by four-character code — no keyboard, no password on the glasses.",
+        "Plex sign-in by four-character code \u2014 no keyboard, no password on the glasses.",
         "Continuous playback: frames advance on the measured link speed rather than a fixed timer.",
-        "Rebuilt Bluetooth transport — newest frame wins a backlog, a failed line is re-sent instead of being remembered as delivered, and a dropped link no longer leaves the subtitles dead for the rest of the session.",
+        "Rebuilt Bluetooth transport \u2014 newest frame wins a backlog, a failed line is re-sent instead of being remembered as delivered, and a dropped link no longer leaves the subtitles dead for the rest of the session.",
         "Frames are prepared about 50x faster, which was four seconds a frame on some phones."
       ]
     }
   ],
-  "supported_languages": ["en"]
+  "supported_languages": [
+    "en"
+  ]
 }
