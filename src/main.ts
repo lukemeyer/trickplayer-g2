@@ -7,7 +7,8 @@ import {
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
 import { toGlassesLevels } from "./pixels";
-import { encodeGreyPng, fallbackBitDepth } from "./png";
+import { encodeGreyPng } from "./png";
+import * as store from "./store";
 
             // --- UI HOOKS ---
             //
@@ -524,17 +525,75 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
              * firmware, and because the bridge says so out loud when it fails
              * rather than returning a plausible-looking success.
              */
-            let pngBitDepth = 4;
+            /**
+             * How a frame is encoded for the glasses, in order of preference.
+             *
+             * A ladder rather than a constant, because hardware disagreed with
+             * the simulator and there is no way to tell from here which rung
+             * works. A session on a Pixel 10 had every synthetic payload land
+             * (0, 4, 12, 28 and 44 KB, all made by `canvas.toBlob`) while every
+             * REAL frame failed — and the only thing separating them was the
+             * encoding, since 16 KB sits between two sizes that worked.
+             *
+             * The glasses answered `sendFailed` for all of them, which says
+             * nothing about why, so the app finds out by trying:
+             *
+             *   grey4  4-bit greyscale, our encoder    16 KB, 0.07 ms
+             *   grey8  8-bit greyscale, our encoder    33 KB, 0.1 ms
+             *   rgba   whatever `canvas.toBlob` makes  ~16 KB, SECONDS (F-048)
+             *
+             * The last rung is the one measured at p50 4022 ms, so it is a
+             * genuine last resort — but a slow picture beats no picture, and it
+             * is the only encoding this hardware has ever been seen to accept.
+             */
+            const IMAGE_FORMATS = ["grey4", "grey8", "rgba"];
+            const IMAGE_FORMAT_KEY = "trickplayer.imageFormat";
+            let formatIndex = 0;
+            /** Failures in a row before trying the next rung. */
+            const ESCALATE_AFTER = 2;
 
-            /** Did the glasses fail to READ what we sent, rather than fail to receive it? */
-            function isUnreadableImage(result) {
-                return result === "imageException" || result === "imageToGray4Failed";
+            function currentFormat() { return IMAGE_FORMATS[formatIndex]; }
+
+            /** Remembered, so a device that needs rung 3 does not re-discover it every launch. */
+            function loadImageFormat() {
+                const saved = store.getItem(IMAGE_FORMAT_KEY);
+                const i = IMAGE_FORMATS.indexOf(saved);
+                if (i >= 0) formatIndex = i;
+            }
+
+            function escalateFormat(why) {
+                if (formatIndex >= IMAGE_FORMATS.length - 1) return false;
+                const from = currentFormat();
+                formatIndex++;
+                store.setItem(IMAGE_FORMAT_KEY, currentFormat());
+                console.warn(
+                    `[Image] ${from} failed ${why} — trying ${currentFormat()} instead`,
+                );
+                noteLifecycle("image-format-changed", { from, to: currentFormat(), why });
+                return true;
+            }
+
+            /**
+             * The last rung: hand the canvas to the host and wait.
+             *
+             * This is the path F-048 removed for costing four seconds. It is
+             * back only as a fallback, for hardware that will not take anything
+             * our own encoder produces.
+             */
+            function encodeViaHost(canvas) {
+                return new Promise((resolve, reject) => {
+                    canvas.toBlob(async (out) => {
+                        if (!out) { reject(new Error("Canvas toBlob failed")); return; }
+                        try { resolve(new Uint8Array(await out.arrayBuffer())); }
+                        catch (e) { reject(e); }
+                    }, "image/png");
+                });
             }
 
             async function resizeAndPrepareImage(blob, targetWidth, targetHeight, meta = {}) {
                 const bitmap = await timed("decode", meta, () => decodeFrame(blob));
                 try {
-                    const { ctx } = prepSurface(targetWidth, targetHeight);
+                    const { canvas, ctx } = prepSurface(targetWidth, targetHeight);
                     const levels = await timed("pixels", meta, () => {
                         ctx.clearRect(0, 0, targetWidth, targetHeight);
                         ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
@@ -546,13 +605,27 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                             dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
                         });
                     });
-                    // Synchronous, and about a tenth of a millisecond. The
-                    // canvas is not asked to encode anything: `toBlob` handed
-                    // the job to the host and its callback came back four
-                    // seconds later on real hardware, which is not something
-                    // the app can schedule around. See src/png.ts.
-                    return await timed("encode", meta, () =>
-                        encodeGreyPng(levels, targetWidth, targetHeight, pngBitDepth));
+                    // Our own encoder for the first two rungs: synchronous,
+                    // about a tenth of a millisecond, against the four seconds
+                    // `toBlob` cost on real hardware (F-048). The last rung
+                    // pays that cost because some hardware takes nothing else.
+                    const format = currentFormat();
+                    return await timed("encode", { ...meta, format }, async () => {
+                        if (format === "grey4") return encodeGreyPng(levels, targetWidth, targetHeight, 4);
+                        if (format === "grey8") return encodeGreyPng(levels, targetWidth, targetHeight, 8);
+                        // rgba: the pixels are already on the canvas, but they
+                        // are the ORIGINAL ones — the dither wrote to a plane,
+                        // not back to the surface. Put them there first, or the
+                        // fallback would quietly send an undithered frame.
+                        const d = ctx.getImageData(0, 0, targetWidth, targetHeight);
+                        for (let i = 0; i < levels.length; i++) {
+                            const v = levels[i] * 17, o = i << 2;
+                            d.data[o] = d.data[o + 1] = d.data[o + 2] = v;
+                            d.data[o + 3] = 255;
+                        }
+                        ctx.putImageData(d, 0, 0);
+                        return await encodeViaHost(canvas);
+                    });
                 } finally {
                     if (bitmap && typeof bitmap.close === "function") bitmap.close();
                 }
@@ -844,6 +917,11 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                 const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength };
                 const r = await ble.sendImage(
                     async (p) => {
+                        if (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat) {
+                            lastResult = "sendFailed";
+                            imageMeta.result = lastResult;
+                            return false;
+                        }
                         lastResult = await bridgeInstance.updateImageRawData(p);
                         imageMeta.result = lastResult;
                         return lastResult === "success";
@@ -862,16 +940,6 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                 // display's own format, but the decoder is in someone else's
                 // firmware — so the exact format is tried, the answer is
                 // watched, and the session drops to 8-bit if it has to.
-                if (isUnreadableImage(lastResult) && pngBitDepth !== fallbackBitDepth) {
-                    const was = pngBitDepth;
-                    pngBitDepth = fallbackBitDepth;
-                    console.warn(
-                        `[Image] Glasses returned ${lastResult} for a ${was}-bit PNG — ` +
-                        `falling back to ${fallbackBitDepth}-bit for the rest of the session`,
-                    );
-                    noteLifecycle("png-depth-fallback", { result: lastResult, was });
-                }
-
                 if (r.reason === "superseded") {
                     console.log(
                         `[Scene Engine] Image ${frame.tsMs / 1000}s: skipped — a newer frame is queued`,
@@ -961,15 +1029,33 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
              * one.
              */
             async function noteImageResult(ok, result) {
-                if (ok) { consecutiveImageFailures = 0; return; }
+                if (ok) {
+                    if (consecutiveImageFailures > 0) {
+                        // Whatever we are on now works. Remember it.
+                        store.setItem(IMAGE_FORMAT_KEY, currentFormat());
+                    }
+                    consecutiveImageFailures = 0;
+                    return;
+                }
                 consecutiveImageFailures++;
                 imageFailureCount++;
+
+                // Escalate on ANY repeated failure, not only on the two result
+                // codes that mean "could not read it". The hardware that
+                // rejected our frames answered `sendFailed` every time — a
+                // transmission that was attempted and lost — so a trigger that
+                // only watched for decode errors never fired, and the picture
+                // never appeared at all.
+                if (consecutiveImageFailures >= ESCALATE_AFTER &&
+                    consecutiveImageFailures % ESCALATE_AFTER === 0 &&
+                    escalateFormat(`${consecutiveImageFailures}x (${result || "no reason given"})`)) {
+                    return;
+                }
                 // The mirror of the text case, and the one the beta hit: the
                 // picture stopped while subtitles carried on. An instant
                 // rejection — the SDK answering before the radio is touched,
                 // which is why those writes time at 0ms — is the clearest
                 // version of the same signal.
-                void result;
                 await repairContainersIfOneChannelIsDead("image");
             }
 
@@ -1013,6 +1099,21 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
              * writes fail until the containers are re-declared, which is what a
              * lost container does. Driven by the telemetry page's `?notext=1`.
              */
+            /**
+             * Make the glasses reject images, the way hardware did: `sendFailed`
+             * every time, while text keeps landing. Real rejection cannot be
+             * induced from software, and this is the only way to exercise the
+             * encoding ladder without a pair of glasses that dislikes our PNGs.
+             *
+             * `until` is a format name: rejection stops once the ladder reaches
+             * it, so a test can assert the app found its way there.
+             */
+            let rejectImagesUntilFormat = null;
+            export function simulateImageRejection(until = "rgba") {
+                rejectImagesUntilFormat = until;
+                noteLifecycle("injected-image-rejection", { until });
+            }
+
             let containerLossInjected = false;
             export function simulateContainerLoss() {
                 containerLossInjected = true;
@@ -1878,7 +1979,7 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                     const w = 64, h = 32;
                     const levels = new Uint8Array(w * h);
                     for (let i = 0; i < levels.length; i++) levels[i] = i % 16;
-                    const png = encodeGreyPng(levels, w, h, pngBitDepth);
+                    const png = encodeGreyPng(levels, w, h, currentFormat() === "grey8" ? 8 : 4);
                     try {
                         const bmp = await createImageBitmap(
                             new Blob([png], { type: "image/png" }));
@@ -1922,12 +2023,105 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                     // disagreement in 0-255, and worth knowing about.
                     decodeMaxDelta: decodeAgrees,
                     // 0 = the WebView's decoder reproduces our levels exactly.
-                    pngBitDepth,
+                    format: currentFormat(),
                     pngReadsBack,
                     p50: totals[Math.floor(runs * 0.5)],
                     p90: totals[Math.floor(runs * 0.9)],
                     max: totals[runs - 1],
                 };
+            }
+
+            /**
+             * Which encodings will these glasses actually accept?
+             *
+             * The question a whole beta session failed to answer: every
+             * synthetic payload landed and every real frame failed, and the
+             * only difference was how the bytes were made. Three candidate
+             * causes — bit depth, colour type, or stored deflate blocks — and
+             * `sendFailed` distinguishes none of them.
+             *
+             * So send the SAME picture encoded each way and see. A minute, on
+             * the hardware, and the ladder in IMAGE_FORMATS stops being a guess.
+             */
+            export async function probeFormats({ perFormat = 3 } = {}) {
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+
+                // A real-looking frame: gradients and edges, so it dithers to
+                // something with structure rather than compressing to nothing.
+                const c = document.createElement("canvas");
+                c.width = w; c.height = h;
+                const x = c.getContext("2d", { willReadFrequently: true });
+                const g = x.createLinearGradient(0, 0, w, h);
+                g.addColorStop(0, "#101820"); g.addColorStop(0.5, "#c8d0d8"); g.addColorStop(1, "#201810");
+                x.fillStyle = g; x.fillRect(0, 0, w, h);
+                for (let i = 0; i < 40; i++) {
+                    x.fillStyle = `rgba(${(i * 37) % 256},${(i * 91) % 256},${(i * 53) % 256},0.5)`;
+                    x.fillRect((i * 71) % w, (i * 43) % h, 8 + (i % 17), 6 + (i % 13));
+                }
+                const levels = toGlassesLevels(x.getImageData(0, 0, w, h).data, w, h, {
+                    brightness: brightnessValue, contrast: contrastValue,
+                    gamma: gammaValue, dither: ditherAlgorithm,
+                });
+
+                const candidates = [
+                    ["grey4", async () => encodeGreyPng(levels, w, h, 4)],
+                    ["grey8", async () => encodeGreyPng(levels, w, h, 8)],
+                    ["rgba", async () => {
+                        const d = x.getImageData(0, 0, w, h);
+                        for (let i = 0; i < levels.length; i++) {
+                            const v = levels[i] * 17, o = i << 2;
+                            d.data[o] = d.data[o + 1] = d.data[o + 2] = v;
+                            d.data[o + 3] = 255;
+                        }
+                        x.putImageData(d, 0, 0);
+                        return await encodeViaHost(c);
+                    }],
+                ];
+
+                const results = [];
+                for (const [name, encode] of candidates) {
+                    const t0 = Date.now();
+                    let bytes;
+                    try { bytes = await encode(); }
+                    catch (e) { results.push({ format: name, error: String(e?.message || e) }); continue; }
+                    const encodeMs = Date.now() - t0;
+
+                    let ok = 0, lastReason = "";
+                    const times = [];
+                    for (let n = 0; n < perFormat; n++) {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        const meta = { bytes: bytes.byteLength, probe: true, format: name };
+                        const r = await ble.sendImage(async (p) => {
+                            const res = await bridgeInstance.updateImageRawData(p);
+                            meta.result = res;
+                            lastReason = res;
+                            return res === "success";
+                        }, payload, meta);
+                        if (r.ok) { ok++; times.push(r.duration); }
+                        // Say which one is on screen, so it can be judged by eye
+                        // as well as by the return value — a frame the glasses
+                        // ACCEPT but draw as noise would otherwise read as a pass.
+                        await ble.sendText(
+                            (content) => bridgeInstance.textContainerUpgrade({
+                                containerID: 1, containerName: "g2_subs",
+                                contentOffset: 0, contentLength: 0, content,
+                            }),
+                            `${name} ${(bytes.byteLength / 1024).toFixed(0)}KB #${n + 1}`,
+                        );
+                    }
+                    times.sort((a, b) => a - b);
+                    results.push({
+                        format: name, kb: +(bytes.byteLength / 1024).toFixed(1), encodeMs,
+                        ok, of: perFormat, writeMs: times[times.length >> 1] ?? 0,
+                        reason: ok === perFormat ? "" : lastReason,
+                    });
+                }
+                noteLifecycle("format-probe", { results });
+                return results;
             }
 
             export async function probeLink({ densities = null, perSize = 4 } = {}) {
@@ -1965,6 +2159,11 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
                         const probeMeta = { bytes: bytes.byteLength, probe: true };
                         const pr = await ble.sendImage(
                             async (p) => {
+                                if (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat) {
+                                    probeResult = "sendFailed";
+                                    probeMeta.result = probeResult;
+                                    return false;
+                                }
                                 probeResult = await bridgeInstance.updateImageRawData(p);
                                 probeMeta.result = probeResult;
                                 return probeResult === "success";
@@ -1989,6 +2188,7 @@ import { encodeGreyPng, fallbackBitDepth } from "./png";
             }
 
             export async function initBridge() {
+                loadImageFormat();
                 await initEvenBridge();
             }
 

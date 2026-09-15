@@ -41,6 +41,9 @@ const KEYS = [
     // is far too big to hydrate for everyone, so it goes through the bulk
     // accessors below instead.
     "trickplayer.logging",
+    // Which image encoding this pair of glasses actually accepts. Discovered by
+    // trying, so it must not be re-discovered on every launch.
+    "trickplayer.imageFormat",
 ];
 
 const mem = new Map();

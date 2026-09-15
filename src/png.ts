@@ -151,13 +151,9 @@ export function encodeGreyPng(levels, w, h, bitDepth = 4) {
 }
 
 /**
- * The depth to retreat to when the host cannot read the exact one.
- *
- * 4-bit greyscale is ordinary PNG and every mainstream decoder handles it, but
- * "every mainstream decoder" is a claim about someone else's build and this
- * one runs inside glasses firmware. The failure is detectable — the bridge
- * answers `imageException` or `imageToGray4Failed` rather than lying — so the
- * app tries the exact format, watches, and drops to 8-bit for the rest of the
- * session if it has to. Twice the bytes, still nothing like four seconds.
+ * 4-bit greyscale is the display's own format, and it is what this encoder
+ * prefers — but whether a given pair of glasses accepts it is not knowable from
+ * here. A Pixel 10 session had every synthetic payload land and every real
+ * frame fail, with the only difference being the encoding, so the choice is
+ * made at runtime by trying: see IMAGE_FORMATS in main.ts.
  */
-export const fallbackBitDepth = 8;

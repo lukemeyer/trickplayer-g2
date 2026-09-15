@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,15 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.4",
+      "notes": [
+        "The picture should appear again. Your glasses accepted every synthetic payload the sweep sent and refused every real frame, and the only difference was how the frame was encoded. The app now tries a second and a third encoding when frames keep failing, and remembers whichever one works.",
+        "New \"Which image formats work?\" button: sends one picture encoded three ways and reports which the glasses accept. Twenty seconds, and it settles the question outright.",
+        "The sweep now refuses to run during playback. It is a minute of writes on a serial link, and started mid-episode it queues in front of everything \u2014 which is why subtitles took a minute to appear.",
+        "The report no longer leads with advice about payload size when the real problem is that none of the app's own frames are landing."
+      ]
+    },
     {
       "version": "0.9.3",
       "notes": [

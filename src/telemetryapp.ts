@@ -76,6 +76,19 @@ if (flags.has("notext")) {
     setTimeout(() => { engine.simulateContainerLoss(); }, 25000);
 }
 
+/**
+ * `?noimage=1` reproduces the hardware that rejected our frames: image writes
+ * answer `sendFailed` until the encoding ladder reaches a format it accepts.
+ * Run with `&probe=1` to drive it from the sweep.
+ */
+if (flags.has("noimage")) {
+    engine.simulateImageRejection(flags.get("noimage") || "rgba");
+}
+
+if (flags.has("formats")) {
+    setTimeout(() => $("tlm-formats").click(), 2500);
+}
+
 if (flags.has("probe")) {
     setTimeout(() => $("tlm-probe").click(), 2500);
     setTimeout(() => $("tlm-report").click(), 90_000);

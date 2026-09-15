@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.3
+# Trickplayer for G2 — beta 0.9.4
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.3.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.4.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,22 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.4
+
+- **The picture should come back.** The glasses accepted every synthetic
+  payload the sweep sent — 0, 4, 12, 28 and 44 KB — and refused every real
+  frame at 16 KB. Same container, same link, sizes either side of it: the only
+  difference was how the frame is encoded. The app now tries a second and a
+  third encoding when frames keep failing, and remembers whichever one works.
+- **New: "Which image formats work?"** on the logging panel. It sends one
+  picture encoded three ways and reports which the glasses accept. Twenty
+  seconds, and it settles the question rather than inferring it. **Please run
+  this one first** — it tells us in one line what took a whole session to
+  narrow down.
+- **The sweep refuses to run during playback.** It is a minute of writes on a
+  serial link, and started mid-episode it queues in front of everything the
+  player wants to send. That is why subtitles took a minute to appear.
 
 ## Fixed in 0.9.3
 

@@ -41,6 +41,7 @@ const PANEL = `
   <div class="control-row"><span>Images</span><span id="tlm-images">—</span></div>
   <div class="control-row"><span>Queue depth</span><span id="tlm-depth">0</span></div>
   <div class="control-row"><span>Saved state</span><span id="tlm-store">—</span></div>
+  <button class="btn-secondary" id="tlm-formats">Which image formats work? (~20s)</button>
   <button class="btn-secondary" id="tlm-probe">Sweep payload sizes (~1 min)</button>
   <button class="btn-secondary" id="tlm-prep">Time the prepare path (no glasses needed)</button>
   <button class="btn-secondary" id="tlm-report">Generate report</button>
@@ -293,8 +294,46 @@ function mountPanel(engine) {
         console.log("[telemetry] logging stopped; it will not resume on the next launch");
     };
 
+    $("tlm-formats").onclick = async () => {
+        // The fastest useful thing on this panel. A session where every
+        // synthetic payload landed and every real frame failed could not say
+        // which of three differences was responsible; this answers it outright.
+        const btn = $("tlm-formats");
+        if (engine.playbackState?.()?.playing) {
+            $("tlm-hint").textContent = "Pause playback first — this sends nine frames of its own.";
+            return;
+        }
+        btn.disabled = true;
+        $("tlm-hint").textContent = "Trying each image encoding on the glasses…";
+        try {
+            recorder.mark("format-probe-start");
+            const rs = await engine.probeFormats();
+            recorder.mark("format-probe-end");
+            $("tlm-hint").textContent = rs.map((r) => r.error
+                ? `${r.format}: could not encode (${r.error})`
+                : `${r.format} ${r.kb}KB: ${r.ok}/${r.of} accepted` +
+                  (r.ok ? ` @ ${Math.round(r.writeMs)}ms` : ` (${r.reason || "no reason"})`)
+            ).join("  ·  ");
+        } catch (e) {
+            $("tlm-hint").textContent = `Format probe failed: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+            refresh(engine);
+        }
+    };
+
     $("tlm-probe").onclick = async () => {
         const btn = $("tlm-probe");
+        // The sweep is twenty image writes and twenty text writes on a serial
+        // link, which is the better part of a minute. Started during playback
+        // it does not corrupt the measurement so much as sit in front of
+        // everything the player wants to send — a session reported "text only
+        // started appearing after about a minute", and that minute was this.
+        if (engine.playbackState?.()?.playing) {
+            $("tlm-hint").textContent =
+                "Pause playback first — the sweep would queue in front of it for a minute.";
+            return;
+        }
         btn.disabled = true;
         $("tlm-hint").textContent = "Sweeping payload sizes over the link…";
         try {

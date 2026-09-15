@@ -377,6 +377,41 @@ def("a session of pure silence is still worth resuming", async () => {
     };
 });
 
+def("it blames the ENCODING when only our own frames fail", async () => {
+    // The beta session this comes from: the sweep landed at 0, 4, 12, 28 and
+    // 44 KB while every real 16 KB frame failed with `sendFailed`. The report
+    // led with "shrinking the image buys time directly" — advice about a
+    // payload the app never sends, on a link that was working.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = (ok, bytes, extra) => {
+        rec.event({
+            id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock + (ok ? 800 : 1500), queuedMs: 0,
+            durationMs: ok ? 800 : 1500, depthAtEnqueue: 1, bytes,
+            ...(ok ? {} : { reason: "failed", result: "sendFailed" }), ...extra,
+        });
+        clock += 3000;
+    };
+    // The sweep: every size lands.
+    for (const kb of [0, 4, 12, 28, 44]) {
+        for (let n = 0; n < 4; n++) img(true, kb * 1024 + 100, { probe: true });
+    }
+    // The app's own frames: none do.
+    for (let n = 0; n < 5; n++) img(false, 16600, { format: "grey4" });
+
+    const a = analyse(rec.session());
+    const hit = a.findings.find((x) => /It is how the frame is ENCODED/.test(x));
+    const text = formatReport(rec.session(), a);
+    return {
+        pass: !!hit && a.findings[0] === hit && /grey4/.test(hit) &&
+              // and the all-failed bucket must not claim a 0ms write
+              /16KB.*no successful write/.test(text) &&
+              !/16KB.*p50 0ms/.test(text),
+        detail: hit ? hit.slice(0, 150) : a.findings.join(" | ").slice(0, 150),
+    };
+});
+
 def("it explains a dead image container instead of blaming the link", async () => {
     // The exact session a beta sent back: 0 images sent, 20 failed, every
     // write timing 0ms, text landing throughout. The old report said only

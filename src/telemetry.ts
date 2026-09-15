@@ -348,6 +348,27 @@ export function analyse(session) {
             (100 * failed.filter((e) => e.durationMs <= 1).length) / total } : null;
     })();
 
+    // 6f. DO OUR OWN FRAMES LAND, when synthetic ones do?
+    //
+    //     The distinction that a whole beta session turned on. The sweep's
+    //     payloads are made by the browser; a real frame is made by our
+    //     encoder. If the synthetic ones land and the real ones do not, at
+    //     comparable sizes, then it is not the link, not the size and not the
+    //     pacing — it is the ENCODING, and no amount of tuning the first three
+    //     will touch it.
+    out.realVsProbe = (() => {
+        const probes = real(images).filter((e) => e.probe);
+        const frames = real(images).filter((e) => !e.probe);
+        if (probes.length < 4 || frames.length < 3) return null;
+        const rate = (a) => (100 * a.filter((e) => e.ok).length) / a.length;
+        return {
+            probeOkPct: rate(probes), probeN: probes.length,
+            frameOkPct: rate(frames), frameN: frames.length,
+            frameKb: frames[0]?.bytes ? frames[0].bytes / 1024 : 0,
+            formats: [...new Set(frames.map((e) => e.format).filter(Boolean))],
+        };
+    })();
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -477,6 +498,23 @@ export function analyse(session) {
                           `handing raw bytes across, removes it outright.`));
             }
         }
+    }
+
+    // Ahead of everything about size and pacing, because if this is true then
+    // every one of those numbers is describing payloads the app never sends.
+    const rv = out.realVsProbe;
+    if (rv && rv.probeOkPct >= 80 && rv.frameOkPct <= 20) {
+        f.unshift(
+            `The sweep's payloads land (${rv.probeOkPct.toFixed(0)}% of ${rv.probeN}) and the ` +
+            `app's own frames do not (${rv.frameOkPct.toFixed(0)}% of ${rv.frameN}` +
+            `${rv.frameKb ? ` at ${rv.frameKb.toFixed(0)}KB` : ""}). Both go to the same ` +
+            `container over the same link, and the sweep covers sizes either side of the ` +
+            `frame — so this is neither the link, the size, nor the pacing. It is how the ` +
+            `frame is ENCODED` +
+            (rv.formats.length ? ` (${rv.formats.join(", ")})` : "") +
+            `. Run the format probe: it sends one picture encoded three ways and reports ` +
+            `which the glasses accept.`,
+        );
     }
 
     // Every image rejected, instantly, while text kept landing. That is not a
@@ -667,8 +705,12 @@ export function formatReport(session, a = analyse(session)) {
         L.push("");
         L.push("by payload size");
         for (const b of a.bySize) {
+            // An all-failed bucket has no durations to average, and printing
+            // the zero that falls out reads as "instant" — a different fault
+            // entirely, and one this report has had to tell apart before.
+            const t = b.writeMs.n ? `p50 ${ms(b.writeMs.p50)}` : "no successful write";
             L.push(`  ${String(b.kb).padStart(3)}KB  n=${String(b.n).padStart(4)}  ` +
-                `ok ${b.successPct.toFixed(0).padStart(3)}%  p50 ${ms(b.writeMs.p50)}`);
+                `ok ${b.successPct.toFixed(0).padStart(3)}%  ${t}`);
         }
     }
     if (a.synthetic) {
