@@ -338,6 +338,54 @@ def("it flags a decode slow enough to block the pipeline", async () => {
     return { pass: !!hit, detail: hit ? hit.slice(0, 120) : a.findings.join(" | ").slice(0, 120) };
 });
 
+def("it does not blame the app for sitting idle when nothing is playing", async () => {
+    // From a real session: a 50s gap while the wearer picked an episode was
+    // reported as "the scene pipeline stopping, and it is ours". Choosing what
+    // to watch is not a fault, and counting it inflates the dead-time headline.
+    const build = (playing) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        const put = () => {
+            rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+                endedAt: clock + 1200, queuedMs: 0, durationMs: 1200, depthAtEnqueue: 1, bytes: 16600 });
+            clock += 5000;
+        };
+        for (let i = 0; i < 4; i++) put();
+        for (let i = 0; i < 12; i++) { rec.tick({ playing }); clock += 5000; }
+        for (let i = 0; i < 4; i++) put();
+        return analyse(rec.session());
+    };
+    const idle = build(false), stalled = build(true);
+    const ours = (a) => a.findings.some((x) => /and it is ours/.test(x));
+    return {
+        pass: !ours(idle) && ours(stalled) &&
+              idle.findings.some((x) => /sitting idle with nothing playing/.test(x)),
+        detail: `not playing: ${ours(idle) ? "BLAMED" : "excused"}; ` +
+                `playing: ${ours(stalled) ? "blamed" : "MISSED"}`,
+    };
+});
+
+def("one lucky retry is not evidence that retries pay", async () => {
+    // "Retries earn their keep (100% of second attempts succeed)" — from a
+    // single retry. The pessimistic branch already required five samples; the
+    // optimistic one required none, so noise could only ever argue one way.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    for (let i = 0; i < 20; i++) {
+        rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock + 900, queuedMs: 0, durationMs: 900, depthAtEnqueue: 1,
+            bytes: 16600, attempts: i === 7 ? 2 : 1 });
+        clock += 4000;
+    }
+    const a = analyse(rec.session());
+    return {
+        pass: !a.findings.some((x) => /Retries earn their keep/.test(x)),
+        detail: a.findings.some((x) => /Retries earn their keep/.test(x))
+            ? "CLAIMED from a single retry"
+            : `quiet about ${a.retries[1].reached} second attempt(s)`,
+    };
+});
+
 def("a session of pure silence is still worth resuming", async () => {
     // The rule that decides whether a stored session survives a relaunch. It
     // used to be `events.length`, and that is backwards: a freeze is an ABSENCE

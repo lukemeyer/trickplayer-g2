@@ -607,7 +607,19 @@ export function analyse(session) {
         // point at which a saved write starts mattering against a scene
         // interval measured in seconds.
         const MATERIAL_MS = 200;
-        if (!sizeIsALie && hi.writeMs.p50 > lo.writeMs.p50 * 1.3 &&
+        // And the size axis only means anything if the app can actually move
+        // along it. Real frames are a FIXED size by construction — an
+        // uncompressed 4-bit PNG of fixed dimensions is the same length
+        // whatever the picture — so every one of them lands in one bucket and
+        // the spread belongs entirely to the synthetic sweep. Worse, the host
+        // re-encodes whatever it is handed into its own buffer and compresses
+        // that ([[F-049]]), so the bytes counted here are not the bytes
+        // transmitted. "Shrink the image" is advice about a lever that is not
+        // connected to anything.
+        const realBuckets = new Set(real(images).filter((e) => !e.probe && e.bytes)
+            .map((e) => Math.floor(e.bytes / 4096) * 4));
+        const appCanMove = realBuckets.size > 1;
+        if (appCanMove && !sizeIsALie && hi.writeMs.p50 > lo.writeMs.p50 * 1.3 &&
             hi.writeMs.p50 - lo.writeMs.p50 > MATERIAL_MS) {
             f.push(`Write time scales with payload: ${lo.kb}KB takes ${Math.round(lo.writeMs.p50)}ms, ` +
                 `${hi.kb}KB takes ${Math.round(hi.writeMs.p50)}ms. Shrinking the image buys time directly.`);
@@ -621,7 +633,7 @@ export function analyse(session) {
     if (r2 && r2.reached >= 5 && r2.yieldPct < 15) {
         f.push(`Second attempts rarely help (${r2.yieldPct.toFixed(0)}% of ${r2.reached}): the retry ` +
             `budget is mostly latency spent on frames already lost. Consider failing faster.`);
-    } else if (r2 && r2.yieldPct > 40) {
+    } else if (r2 && r2.reached >= 5 && r2.yieldPct > 40) {
         f.push(`Retries earn their keep (${r2.yieldPct.toFixed(0)}% of second attempts succeed) — ` +
             `a longer budget may raise delivery further.`);
     }
@@ -660,11 +672,24 @@ export function analyse(session) {
                 `either, so the WebView was frozen, discarded or killed. Recovering from that is ` +
                 `a resume path, not a transport fix.`);
         }
-        if (idle.length) {
+        // Blame only the silences the app was supposed to be filling. A gap
+        // while nothing is playing is someone choosing an episode, and calling
+        // that "the pipeline stopping, and it is ours" both accuses the app of
+        // a fault it does not have and pads the dead-time total that the
+        // headline quotes.
+        const ourIdle = idle.filter((g) => g.playing);
+        const benignIdle = idle.filter((g) => !g.playing);
+        if (ourIdle.length) {
             f.splice((stopped.length ? 1 : 0) + (throttled.length ? 1 : 0) + 1, 0,
-                `${idle.length} of those: the page kept ticking and still sent nothing` +
-                `${idle.some((g) => g.playing) ? " WHILE THE APP BELIEVED IT WAS PLAYING" : ""} — ` +
-                `that is the scene pipeline stopping, and it is ours.`);
+                `${ourIdle.length} of those: the page kept ticking and still sent nothing ` +
+                `WHILE THE APP BELIEVED IT WAS PLAYING — that is the scene pipeline ` +
+                `stopping, and it is ours.`);
+        }
+        if (benignIdle.length) {
+            const secs = benignIdle.reduce((t, g) => t + g.ms, 0) / 1000;
+            f.push(`${secs.toFixed(0)}s of that silence was the app sitting idle with nothing ` +
+                `playing (${benignIdle.length} of the gaps) — browsing, or waiting to be told ` +
+                `what to watch. Not a fault; discount it before reading the rest.`);
         }
         // Said last, because it is the one kind of silence nobody needs to act
         // on — and unsaid, it inflates every other number in this section.
