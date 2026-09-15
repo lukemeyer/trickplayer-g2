@@ -13,6 +13,7 @@
     "ble-sim": "node tools/ble-sim.mjs",
     "telemetry-check": "node tools/telemetry-check.mjs",
     "png-check": "node tools/png-check.mjs",
+    "wire-size": "node tools/wire-size.mjs",
     "pixel-bench": "node tools/pixel-bench.mjs"
   },
   "dependencies": {
