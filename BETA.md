@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.4
+# Trickplayer for G2 — beta 0.9.5
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.4.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.5.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,28 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.5
+
+- **The picture now comes back when it stops but subtitles keep going.** After
+  a long session the image path could wedge: every frame refused, text still
+  fine. The app did try to repair it, but with a setup call the glasses only
+  accept at launch — refused every time, so nothing ever changed. It now
+  rebuilds the page the supported way, and in testing the picture resumes
+  within a couple of failed frames.
+- **No more silent downgrade to the slow picture path.** When frames failed,
+  the app assumed the image format was to blame and switched formats — even
+  when the current one had been working for ten minutes — and it *saved* that
+  choice, which could have pinned your glasses to a path that takes seconds
+  per frame. It now only tries another format if the current one has never
+  worked, and never remembers the switch.
+- **Reports lead with a dead picture.** A freeze that lasts to the end of the
+  session used to be measured as 0 seconds. It is now measured in full, put at
+  the top, and the report says what recovery was attempted.
+
+If the picture dies and does **not** come back on 0.9.5, that is exactly the
+report worth sending: it will say whether the rebuild was accepted and frames
+still failed, which is a different problem from the one fixed here.
 
 ## Fixed in 0.9.4
 

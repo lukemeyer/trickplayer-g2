@@ -378,6 +378,7 @@ import * as store from "./store";
                     const result = await createGlassesContainers();
 
                     if (result === 0) {
+                        startupPageReady = true;
                         setStatus("G2 Glass Engine Connected via BLE!", "active");
                     } else {
                         // 0 success, 1 invalid, 2 oversize, 3 outOfMemory.
@@ -547,25 +548,42 @@ import * as store from "./store";
              * is the only encoding this hardware has ever been seen to accept.
              */
             const IMAGE_FORMATS = ["grey4", "grey8", "rgba"];
-            const IMAGE_FORMAT_KEY = "trickplayer.imageFormat";
             let formatIndex = 0;
             /** Failures in a row before trying the next rung. */
             const ESCALATE_AFTER = 2;
 
+            /**
+             * Formats that have delivered at least one frame THIS session.
+             *
+             * A format that has worked cannot be the reason frames stop. A
+             * session ran grey4 for ten minutes, then every image failed — and
+             * the ladder read that as an encoding problem, climbed through grey8
+             * to the four-second `toBlob` rung, and changed nothing, because the
+             * encoding was never what broke. Once a rung is proven, failures go
+             * to recovery instead of to the next rung.
+             */
+            const provenFormats = new Set();
+
             function currentFormat() { return IMAGE_FORMATS[formatIndex]; }
 
-            /** Remembered, so a device that needs rung 3 does not re-discover it every launch. */
-            function loadImageFormat() {
-                const saved = store.getItem(IMAGE_FORMAT_KEY);
-                const i = IMAGE_FORMATS.indexOf(saved);
-                if (i >= 0) formatIndex = i;
-            }
+            /**
+             * Deliberately NOT restored from storage any more.
+             *
+             * The ladder used to persist every escalation, so the session above
+             * saved `rgba` as this device's format — and every launch after it
+             * would have started on the slowest encoder there is, on hardware
+             * where grey4 is proven. A wedge is a moment, not a property of the
+             * device. Rediscovering a rung costs a couple of failed frames once
+             * per launch; remembering a wrong one costs four seconds a frame
+             * for ever. The old key is simply no longer read.
+             */
+            function loadImageFormat() { formatIndex = 0; }
 
             function escalateFormat(why) {
                 if (formatIndex >= IMAGE_FORMATS.length - 1) return false;
+                if (provenFormats.has(currentFormat())) return false;
                 const from = currentFormat();
                 formatIndex++;
-                store.setItem(IMAGE_FORMAT_KEY, currentFormat());
                 console.warn(
                     `[Image] ${from} failed ${why} — trying ${currentFormat()} instead`,
                 );
@@ -917,7 +935,8 @@ import * as store from "./store";
                 const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength };
                 const r = await ble.sendImage(
                     async (p) => {
-                        if (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat) {
+                        if (imageWedgeInjected ||
+                            (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat)) {
                             lastResult = "sendFailed";
                             imageMeta.result = lastResult;
                             return false;
@@ -961,11 +980,14 @@ import * as store from "./store";
                             `[Scene Engine] Image UNSTUCK after ${consecutiveImageFailures} failure(s), ~${(frozenMs / 1000).toFixed(1)}s frozen`,
                         );
                     }
-                    consecutiveImageFailures = 0;
                     lastImageSuccessWall = performance.now();
-                } else {
-                    await noteImageResult(false, lastResult);
                 }
+                // BOTH outcomes, through the one place that keeps the books.
+                // Only failures used to come here, so during playback no format
+                // was ever marked proven — and the rule that stops the ladder
+                // climbing past a format that works could never fire in the
+                // exact situation it was written for.
+                await noteImageResult(r.ok, lastResult);
 
                 const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
                 const stuckNote = consecutiveImageFailures > 0 ? ` STUCK x${consecutiveImageFailures}` : "";
@@ -990,7 +1012,6 @@ import * as store from "./store";
              * a dead container fails the same way a busy link does.
              */
             async function createGlassesContainers() {
-                containerLossInjected = false;
                 return await bridgeInstance.createStartUpPageContainer({
                     containerTotalNum: 2,
                     textObject: [glassesSubtitleContainer],
@@ -998,6 +1019,35 @@ import * as store from "./store";
                 });
             }
 
+            /**
+             * Rebuild the page on a RUNNING app.
+             *
+             * Not `createStartUpPageContainer` again. The SDK documents that one
+             * as the call made when the app launches, with `rebuildPageContainer`
+             * for every page after it — and on hardware a second startup call
+             * answers `1`, invalid. Every container repair this app ever
+             * attempted on the glasses got exactly that: the F-047 recovery
+             * called the startup method, was refused, and changed nothing. It
+             * only looked like it worked in the simulator because the injected
+             * fault cleared on the CALL rather than on the call succeeding.
+             *
+             * @returns true when the host accepted the rebuild.
+             */
+            async function rebuildGlassesContainers() {
+                if (typeof bridgeInstance.rebuildPageContainer !== "function") return false;
+                const ok = (await bridgeInstance.rebuildPageContainer({
+                    containerTotalNum: 2,
+                    textObject: [glassesSubtitleContainer],
+                    imageObject: [glassesImageContainer],
+                })) === true;
+                // Injected faults clear only on a rebuild that WORKED — the
+                // mistake above was a test double more forgiving than the host.
+                if (ok) { containerLossInjected = false; imageWedgeInjected = false; }
+                return ok;
+            }
+
+            /** Set once `createStartUpPageContainer` has answered 0. */
+            let startupPageReady = false;
             let lastContainerRepairAt = 0;
             let consecutiveSubtitleFailures = 0;
             const CONTAINER_REPAIR_AFTER = 2;      // failures in a row
@@ -1030,22 +1080,17 @@ import * as store from "./store";
              */
             async function noteImageResult(ok, result) {
                 if (ok) {
-                    if (consecutiveImageFailures > 0) {
-                        // Whatever we are on now works. Remember it.
-                        store.setItem(IMAGE_FORMAT_KEY, currentFormat());
-                    }
+                    provenFormats.add(currentFormat());
                     consecutiveImageFailures = 0;
                     return;
                 }
                 consecutiveImageFailures++;
                 imageFailureCount++;
 
-                // Escalate on ANY repeated failure, not only on the two result
-                // codes that mean "could not read it". The hardware that
-                // rejected our frames answered `sendFailed` every time — a
-                // transmission that was attempted and lost — so a trigger that
-                // only watched for decode errors never fired, and the picture
-                // never appeared at all.
+                // Escalate on repeated failure of a format that has NEVER
+                // worked this session — `escalateFormat` refuses a proven one.
+                // A format that has delivered frames and then stops is a wedge,
+                // not an encoding, and belongs to the rebuild below.
                 if (consecutiveImageFailures >= ESCALATE_AFTER &&
                     consecutiveImageFailures % ESCALATE_AFTER === 0 &&
                     escalateFormat(`${consecutiveImageFailures}x (${result || "no reason given"})`)) {
@@ -1061,6 +1106,13 @@ import * as store from "./store";
 
             async function repairContainersIfOneChannelIsDead(dead) {
                 if (!bridgeInstance) return false;
+                // Nothing to rebuild until the launch declaration has landed.
+                // The bridge object exists before the page does, so a frame sent
+                // in that window fails for the plainest reason there is — and a
+                // rebuild fired then races the startup call instead of repairing
+                // anything. Seen in the simulator as a "wedge" that was really
+                // just a sweep started half a second too early.
+                if (!startupPageReady) return false;
                 // The evidence is the ASYMMETRY: one channel failing while the
                 // other keeps landing. Both failing is the link, and
                 // re-declaring containers there adds a write to a queue that is
@@ -1075,21 +1127,21 @@ import * as store from "./store";
 
                 lastContainerRepairAt = now;
                 try {
-                    const result = await createGlassesContainers();
+                    const ok = await rebuildGlassesContainers();
                     console.warn(
                         `[Recovery] ${dead === "text" ? "Text" : "Images"} failed ${failures}x while ` +
-                        `${dead === "text" ? "images" : "text"} kept landing — re-declared the ` +
-                        `containers (${result === 0 ? "ok" : `code ${result}`})`,
+                        `${dead === "text" ? "images" : "text"} kept landing — rebuilt the page ` +
+                        `(${ok ? "accepted" : "REFUSED"})`,
                     );
-                    noteLifecycle("containers-repaired", {
-                        result, dead, afterFailures: failures,
-                    });
+                    noteLifecycle("page-rebuilt", { ok, dead, afterFailures: failures });
                     // Whatever the glasses are showing now is not ours, and the
                     // line we most recently "sent" was never drawn.
                     ble.forgetText();
-                    return result === 0;
+                    return ok;
                 } catch (e) {
-                    console.error(`[Recovery] Container re-declaration threw: ${e?.message || e}`);
+                    console.error(`[Recovery] Page rebuild threw: ${e?.message || e}`);
+                    noteLifecycle("page-rebuilt", { ok: false, dead, afterFailures: failures,
+                        error: String(e?.message || e) });
                     return false;
                 }
             }
@@ -1112,6 +1164,50 @@ import * as store from "./store";
             export function simulateImageRejection(until = "rgba") {
                 rejectImagesUntilFormat = until;
                 noteLifecycle("injected-image-rejection", { until });
+            }
+
+            /**
+             * The whole ten-minute wedge, in order, in seconds — for the simulator.
+             *
+             * 1. a sweep that succeeds, so grey4 is PROVEN on this session;
+             * 2. the wedge: every image `sendFailed` while text still lands;
+             * 3. a second sweep, which has to recover by rebuilding the page —
+             *    without the ladder climbing past a format that just worked.
+             *
+             * A run of the separate flags could not answer this: the sweep in the
+             * simulator finishes in about a second, so a wedge on a timer landed
+             * after it with nothing left to fail.
+             */
+            export async function reproduceImageWedge() {
+                noteLifecycle("wedge-test", { step: "prove" });
+                await probeLink({ perSize: 2 });
+                const formatBefore = currentFormat();
+                simulateImageWedge();
+                noteLifecycle("wedge-test", { step: "wedged" });
+                // Past the rebuild cooldown, so the repair is allowed to fire
+                // however recently anything else touched the page.
+                lastContainerRepairAt = 0;
+                await probeLink({ perSize: 4 });
+                const out = {
+                    formatBefore, formatAfter: currentFormat(),
+                    wedgeCleared: !imageWedgeInjected,
+                    stillFailing: consecutiveImageFailures,
+                };
+                noteLifecycle("wedge-test", { step: "done", ...out });
+                console.log("[wedge-test]", JSON.stringify(out));
+                return out;
+            }
+
+            /**
+             * The session that prompted page rebuilds: ten minutes of pictures,
+             * then `sendFailed` on every image for good while text kept landing.
+             * Images fail until the page is successfully rebuilt. Driven by the
+             * telemetry page's `?noimage=1`.
+             */
+            let imageWedgeInjected = false;
+            export function simulateImageWedge() {
+                imageWedgeInjected = true;
+                noteLifecycle("injected-image-wedge");
             }
 
             let containerLossInjected = false;
@@ -2159,7 +2255,8 @@ import * as store from "./store";
                         const probeMeta = { bytes: bytes.byteLength, probe: true };
                         const pr = await ble.sendImage(
                             async (p) => {
-                                if (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat) {
+                                if (imageWedgeInjected ||
+                                    (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat)) {
                                     probeResult = "sendFailed";
                                     probeMeta.result = probeResult;
                                     return false;

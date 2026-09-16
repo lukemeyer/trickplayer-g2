@@ -40,7 +40,11 @@ async function mountProductionApp() {
 // AFTER the markup exists. Mount, then engine, then the recorder, then the app.
 await mountProductionApp();
 const engine = await import("./main");
-const recorder = await enableLogging(engine);
+// `?fresh=1` starts a new session instead of resuming the stored one. A harness
+// run that resumes whatever the last run left behind cannot attribute a single
+// number in its own report.
+const recorder = await enableLogging(engine, { resume: !flags0().has("fresh") });
+function flags0() { return new URLSearchParams(location.search); }
 
 /** `?play=1` starts the first playable item and leaves it running. */
 async function autoPlay() {
@@ -81,12 +85,28 @@ if (flags.has("notext")) {
  * answer `sendFailed` until the encoding ladder reaches a format it accepts.
  * Run with `&probe=1` to drive it from the sweep.
  */
+/** `?wedgetest=1` runs the full prove -> wedge -> recover sequence, then reports. */
+if (flags.has("wedgetest")) {
+    setTimeout(async () => {
+        await engine.reproduceImageWedge();
+        $("tlm-report").click();
+    }, 4000);
+}
+
 if (flags.has("noimage")) {
     engine.simulateImageRejection(flags.get("noimage") || "rgba");
 }
 
 if (flags.has("formats")) {
     setTimeout(() => $("tlm-formats").click(), 2500);
+}
+
+/**
+ * `?noimage=1` reproduces the ten-minute wedge: every image `sendFailed` for good
+ * while text keeps landing, until the page is successfully rebuilt.
+ */
+if (flags.has("noimage")) {
+    setTimeout(() => { engine.simulateImageWedge(); }, 25000);
 }
 
 if (flags.has("probe")) {

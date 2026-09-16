@@ -83,7 +83,19 @@ function makeLink(opts = {}) {
         disconnect() { connected = false; },
         reconnect() { connected = true; },
         loseContainer(which = "text") { container[which] = false; },
-        declareContainers() { container = { text: true, image: true }; },
+        // The SDK's rule, encoded rather than assumed: the startup declaration
+        // is for LAUNCH, and a second one answers 1 (invalid) and changes
+        // nothing. A running app rebuilds its page instead. This double used
+        // to accept either, which is how a repair that called the startup
+        // method passed every test here and failed every time on the glasses.
+        startUpCalls: 0,
+        createStartUp() {
+            this.startUpCalls++;
+            if (this.startUpCalls > 1) return 1;          // invalid
+            container = { text: true, image: true };
+            return 0;
+        },
+        rebuild() { container = { text: true, image: true }; return true; },
         async write(kind) {
             writes++;
             if (writes >= cfg.disconnectAfter) connected = false;
@@ -257,7 +269,8 @@ def("reconnecting re-sends the text, because the screen was cleared", async ({ m
  * exactly what a struggling link looks like, and adding a container write to a
  * queue that is already failing makes a bad session worse.
  */
-function makeChannels(t, link, { repair = true } = {}) {
+function makeChannels(t, link, { repair = true, via = "rebuild" } = {}) {
+    link.createStartUp();       // the launch itself — the one legitimate call
     const runs = { text: 0, image: 0 };
     let repairs = 0;
     const other = (k) => (k === "text" ? "image" : "text");
@@ -269,7 +282,7 @@ function makeChannels(t, link, { repair = true } = {}) {
         // failing while the OTHER one still lands. Both failing is the link.
         if (repair && runs[kind] >= 2 && runs[other(kind)] === 0) {
             repairs++;
-            link.declareContainers();
+            if (via === "rebuild") link.rebuild(); else link.createStartUp();
             t.forgetText();     // nothing we "sent" was ever drawn
             runs[kind] = 0;
         }
@@ -326,6 +339,24 @@ def("a lost container is repaired, whichever channel lost it", async ({ make }) 
         detail: `text lost: ${out.text.without.landed}/4 -> ${out.text.with.landed}/4  |  ` +
                 `image lost: ${out.image.without.landed}/4 -> ${out.image.with.landed}/4 ` +
                 `(declared once, then re-declared on evidence)`,
+    };
+});
+
+def("repairing with the startup call changes nothing; rebuilding recovers", async ({ make }) => {
+    // What shipped from F-047 until a ten-minute session exposed it: the repair
+    // called createStartUpPageContainer, the host answered 1 every time, and the
+    // picture stayed dead while text carried on. Both repairs see the same
+    // wedge; only one of them is a call the host accepts on a running app.
+    const run = async (via) => {
+        const { t, link } = make();
+        return afterAContainerLoss(t, link, "image", { repair: true, via });
+    };
+    const redeclare = await run("startup");
+    const rebuild = await run("rebuild");
+    return {
+        pass: redeclare.landed === 0 && rebuild.landed >= 2,
+        detail: `re-declared at startup: ${redeclare.landed}/4 frames after ` +
+                `${redeclare.repairs} refused repair(s)  |  rebuilt: ${rebuild.landed}/4`,
     };
 });
 

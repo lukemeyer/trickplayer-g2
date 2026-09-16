@@ -460,6 +460,38 @@ def("it blames the ENCODING when only our own frames fail", async () => {
     };
 });
 
+def("a picture that dies for good leads the report, measured to the end", async () => {
+    // The session that prompted this: ten minutes of frames, then every image
+    // `sendFailed` until the end while text kept landing. The old report said
+    // "stalls 1, longest 0.0s" — the ongoing stall was recorded as -1 — and led
+    // with a 42s gap instead. The re-declarations it attempted all answered 1.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = (ok) => rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock,
+        startedAt: clock, endedAt: clock + 2000, queuedMs: 0, durationMs: 2000,
+        depthAtEnqueue: 1, bytes: 16600, ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+    const txt = () => rec.event({ id: 0, kind: "text", ok: true, enqueuedAt: clock + 100,
+        startedAt: clock + 100, endedAt: clock + 220, queuedMs: 0, durationMs: 120, depthAtEnqueue: 1 });
+
+    for (let i = 0; i < 60; i++) { img(true); txt(); rec.tick({ playing: true }); clock += 10000; }
+    for (let i = 0; i < 30; i++) {
+        img(false); txt(); rec.tick({ playing: true });
+        if (i % 6 === 0) rec.mark("containers-repaired", { result: 1, dead: "image", afterFailures: i + 2 });
+        clock += 8000;
+    }
+    const a = analyse(rec.session());
+    const text = formatReport(rec.session(), a);
+    const lead = a.findings[0] || "";
+    return {
+        pass: lead.startsWith("THE PICTURE STOPPED") &&
+              /30 image failures in a row/.test(lead) &&
+              /refused 5x/.test(lead) && /only works at launch/.test(lead) &&
+              a.longestStallMs > 200000 &&
+              /STILL FROZEN/.test(text),
+        detail: `longest ${(a.longestStallMs / 1000).toFixed(0)}s; lead: ${lead.slice(0, 110)}`,
+    };
+});
+
 def("it explains a dead image container instead of blaming the link", async () => {
     // The exact session a beta sent back: 0 images sent, 20 failed, every
     // write timing 0ms, text landing throughout. The old report said only

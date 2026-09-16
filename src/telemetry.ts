@@ -207,7 +207,15 @@ export function analyse(session) {
         if (!e.ok) { if (run === 0) runStart = e.startedAt; run++; }
         else if (run) { stalls.push({ failures: run, ms: e.endedAt - runStart }); run = 0; }
     }
-    if (run) stalls.push({ failures: run, ms: -1, ongoing: true });
+    // A stall still running when the session ends is measured to the END.
+    // It used to be recorded as -1, so the one freeze that never recovered —
+    // the worst there is, and the one the wearer gave up on — could never be
+    // the longest: a session whose picture died for four minutes reported
+    // "longest 0.0s". Same lesson as the gap detector, learned twice.
+    if (run) {
+        stalls.push({ failures: run, ms: Math.max(0, session.durationMs - runStart),
+            ongoing: true, fromMs: runStart });
+    }
     out.stalls = stalls;
     out.longestStallMs = stalls.reduce((m, s) => Math.max(m, s.ms), 0);
 
@@ -643,7 +651,44 @@ export function analyse(session) {
             `(${Math.round(out.foreground.writeMs.p50)}ms -> ${Math.round(out.background.writeMs.p50)}ms) ` +
             `and succeed ${out.background.successPct.toFixed(0)}% against ${out.foreground.successPct.toFixed(0)}%.`);
     }
-    if (out.longestStallMs > 10000) {
+    // The picture died and never came back, while text carried on. This is
+    // the headline whenever it happens — above gaps, above everything — and it
+    // says what recovery was attempted and what the host made of it, because
+    // "did the app even try" was unanswerable from the old report.
+    const dead = out.stalls.find((st) => st.ongoing && st.failures >= 5);
+    const textAfter = dead
+        ? ok(texts).filter((e) => e.startedAt >= dead.fromMs).length : 0;
+    if (dead && sent > 0 && textAfter > 0) {
+        const marks = (session.marks || []).filter((m) => m.at >= dead.fromMs);
+        const rebuilds = marks.filter((m) => m.name === "page-rebuilt");
+        const redeclares = marks.filter((m) => m.name === "containers-repaired");
+        const formats = marks.filter((m) => m.name === "image-format-changed");
+        const recovery = [];
+        if (rebuilds.length) {
+            const accepted = rebuilds.filter((m) => m.ok).length;
+            recovery.push(`the page was rebuilt ${rebuilds.length}x ` +
+                `(${accepted} accepted by the host${accepted ? ", and images still failed after" : ""})`);
+        }
+        if (redeclares.length) {
+            const refused = redeclares.filter((m) => m.result !== 0).length;
+            recovery.push(`containers were re-declared ${redeclares.length}x and refused ${refused}x — ` +
+                `that is \`createStartUpPageContainer\`, which only works at launch, so none of those ` +
+                `could have helped`);
+        }
+        if (formats.length) {
+            recovery.push(`the encoding was changed ${formats.length}x (to ` +
+                `${formats[formats.length - 1].to}), which cannot fix a format that had already ` +
+                `been delivering frames`);
+        }
+        f.unshift(
+            `THE PICTURE STOPPED at ${(dead.fromMs / 1000).toFixed(0)}s and never came back: ` +
+            `${dead.failures} image failures in a row over ${(dead.ms / 60000).toFixed(1)} min, ` +
+            `after ${sent} frames had been delivered — while text kept landing ` +
+            `(${textAfter} lines after the picture died). The link was alive, so this is the ` +
+            `image path wedging, not a disconnect. ` +
+            (recovery.length ? `Recovery: ${recovery.join("; ")}.` : `No recovery was attempted.`),
+        );
+    } else if (out.longestStallMs > 10000) {
         f.push(`Longest frozen picture ${(out.longestStallMs / 1000).toFixed(1)}s ` +
             `across ${out.stalls.length} stall(s) — this is what a wearer reports.`);
     }
@@ -703,6 +748,11 @@ export function analyse(session) {
         }
     }
     if (!f.length) f.push("Nothing stands out — the link kept up with the pipeline.");
+    // A picture that died for good outranks every silence: the gap section
+    // unshifts its own headline after this one was written, and a 42s pause
+    // must not bury four minutes of no picture at all.
+    const deadAt = f.findIndex((x) => x.startsWith("THE PICTURE STOPPED"));
+    if (deadAt > 0) f.unshift(...f.splice(deadAt, 1));
     return out;
 }
 
@@ -795,7 +845,8 @@ export function formatReport(session, a = analyse(session)) {
     }
     L.push("");
     L.push(`stalls      ${a.stalls.length} (consecutive failures), ` +
-        `longest ${(a.longestStallMs / 1000).toFixed(1)}s`);
+        `longest ${(a.longestStallMs / 1000).toFixed(1)}s` +
+        (a.stalls.some((st) => st.ongoing) ? "  — STILL FROZEN when the session ended" : ""));
     L.push(`gaps        ${a.gaps.length} (nothing sent at all), ` +
         `${(a.deadMs / 1000).toFixed(0)}s dead, longest ${(a.longestGapMs / 1000).toFixed(0)}s`);
     for (const g of a.gaps.slice(0, 8)) {

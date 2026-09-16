@@ -41,9 +41,10 @@ const KEYS = [
     // is far too big to hydrate for everyone, so it goes through the bulk
     // accessors below instead.
     "trickplayer.logging",
-    // Which image encoding this pair of glasses actually accepts. Discovered by
-    // trying, so it must not be re-discovered on every launch.
-    "trickplayer.imageFormat",
+    // `trickplayer.imageFormat` used to live here and is gone on purpose: it
+    // remembered an encoding escalation made during a transient wedge, which
+    // would have pinned a device to the four-second encoder for good. See
+    // `loadImageFormat` in main.ts.
 ];
 
 const mem = new Map();

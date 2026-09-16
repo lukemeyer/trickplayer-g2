@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.5",
+      "notes": [
+        "When the picture stops but subtitles keep coming, the app now actually recovers. Every earlier repair used a setup call the glasses only accept at launch, so it was refused every time and changed nothing. It now rebuilds the page the supported way.",
+        "The app no longer switches to a slower picture format when frames fail after the current one has already been working \u2014 and no longer remembers that switch, which could have left the picture on the slowest path for good.",
+        "Logging reports now put a picture that died for good at the top, measure how long it was frozen, and say what recovery was tried."
+      ]
+    },
     {
       "version": "0.9.4",
       "notes": [
