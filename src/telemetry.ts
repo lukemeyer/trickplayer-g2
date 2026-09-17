@@ -504,6 +504,29 @@ export function analyse(session) {
     ]);
     out.keyEvents = (session.marks || []).filter((m) => KEY_EVENTS.has(m.name));
 
+    // 6j. LINK SPEED OVER TIME. The slowdown that kills full pictures comes and
+    //     goes — one locked sweep had 14-18 KB timing out, the next delivered
+    //     20 KB in 1.3s — and the report cannot see the phone lock. What it CAN
+    //     see is when sends got slow, minute by minute, and which picture level
+    //     they were at. A slow patch shows up here whatever caused it.
+    out.timeline = (() => {
+        const MIN = 60000;
+        const rows = new Map();
+        for (const e of real(images)) {
+            if (e.probe) continue;
+            const k = Math.floor(e.startedAt / MIN);
+            const r = rows.get(k) || { minute: k, n: 0, ok: 0, ms: [], levels: new Set() };
+            r.n++;
+            if (e.ok) { r.ok++; r.ms.push(e.durationMs); }
+            if (e.quality) r.levels.add(e.quality);
+            rows.set(k, r);
+        }
+        return [...rows.values()].sort((a, b) => a.minute - b.minute).map((r) => ({
+            minute: r.minute, n: r.n, okPct: (100 * r.ok) / r.n,
+            writeMs: summarise(r.ms), levels: [...r.levels],
+        }));
+    })();
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -745,9 +768,16 @@ export function analyse(session) {
                 `of ${all} delivered). This is not the link slowing down: the glasses app stops taking ` +
                 `pictures at all while locked, and a smaller picture will not help.`);
         } else if (okAll / all >= 0.9) {
-            f.unshift(`With the phone locked, payloads of every size were delivered ` +
-                `(${Math.round(100 * okAll / all)}% of ${all}) — so being locked does not by itself stop ` +
-                `pictures. Whatever freezes playback is something playback does that this sweep does not.`);
+            const slowest = ls.rows.reduce((m, r) => Math.max(m, r.writeMs.p50 || 0), 0);
+            const froze = out.stalls.some((st) => st.ongoing && st.failures >= 5);
+            f.unshift(`The locked sweep delivered every size (${Math.round(100 * okAll / all)}% of ${all}, ` +
+                `slowest p50 ${Math.round(slowest)}ms) — the link did NOT slow down during this sweep. ` +
+                `Being locked does not by itself slow it; when it does slow, something else is also ` +
+                `involved. ` +
+                (froze
+                    ? `Playback still froze this session, so compare the timeline below against the sweep.`
+                    : `(If the phone was not actually locked during the sweep, this result says nothing ` +
+                      `about locking.)`));
         }
     }
 
@@ -814,12 +844,22 @@ export function analyse(session) {
         out.synthetic.actualMs - out.synthetic.predictedMs > 150;
     if (sizeIsALie) {
         const y = out.synthetic;
-        f.push(`Real frames cost ${y.ratio.toFixed(1)}x what their SIZE explains: ` +
-            `${Math.round(y.actualMs)}ms against ${Math.round(y.predictedMs)}ms predicted at ` +
-            `${y.realKb.toFixed(0)}KB by the synthetic sweep (${Math.round(y.fixedMs)}ms fixed + ` +
-            `${y.perKbMs.toFixed(0)}ms/KB). The difference is NOT the payload — it is whatever ` +
-            `else playback is doing while the write is in flight, so shrinking the image would ` +
-            `buy roughly ${y.perKbMs.toFixed(0)}ms per KB saved and no more.`);
+        // Say what the difference could be only as far as this session's own
+        // data allows. The old wording blamed "whatever else playback is doing
+        // while the write is in flight" — in a session whose contention table
+        // showed no write overlapping any other work at all.
+        const c0 = out.contention;
+        const noOverlap = c0 && c0.contended.n === 0;
+        f.push(`Real frames cost ${y.ratio.toFixed(1)}x what the synthetic sweep predicts for their file size: ` +
+            `${Math.round(y.actualMs)}ms against ${Math.round(y.predictedMs)}ms at ` +
+            `${y.realKb.toFixed(0)}KB (${Math.round(y.fixedMs)}ms fixed + ${y.perKbMs.toFixed(0)}ms/KB). ` +
+            (noOverlap
+                ? `No real frame's write overlapped a fetch or a decode, so it is not other work in ` +
+                  `flight. File size is not air size — the glasses app re-encodes and compresses each ` +
+                  `picture (F-049) — so the likely difference is that real pictures compress worse ` +
+                  `than sweep noise of the same file size. Unconfirmed; an adb capture would settle it.`
+                : `The difference is not explained by file size; see the contention table for whether ` +
+                  `other work was running during the writes.`));
     }
     if (out.bySize.length > 1) {
         const lo = out.bySize[0], hi = out.bySize[out.bySize.length - 1];
@@ -1131,6 +1171,18 @@ export function formatReport(session, a = analyse(session)) {
             `${g.kind}${g.playing ? ", app thought it was playing" : ""}${g.endedHere ? ", session ended here" : ""}` +
             (g.stuck ? `\n              stuck behind: ${g.stuck.what} (${(g.stuck.ms / 1000).toFixed(0)}s)` : "") +
             (g.backoff ? `\n              images deliberately paused (backoff)` : ""));
+    }
+    if (a.timeline && a.timeline.length > 1) {
+        L.push("");
+        L.push("picture sends by minute   (◀ marks a slow or failing minute)");
+        for (const r of a.timeline) {
+            const slow = r.okPct < 100 || (r.writeMs.n && r.writeMs.p50 > 4000);
+            L.push(`  ${String(r.minute).padStart(3)}m  n=${String(r.n).padStart(3)}  ` +
+                `ok ${r.okPct.toFixed(0).padStart(3)}%  ` +
+                `${r.writeMs.n ? `p50 ${ms(r.writeMs.p50)}  max ${ms(r.writeMs.max)}` : "none landed"}` +
+                `${r.levels.length && !(r.levels.length === 1 && r.levels[0] === "full") ? "  [" + r.levels.join(",") + "]" : ""}` +
+                `${slow ? "  ◀" : ""}`);
+        }
     }
     if (a.keyEvents && a.keyEvents.length) {
         L.push("");

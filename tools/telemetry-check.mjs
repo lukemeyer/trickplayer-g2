@@ -270,7 +270,7 @@ def("it separates what the payload costs from what playback costs", async () => 
     for (let i = 0; i < 23; i++) ev(16 * 1024, 1923, false);
 
     const a = analyse(rec.session());
-    const hit = a.findings.find((x) => /what their SIZE explains/.test(x));
+    const hit = a.findings.find((x) => /what the synthetic sweep predicts for their file size/.test(x));
     // And it must NOT also tell you to shrink the image in the next breath.
     const contradiction = a.findings.find((x) => /Shrinking the image buys time directly/.test(x));
     return {
@@ -507,6 +507,31 @@ def("lighter pictures are reported by level, and whether they kept coming", asyn
     };
 });
 
+def("a slow patch shows up in the minute-by-minute timeline", async () => {
+    // The link slowdown is intermittent and the report cannot see a lock, so
+    // the timeline has to show WHEN sends got slow, and at which picture level.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = (ok, ms, quality) => {
+        rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock, endedAt: clock + ms,
+            queuedMs: 0, durationMs: ms, depthAtEnqueue: 1, bytes: 16600, quality,
+            ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+        clock += 10000;
+    };
+    for (let i = 0; i < 6; i++) img(true, 1800, "full");       // minute 0
+    img(false, 8500, "full");                                   // minute 1: slow patch
+    for (let i = 0; i < 5; i++) img(true, 900, "lighter");
+    for (let i = 0; i < 6; i++) img(true, 1800, "full");       // minute 2
+    const a = analyse(rec.session());
+    const text = formatReport(rec.session(), a);
+    const lines = text.split("\n").filter((l) => /^\s+\d+m\s+n=/.test(l));
+    return {
+        pass: lines.length === 3 && /◀/.test(lines[1]) && /lighter/.test(lines[1]) &&
+              !/◀/.test(lines[0]) && !/◀/.test(lines[2]),
+        detail: lines.map((l) => l.trim()).join(" | "),
+    };
+});
+
 def("the locked sweep says which of three answers it found", async () => {
     // Throughput explanation: small payloads land locked, large ones time out.
     // The sweep must be able to confirm it AND to rule it out both ways.
@@ -532,7 +557,7 @@ def("the locked sweep says which of three answers it found", async () => {
     return {
         pass: /SMALL PICTURES STILL LAND: payloads up to 10KB were mostly delivered and from 12KB mostly failed/.test(lead(threshold)) &&
               /even the SMALLEST payloads failed/.test(lead(none)) &&
-              /payloads of every size were delivered/.test(lead(all)) &&
+              /locked sweep delivered every size/.test(lead(all)) && /did NOT slow down/.test(lead(all)) &&
               /LOCKED sweep by payload size/.test(text) && /failures took p50 9000ms/.test(text),
         detail: lead(threshold).slice(0, 120),
     };

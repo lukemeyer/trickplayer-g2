@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.10
+# Trickplayer for G2 — beta 0.9.11
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.10.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.11.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,20 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Changed in 0.9.11
+
+Reporting only. The last session ran 10 minutes with every picture delivered —
+but the lighter-picture switching from 0.9.10 never kicked in, because nothing
+was slow, and a second locked sweep delivered every size quickly where the first
+had large pictures timing out. So a locked phone does not always slow the link;
+something else decides when it does.
+
+- **Reports show picture sends minute by minute**, marking any slow or failing
+  minute and the picture level used, so a slowdown is visible whatever caused it.
+
+Still the most useful test: long playback with the phone locked, and a note of
+roughly when you locked and unlocked it.
 
 ## Fixed in 0.9.10
 
