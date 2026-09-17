@@ -35,6 +35,14 @@ function setHidden(id, hidden) { $(id).classList.toggle("hidden", hidden); }
 const esc = engine.escapeHtml;
 
 /** A tappable row. Every list in this app is made of these. */
+/** h:mm:ss / m:ss, for "resuming at". */
+function clock(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+    const two = (n) => String(n).padStart(2, "0");
+    return h ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
+}
+
 function row(parent, title, subtitle, onClick, badges = []) {
     const div = document.createElement("div");
     div.className = "media-item";
@@ -131,20 +139,63 @@ function loadRecent() {
     catch (e) { return []; }
 }
 
-function rememberPlayed(match) {
+const sameItem = (a, b) =>
+    a && b && a.accountId === b.accountId && JSON.stringify(a.config) === JSON.stringify(b.config);
+
+/**
+ * Remember an item, and where it had got to.
+ *
+ * The position is the point: picking something from the list is "carry on
+ * watching", and starting it from the beginning every time is not that.
+ */
+function rememberPlayed(match, positionMs = 0) {
     if (!match || !sourceKey) return;
     const [provider, id] = sourceKey.split(":");
     const entry = {
         provider, accountId: id, title: match.title,
         durationMs: match.durationMs ?? null, config: match.config,
+        positionMs: Math.max(0, Math.round(positionMs) || 0),
     };
-    const rest = loadRecent().filter(
-        (r) => !(r.accountId === entry.accountId &&
-                 JSON.stringify(r.config) === JSON.stringify(entry.config)));
+    const rest = loadRecent().filter((r) => !sameItem(r, entry));
     const all = [entry, ...rest].slice(0, RECENT_MAX);
     store.setItem(RECENT_KEY, JSON.stringify(all));
-    engine.setRecentTitles(all.map((r) => r.title));
+    engine.setRecentTitles(all.map(recentLabel));
 }
+
+/**
+ * What a remembered item looks like on the glasses: the title, and where it
+ * had got to. A list of titles alone cannot answer "which one was I part-way
+ * through", which is the question the list exists to answer.
+ */
+function recentLabel(r) {
+    const at = resumeAt(r);
+    if (!at) return r.title;
+    const time = clock(at);
+    const room = 38 - time.length;           // list items are truncated by the engine
+    const title = r.title.length > room ? `${r.title.slice(0, room - 1)}…` : r.title;
+    return `${title} · ${time}`;
+}
+
+/** Where to start an item that has been watched before. */
+function resumeAt(entry) {
+    if (!entry?.positionMs) return 0;
+    // Nearly finished is finished: resuming into the credits is worse than
+    // starting again, and the wearer cannot easily seek from the glasses.
+    if (entry.durationMs && entry.positionMs > entry.durationMs * 0.97) return 0;
+    return entry.positionMs;
+}
+
+/**
+ * Keep the remembered position current while something plays.
+ *
+ * On a timer rather than at the end, because the end is exactly the moment
+ * that tends not to arrive — the app is closed, the glasses are taken off, the
+ * WebView is discarded.
+ */
+setInterval(() => {
+    if (!playable || !engine.playbackState().playing) return;
+    rememberPlayed(playable, engine.positionMs());
+}, 15000);
 
 /** Play a remembered item without going through the browser. */
 async function playRecent(index) {
@@ -165,6 +216,8 @@ async function playRecent(index) {
         title: match.title, durationMs: match.durationMs, source: account.openSource(match),
     });
     applyOptionsToEngine();
+    const from = resumeAt(entry);
+    if (from) engine.seekTo(from);
     engine.play();
     return true;
 }
@@ -185,8 +238,9 @@ function showSources() {
         head.className = "text-muted";
         head.textContent = "Recently played";
         list.appendChild(head);
-        recent.forEach((r, i) => row(list, r.title, null, () => playRecent(i),
-            [r.provider === "jellyfin" ? "Jellyfin" : "Plex"]));
+        recent.forEach((r, i) => row(
+            list, r.title, resumeAt(r) ? `Resume at ${clock(resumeAt(r))}` : null,
+            () => playRecent(i), [r.provider === "jellyfin" ? "Jellyfin" : "Plex"]));
         const sep = document.createElement("p");
         sep.className = "text-muted";
         sep.textContent = "Servers";
@@ -261,6 +315,11 @@ if (harness.has("demorecent")) {
             "Chernobyl — E3", "Paddington 2",
         ]);
         engine.showRecentOnGlasses();
+        // ...and what picking one looks like.
+        setTimeout(() => {
+            engine.showPlayerOnGlasses();
+            engine.announceLoading("Finding Dory");
+        }, 4000);
     }, 2000);
 }
 
@@ -559,6 +618,16 @@ async function openItem(match) {
         });
         applyOptionsToEngine();
 
+        // Carry on where this one stopped, however it was opened.
+        const [provider, accountId] = (sourceKey || ":").split(":");
+        const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
+        const from = resumeAt(seen);
+        if (from) {
+            engine.seekTo(from);
+            $("item-title").textContent = `${match.title} — resuming at ${clock(from)}`;
+        }
+        void provider;
+
         // Gate on the ESTIMATE, not a fixed rule: a Plex 3-scene preview is
         // ~45 KB and a Jellyfin one is a whole ~865 KB tile sheet — after which
         // the rest of the film is free (F-038).
@@ -688,7 +757,7 @@ function repaintPreview() {
 $("item-back").onclick = () => { engine.stop(); releasePreview(); renderList(); };
 $("item-play").onclick = () => {
     show("panel-player");
-    rememberPlayed(playable);
+    rememberPlayed(playable, engine.positionMs());
     engine.play();
 };
 
@@ -748,7 +817,7 @@ engine.setUiHooks({
     // that a launch which is NOT logging never loads the recorder at all.
     // The glasses need these before anything is on screen: they are what the
     // idle picker is made of.
-    engine.setRecentTitles(loadRecent().map((r) => r.title));
+    engine.setRecentTitles(loadRecent().map(recentLabel));
 
     if (store.getItem("trickplayer.logging") === "1") {
         const { enableLogging } = await import("./logging");

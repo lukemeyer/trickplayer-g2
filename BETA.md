@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.16
+# Trickplayer for G2 — beta 0.9.17
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.16.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.17.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,17 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.17
+
+- **Resume where you stopped.** Position is saved every 15 seconds while
+  playing, and picking an item — from the glasses list or the phone — carries
+  on from there. The phone list and the glasses list both show the resume point.
+  Anything watched past 97% starts from the beginning instead.
+- **"Loading [title]" on the glasses** the moment you pick something, rather
+  than "Select video to begin" sitting there while the index loads.
+- **Quiet stretches clear the subtitle line.** A scene with no dialogue used to
+  leave the previous scene's line under an unrelated picture.
 
 ## New in 0.9.16
 

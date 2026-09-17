@@ -416,8 +416,26 @@ import * as store from "./store";
             // The provider comes in already built. The engine never names one:
             // which provider this is, and how it was authenticated, is settled
             // before anything here runs (SEAM.md, UI.md §5).
+            /**
+             * Tell the GLASSES what is coming. The idle line says "Select video
+             * to begin"; once something is chosen it should name it, because
+             * reading the index and subtitles takes a few seconds and the wearer
+             * is looking at the glasses, not at the phone.
+             */
+            export function announceLoading(title) {
+                if (!bridgeInstance || !title) return;
+                ble.forgetText();
+                sendSubtitleToGlasses(`Loading ${title}`).catch(() => {});
+            }
+
             async function prepareItem(item) {
                 document.getElementById("playing-title").textContent = item.title;
+
+                // On the GLASSES too. The idle line says "Select video to begin";
+                // once something is selected it should say what is coming, since
+                // reading the index and the subtitles takes a few seconds and the
+                // wearer is looking at the glasses, not the phone.
+                announceLoading(item.title);
 
                 setStatus(`Loading "${item.title}"...`);
                 showLoadProgress("Connecting to server...");
@@ -1197,6 +1215,11 @@ import * as store from "./store";
                 return applyPage("recent");
             }
 
+            /** Back to the picture-and-subtitle page. */
+            export async function showPlayerOnGlasses() {
+                return applyPage("player");
+            }
+
             /**
              * The idle screen's picture: a thin frame where the video will be.
              *
@@ -1725,6 +1748,15 @@ import * as store from "./store";
                         }
 
                         if (signal.aborted) break;
+
+                        // 5a. A scene with nothing to say CLEARS the line.
+                        //     Without this the previous scene's subtitle stayed
+                        //     under a picture it has nothing to do with, for as
+                        //     long as the quiet lasted — the wearer reads a line
+                        //     that belongs to a different moment.
+                        if (!blocks.length && !signal.aborted) {
+                            try { await sendSubtitleToGlasses(" "); } catch (e) {}
+                        }
 
                         // 5. Scene had no (displayable) subtitles to piggyback on —
                         //    issue the next image now so it is in flight.
@@ -2271,6 +2303,9 @@ import * as store from "./store";
             export function setLinkObserver(fn) { linkObserver = fn; }
 
             /** What the app believes it is doing, for the heartbeat to stamp. */
+            /** Where playback has got to, for whoever wants to remember it. */
+            export function positionMs() { return Math.round(currentTimeMs) || 0; }
+
             export function playbackState() {
                 const t = Date.now();
                 return {
