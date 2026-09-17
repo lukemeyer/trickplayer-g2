@@ -333,7 +333,10 @@ async function showBrowse() {
         list.innerHTML = "";
         for (const r of roots) row(list, r.title, r.subtitle, () => openContainer(r));
     } catch (e) {
-        list.innerHTML = `<p class="text-muted">Could not reach ${esc(account.name)}: ${esc(e.message)}</p>`;
+        // The account's own message already names the server and says why,
+        // when it has a why; don't wrap it in a second "could not reach".
+        const said = /^Couldn't reach /.test(e.message);
+        list.innerHTML = `<p class="text-muted">${said ? "" : `Could not reach ${esc(account.name)}: `}${esc(e.message)}</p>`;
     }
 }
 

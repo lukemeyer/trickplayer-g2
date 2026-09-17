@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.5
+# Trickplayer for G2 — beta 0.9.6
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.5.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.6.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,22 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.6
+
+- **Plex works away from home.** Plex gives every server several addresses —
+  one on your home network, one on the internet, often a relay — and which one
+  works depends on where your phone is. The app used to pick one when you
+  signed in and keep it forever; signed in at home, that was the home-network
+  address, which stops existing the moment you leave (a VPN put you back
+  inside, which is why that worked). It now tries all of them at once, prefers
+  home network, then internet, then relay, and tries again automatically
+  whenever the address in use stops answering — including when you walk out of
+  the house mid-episode. No need to sign in again.
+- **If nothing answers, it says why.** In particular, if Plex only lists a
+  home-network address for your server, that usually means **Remote Access** is
+  off in the server's settings, and then no app can reach it from outside
+  without a VPN.
 
 ## Fixed in 0.9.5
 

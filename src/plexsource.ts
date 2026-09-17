@@ -8,8 +8,13 @@
 import { parseTimelineHeader, parseTimelineIndex } from "./timeline";
 import { decodeSubtitleBytes, parseSubtitles } from "./subtitles";
 
-export function createPlexSource({ serverUrl, token, timelineRef, subtitleRef }) {
-    const indexUrl = `${serverUrl}/library/parts/${timelineRef}/indexes/sd`;
+export function createPlexSource({ serverUrl, withRoute, token, timelineRef, subtitleRef }) {
+    // Every request goes through the account's route, so an address that stops
+    // answering mid-episode is raced away from instead of hanging each frame.
+    // A bare `serverUrl` still works — the conformance runner has no race.
+    const route = withRoute || ((request) => request(serverUrl, fetch));
+    const tokenNow = () => (typeof token === "function" ? token() : token);
+    const indexPath = `/library/parts/${timelineRef}/indexes/sd`;
 
     function capabilities() {
         return {
@@ -26,10 +31,10 @@ export function createPlexSource({ serverUrl, token, timelineRef, subtitleRef })
         };
     }
 
-    async function fetchRange(url, from, to) {
-        const res = await fetch(url, {
-            headers: { Range: `bytes=${from}-${to}`, "X-Plex-Token": token },
-        });
+    async function fetchRange(path, from, to) {
+        const res = await route((base, fetchFn) => fetchFn(`${base.replace(/\/$/, "")}${path}`, {
+            headers: { Range: `bytes=${from}-${to}`, "X-Plex-Token": tokenNow() },
+        }));
         if (!res.ok && res.status !== 206) {
             throw new Error(`range fetch ${from}-${to} -> HTTP ${res.status}`);
         }
@@ -49,9 +54,9 @@ export function createPlexSource({ serverUrl, token, timelineRef, subtitleRef })
      * are fetched one at a time as they are shown (F-005).
      */
     async function timeline() {
-        const headerBuf = await fetchRange(indexUrl, 0, 63);
+        const headerBuf = await fetchRange(indexPath, 0, 63);
         const header = parseTimelineHeader(headerBuf);
-        const indexBuf = await fetchRange(indexUrl, 0, header.indexByteLength - 1);
+        const indexBuf = await fetchRange(indexPath, 0, header.indexByteLength - 1);
         const parsed = parseTimelineIndex(indexBuf);
         // The BIF entry becomes the opaque LOCATOR; its byte length becomes the
         // size hint. Plex is a source that CAN answer "how big is this frame".
@@ -68,15 +73,15 @@ export function createPlexSource({ serverUrl, token, timelineRef, subtitleRef })
     /** Unwrapping the locator is this provider's own business (SEAM.md §5). */
     async function frameBytes(frame) {
         const { offset, length } = frame.locator;
-        return fetchRange(indexUrl, offset, offset + length - 1);
+        return fetchRange(indexPath, offset, offset + length - 1);
     }
 
     async function cues() {
         if (!subtitleRef) return [];
         const clean = subtitleRef.startsWith("/") ? subtitleRef : `/${subtitleRef}`;
-        const res = await fetch(`${serverUrl.replace(/\/$/, "")}${clean}`, {
-            headers: { "X-Plex-Token": token },
-        });
+        const res = await route((base, fetchFn) => fetchFn(`${base.replace(/\/$/, "")}${clean}`, {
+            headers: { "X-Plex-Token": tokenNow() },
+        }));
         if (!res.ok) throw new Error(`subtitle fetch -> HTTP ${res.status}`);
         // Bytes then a BOM sniff — never Content-Type. A real Plex server
         // serves UTF-16 sidecars labelled text/html (F-035).

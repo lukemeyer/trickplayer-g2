@@ -7,6 +7,7 @@
 // that only applies here. Nothing above this file knows any of it exists.
 
 import { createPlexSource } from "./plexsource";
+import { normaliseRoutes, raceRoutes, staticBest, rank } from "./plexroutes";
 
 const CLIENT_ID = "trickplayer-g2";
 const APP_NAME = "Trickplayer";
@@ -15,7 +16,7 @@ export function createPlexAccount(saved = {}) {
     let accountToken = saved.accountToken || null;
     let serverUrl = saved.serverUrl || null;
     let serverToken = saved.serverToken || null; // server-specific (F-020)
-    let routes = saved.routes || [];
+    let routes = normaliseRoutes(saved.routes);
     let name = saved.name || "Plex";
     let id = saved.id || null;
 
@@ -125,39 +126,159 @@ export function createPlexAccount(saved = {}) {
                 owner: d.sourceTitle || null,
                 // EVERY route, not just the winner: F-016 re-races when the
                 // network changes, which it cannot do from a single saved URL.
-                routes: (Array.isArray(d.connections) ? d.connections : [d.connections])
+                routes: normaliseRoutes((Array.isArray(d.connections) ? d.connections : [d.connections])
                     .filter(Boolean)
-                    .map((c) => c.uri || `${c.protocol}://${c.address}:${c.port}`),
+                    .map((c) => ({
+                        uri: c.uri || `${c.protocol}://${c.address}:${c.port}`,
+                        // plex.tv says outright which is which; guessing from
+                        // the hostname is only for records saved before this.
+                        local: !!c.local, relay: !!c.relay,
+                    }))),
                 // Server-specific, not the account token (F-020).
                 accessToken: d.accessToken || accountToken,
             }));
     }
 
     /**
-     * Fix the route this account will use.
+     * Choose a server. The ADDRESS is not chosen here any more.
      *
-     * Local routes first, then the rest. F-016's parallel race is a UI change
-     * this build has not made yet; ordering by locality is the part of it that
-     * costs nothing, and the whole route list is kept so the race can be added
-     * without another sign-in.
+     * It used to be: the LAN route was picked at sign-in and kept for ever, so
+     * off the home network every request went to a private IP that did not
+     * exist and the server "did not load" — until a VPN put the phone back
+     * inside. Now this only makes a first guess; the real choice is a race,
+     * run before the first request of each session and again whenever the
+     * chosen address stops answering (F-016).
      */
     function use(server) {
         id = server.id;
         name = server.name;
-        routes = server.routes;
+        routes = normaliseRoutes(server.routes);
         serverToken = server.accessToken;
-        const local = routes.find((u) => /\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u));
-        serverUrl = local || routes[0] || null;
+        serverUrl = staticBest(routes)?.uri || null;
+        racedThisSession = false;
+    }
+
+    // ------------------------------------------------------------- routes
+
+    /** Long enough for a phone on LTE; a dead LAN address never answers at all. */
+    const PROBE_TIMEOUT_MS = 8000;
+    /** Requests that hang are how a vanished LAN address shows up mid-session. */
+    const REQUEST_TIMEOUT_MS = 12000;
+
+    let racedThisSession = false;
+    let racing = null;
+
+    async function probe(uri) {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
+        try {
+            const res = await fetch(`${uri.replace(/\/$/, "")}/identity`, {
+                headers: { Accept: "application/json", "X-Plex-Token": serverToken },
+                signal: ctl.signal,
+            });
+            return res.ok;
+        } catch (e) {
+            return false;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /** The routes plex.tv lists NOW — a home's public IP changes, and its route with it. */
+    async function refreshRoutes() {
+        if (!accountToken || !id) return false;
+        try {
+            const fresh = (await listServers()).find((sv) => sv.id === id);
+            if (!fresh?.routes.length) return false;
+            routes = fresh.routes;
+            serverToken = fresh.accessToken || serverToken;
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function unreachableMessage() {
+        const kinds = new Set(routes.map((r) => ["home network", "internet", "relay"][rank(r)]));
+        const onlyLocal = routes.length > 0 && routes.every((r) => r.local);
+        return `Couldn't reach ${name} from this network (tried ${routes.length} address` +
+            `${routes.length === 1 ? "" : "es"}: ${[...kinds].join(", ")}).` +
+            (onlyLocal
+                ? " Plex only lists a home-network address for this server, which usually means" +
+                  " Remote Access is turned off in the server's settings — so away from home" +
+                  " it can only be reached over a VPN."
+                : " If it works at home or over a VPN, check Remote Access in the server's settings.");
+    }
+
+    /**
+     * Pick the address that answers from where the phone is right now.
+     *
+     * Concurrent callers share one race. If nothing answers, the route list
+     * itself may be stale — a changed public IP moves the internet route — so
+     * it is refreshed from plex.tv, which is reachable from anywhere, and raced
+     * once more before giving up with a reason instead of a spinner.
+     */
+    function reroute(why) {
+        if (racing) return racing;
+        racing = (async () => {
+            let r = await raceRoutes(routes, { probe, timeoutMs: PROBE_TIMEOUT_MS });
+            if (!r.route && await refreshRoutes()) {
+                r = await raceRoutes(routes, { probe, timeoutMs: PROBE_TIMEOUT_MS });
+            }
+            racedThisSession = true;
+            if (!r.route) throw new Error(unreachableMessage());
+            if (r.route.uri !== serverUrl) {
+                console.log(`[plex] ${why}: using ${["local", "internet", "relay"][rank(r.route)]} ` +
+                    `route (${r.answered}/${r.tried} answered, ${r.ms}ms)`);
+            }
+            serverUrl = r.route.uri;
+            return serverUrl;
+        })().finally(() => { racing = null; });
+        return racing;
+    }
+
+    /** A failure of the NETWORK — the only kind a different address can fix. */
+    function isRouteFailure(e) {
+        return e?.name === "TypeError" || e?.name === "AbortError";
+    }
+
+    /**
+     * Run a request against the current route; if the route itself fails,
+     * race again and retry once. HTTP errors are the server answering, so they
+     * are passed through — another address would get the same answer.
+     */
+    async function withRoute(request) {
+        if (!racedThisSession) await reroute("first request this session");
+        try {
+            return await request(serverUrl);
+        } catch (e) {
+            if (!isRouteFailure(e)) throw e;
+            await reroute("the current address stopped answering");
+            return await request(serverUrl);
+        }
+    }
+
+    /** fetch, with a deadline — a vanished address hangs rather than failing. */
+    async function timedFetch(url, init = {}) {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+        try {
+            return await fetch(url, { ...init, signal: ctl.signal });
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     // ------------------------------------------------------------- browse
 
     async function plexFetch(endpoint) {
-        const res = await fetch(`${serverUrl.replace(/\/$/, "")}${endpoint}`, {
-            headers: { Accept: "application/json", "X-Plex-Token": serverToken },
+        return withRoute(async (base) => {
+            const res = await timedFetch(`${base.replace(/\/$/, "")}${endpoint}`, {
+                headers: { Accept: "application/json", "X-Plex-Token": serverToken },
+            });
+            if (!res.ok) throw new Error(`Plex ${endpoint} -> HTTP ${res.status}`);
+            return res.json();
         });
-        if (!res.ok) throw new Error(`Plex ${endpoint} -> HTTP ${res.status}`);
-        return res.json();
     }
 
     /** Continue watching, playlists, then libraries — the same three everywhere. */
@@ -271,8 +392,11 @@ export function createPlexAccount(saved = {}) {
     /** The item-scoped half of the seam, ready for the engine. */
     function openSource(playable) {
         return createPlexSource({
-            serverUrl,
-            token: serverToken,
+            // The ROUTE, not a snapshot of it: frames are fetched for the whole
+            // episode, and leaving the house halfway through changes which
+            // address works.
+            withRoute: (request) => withRoute((base) => request(base, timedFetch)),
+            token: () => serverToken,
             timelineRef: playable.config.timelineRef,
             subtitleRef: playable.config.subtitleRef,
         });

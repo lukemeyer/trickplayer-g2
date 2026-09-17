@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,13 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.6",
+      "notes": [
+        "Your Plex server now loads away from home. The app used to pick one of the server's addresses when you signed in \u2014 at home, the home-network one \u2014 and use it forever, so on mobile data or another Wi-Fi it could only work over a VPN. It now tries every address Plex lists at once, uses the best one that answers, and switches automatically when you change networks, even mid-episode.",
+        "If the server really can't be reached from where you are, it says why \u2014 including when Plex only lists a home-network address, which usually means Remote Access is off in the server's settings."
+      ]
+    },
     {
       "version": "0.9.5",
       "notes": [
