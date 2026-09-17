@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.17
+# Trickplayer for G2 — beta 0.9.18
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.17.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.18.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,29 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.18
+
+All from one session, and all introduced by 0.9.16/0.9.17:
+
+- **The recent list covered the picture.** Starting a video from the phone left
+  the list up on the glasses, with subtitles showing underneath it. Starting
+  playback now takes the screen back.
+- **Picking from the list started the wrong video.** Playing something moves it
+  to the top of the list, but the picker on the glasses still showed the old
+  order — so the first row was no longer what you were looking at. The picker
+  now redraws when the list changes, and a tap is matched to the label that was
+  on screen.
+- **"Select video to begin" appeared under the picture** during quiet stretches,
+  because that is the text container's default and it comes back every time the
+  page is rebuilt.
+- **Quality never recovered.** It only climbed back after sends faster than
+  2.5s; on a link where every send took ~3.7s and nothing failed, the picture
+  stayed coarse indefinitely. Any delivered frame now counts towards trying a
+  better one, at the cost of an occasional probe.
+- **The picture format never came back down.** After one bad patch it sent
+  double-size frames for the rest of the session. It now retries the smaller
+  format once frames are landing.
 
 ## Fixed in 0.9.17
 

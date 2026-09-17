@@ -424,6 +424,7 @@ import * as store from "./store";
              */
             export function announceLoading(title) {
                 if (!bridgeInstance || !title) return;
+                if (showingRecent) applyPage("player").catch(() => {});
                 ble.forgetText();
                 sendSubtitleToGlasses(`Loading ${title}`).catch(() => {});
             }
@@ -614,6 +615,37 @@ import * as store from "./store";
                 );
                 noteLifecycle("image-format-changed", { from, to: currentFormat(), why });
                 return true;
+            }
+
+            /**
+             * Climb back down the FORMAT ladder when frames are landing.
+             *
+             * It only ever went up. A session escalated to grey8 during a bad
+             * patch and then sent 32 KB PNGs for the rest of its life with
+             * nothing failing — twice the bytes across the bridge for a picture
+             * the host re-encodes anyway. Rungs above grey4 exist for hardware
+             * that cannot read grey4 at all, and that is a property of the
+             * device, so it is worth re-testing once things are healthy.
+             */
+            let formatGoodRun = 0;
+            let formatProbeAfter = 10;
+            let formatProbing = false;
+            function maybeRestoreFormat() {
+                if (formatIndex === 0) { formatProbing = false; return; }
+                formatGoodRun++;
+                if (formatProbing && formatGoodRun >= 2) {
+                    // The lower rung is holding.
+                    formatProbing = false;
+                    formatProbeAfter = 10;
+                    return;
+                }
+                if (formatProbing || formatGoodRun < formatProbeAfter) return;
+                const from = currentFormat();
+                formatIndex--;
+                formatGoodRun = 0;
+                formatProbing = true;
+                console.warn(`[Image] ${from} has been fine for a while — trying ${currentFormat()} again`);
+                noteLifecycle("image-format-changed", { from, to: currentFormat(), why: "probe back down" });
             }
 
             /**
@@ -1144,7 +1176,12 @@ import * as store from "./store";
                 const sig = recentTitles.join("\u0000");
                 if (sig === menuSignature) return;
                 menuSignature = sig;
-                if (bridgeInstance && !showingRecent) applyPage("player").catch(() => {});
+                if (!bridgeInstance) return;
+                // If the picker is ON SCREEN, redraw it. Playing something moves
+                // it to the top of the list, and a stale picker meant tapping
+                // the first row started whatever USED to be first — the wearer
+                // picked one episode and got another.
+                applyPage(showingRecent ? "recent" : "player").catch(() => {});
             }
 
             /** Which page the glasses are on: the picker, or the player. */
@@ -1192,7 +1229,12 @@ import * as store from "./store";
                         textObject: [{ ...glassesSubtitleContainer, yPosition: 264, height: 24,
                             isEventCapture: 0, content: "Tap to start" }] }
                     : { containerTotalNum: 2,
-                        textObject: [glassesSubtitleContainer],
+                        // Blank while playing. The container's default content is
+                        // the idle invitation, and a rebuild puts it back on
+                        // screen — so "Select video to begin" appeared under the
+                        // picture during every quiet stretch.
+                        textObject: [{ ...glassesSubtitleContainer,
+                            content: isPlaying ? " " : IDLE_TEXT }],
                         imageObject: [glassesImageContainer] };
                 if (menuObject()) page.menuObject = menuObject();
                 const ok = (await bridgeInstance.rebuildPageContainer(page)) === true;
@@ -1335,6 +1377,7 @@ import * as store from "./store";
             async function noteImageResult(ok, result, sent = {}) {
                 if (ok) {
                     provenFormats.add(currentFormat());
+                    maybeRestoreFormat();
                     if (backoffStep > 0) {
                         noteLifecycle("image-resumed", {
                             afterBackoffs: backoffStep, skipped: skippedDuringBackoff,
@@ -1350,6 +1393,13 @@ import * as store from "./store";
                 }
                 consecutiveImageFailures++;
                 imageFailureCount++;
+                if (formatProbing) {
+                    // The rung we dropped back to is not accepted after all.
+                    formatProbing = false;
+                    formatGoodRun = 0;
+                    formatProbeAfter = Math.min(formatProbeAfter * 2, 160);
+                    if (formatIndex < IMAGE_FORMATS.length - 1) formatIndex++;
+                }
 
                 // Back off once failures are clearly not a blip. Each further
                 // failure — which can only be the single probe frame let through
@@ -2190,8 +2240,15 @@ import * as store from "./store";
                 const listEvent = event.listEvent || null;
                 if (listEvent && listEvent.containerID === RECENT_CONTAINER_ID &&
                     (listEvent.eventType == null || listEvent.eventType === OsEventTypeList.CLICK_EVENT)) {
-                    const index = listEvent.currentSelectItemIndex ?? 0;
-                    console.log(`[Recent] picked "${recentTitles[index] ?? index}"`);
+                    // Match on the LABEL the glasses actually had on screen; the
+                    // index is only a fallback. The two disagree the moment the
+                    // list is reordered underneath a picker still showing the
+                    // old order.
+                    const shown = listEvent.currentSelectItemName ?? null;
+                    const byName = shown == null ? -1 : recentTitles.indexOf(shown);
+                    const index = byName >= 0 ? byName : (listEvent.currentSelectItemIndex ?? 0);
+                    console.log(`[Recent] picked "${shown ?? recentTitles[index] ?? index}"` +
+                        `${byName < 0 ? " (by position — the glasses sent no name)" : ""}`);
                     noteLifecycle("recent-picked", { index, title: recentTitles[index] });
                     showingRecent = false;
                     applyPage("player")
@@ -2851,6 +2908,10 @@ import * as store from "./store";
             export function play() {
                 if (isPlaying || !sceneList.length) return;
                 isPlaying = true;
+                // The picker is a full-screen page; leaving it up meant the
+                // picture had nowhere to appear while subtitles showed
+                // underneath it.
+                if (showingRecent) applyPage("player").catch(() => {});
                 backgroundedWhilePlaying = false;
                 playBtn.innerText = "Pause";
                 silentAudio.play().catch(() => {});

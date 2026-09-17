@@ -206,7 +206,9 @@ export function analyse(session) {
     {
         const withQ = real(images).filter((e) => e.quality && !e.probe);
         if (withQ.some((e) => e.quality !== "full")) {
-            const order = ["full", "lighter", "lightest"];
+            // Every rung, or the section renders its header with no rows — which
+            // is exactly what a session stuck on the newest rung looked like.
+            const order = ["full", "lighter", "lightest", "minimal"];
             out.byQuality = order.map((q) => {
                 const list = withQ.filter((e) => e.quality === q);
                 return { quality: q, n: list.length,

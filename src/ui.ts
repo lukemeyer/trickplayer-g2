@@ -315,10 +315,14 @@ if (harness.has("demorecent")) {
             "Chernobyl — E3", "Paddington 2",
         ]);
         engine.showRecentOnGlasses();
-        // ...and what picking one looks like.
+        // Then the list REORDERS underneath the picker, the way it does when
+        // something is played: the picker must redraw, and a tap must pick what
+        // the wearer can actually see.
         setTimeout(() => {
-            engine.showPlayerOnGlasses();
-            engine.announceLoading("Finding Dory");
+            engine.setRecentTitles([
+                "Paddington 2", "The Expanse — S1E1", "Finding Dory",
+                "Arrival", "Chernobyl — E3",
+            ]);
         }, 4000);
     }, 2000);
 }

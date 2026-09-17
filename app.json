@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.17",
+  "version": "0.9.18",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,16 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.18",
+      "notes": [
+        "Starting a video from the phone now clears the recent list off the glasses \u2014 it was covering the picture while subtitles showed underneath it.",
+        "Picking from the recent list starts the item you can see. Playing something reorders the list, and the picker was left showing the old order, so a tap started the wrong video.",
+        "\"Select video to begin\" no longer appears under the picture during quiet stretches.",
+        "Picture quality recovers on a merely slow link. It only climbed back after unusually fast sends, so a moderately slow link left the picture coarse for the rest of the session.",
+        "The app returns to the smaller picture format once frames are landing again, instead of sending double-size ones for the rest of the session."
+      ]
+    },
     {
       "version": "0.9.17",
       "notes": [

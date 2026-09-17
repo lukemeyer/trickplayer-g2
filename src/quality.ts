@@ -41,7 +41,7 @@ export function createQualityController({
     maxProbeAfter = 64,
 } = {}) {
     let index = 0;
-    let fastRun = 0;
+    let successRun = 0;
     let waitBeforeProbe = probeAfter;
     let probing = false;
 
@@ -53,7 +53,7 @@ export function createQualityController({
         /** For harnesses: put the ladder on a named rung. */
         force(name) {
             const i = ladder.findIndex((r) => r.name === name);
-            if (i >= 0) { index = i; fastRun = 0; probing = false; }
+            if (i >= 0) { index = i; successRun = 0; probing = false; }
             return ladder[index];
         },
 
@@ -66,7 +66,7 @@ export function createQualityController({
             const bad = !ok || ms > slowMs;
 
             if (bad) {
-                fastRun = 0;
+                successRun = 0;
                 if (probing) waitBeforeProbe = Math.min(waitBeforeProbe * 2, maxProbeAfter);
                 probing = false;
                 if (index < ladder.length - 1) {
@@ -76,17 +76,18 @@ export function createQualityController({
                 return null;
             }
 
-            if (ms <= fastMs) {
-                if (probing) { probing = false; waitBeforeProbe = probeAfter; }
-                fastRun++;
-                if (index > 0 && fastRun >= waitBeforeProbe) {
-                    fastRun = 0;
-                    probing = true;
-                    index--;
-                    return { from, to: ladder[index].name, why: `probe after ${waitBeforeProbe} fast frames` };
-                }
-            } else {
-                fastRun = 0;             // landed, but not quickly enough to call the link recovered
+            // A frame that LANDED counts towards climbing back, whether or not
+            // it was quick. Requiring speed meant a link that was merely
+            // mediocre could never recover: at the smallest rung sends took
+            // 3.7s, never beat the 2.5s "fast" bar, and the picture stayed
+            // coarse for the rest of the session with nothing failing.
+            if (probing) { probing = false; if (ms <= fastMs) waitBeforeProbe = probeAfter; }
+            successRun++;
+            if (index > 0 && successRun >= waitBeforeProbe) {
+                successRun = 0;
+                probing = true;
+                index--;
+                return { from, to: ladder[index].name, why: `probe after ${waitBeforeProbe} good frames` };
             }
             return null;
         },

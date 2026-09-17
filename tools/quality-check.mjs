@@ -50,12 +50,17 @@ def("awake: stays on full pictures", () => {
     return { pass: /^f+$/.test(r.trace), detail: r.trace };
 });
 
-def("the phone locks: one failed frame, then pictures keep coming", () => {
+def("the phone locks: pictures keep coming, at the cost of rare probes", () => {
     const ctl = createQualityController();
     play(ctl, AWAKE, 5);
     const r = play(ctl, LOCKED, 30);
-    // At most the first frame is lost; everything after lands.
-    return { pass: r.delivered >= 29, detail: `${r.delivered}/30 delivered locked, ${r.deadMs / 1000}s frozen — ${r.trace}` };
+    // The first frame is lost dropping down, and climbing back is tried now
+    // and then — each attempt costing one frame. That cost is the price of
+    // ever recovering: a rung whose sends are merely mediocre (3.7s on
+    // hardware) used to pin the picture coarse for the rest of the session.
+    const lost = 30 - r.delivered;
+    return { pass: r.delivered >= 26 && lost <= 4,
+        detail: `${r.delivered}/30 delivered locked, ${lost} spent probing — ${r.trace}` };
 });
 
 def("locked for a long time: probing up gets rarer, not constant", () => {
@@ -80,6 +85,18 @@ def("a collapsed link: falls through to minimal pictures, which keep landing", (
     const r = play(ctl, COLLAPSED, 40);
     return { pass: ctl.current.name === "minimal" && r.delivered >= 36,
         detail: `${r.delivered}/40 delivered — ${r.trace}` };
+});
+
+def("a merely mediocre link still climbs back", () => {
+    // The reported session: every send landed, none of them fast, and the
+    // picture stayed at the smallest rung for the rest of the session because
+    // nothing ever counted as "fast enough to try again".
+    const MEDIOCRE = { full: 3700, lighter: 3600, lightest: 3500, minimal: 3400 };
+    const ctl = createQualityController();
+    ctl.force("minimal");
+    const r = play(ctl, MEDIOCRE, 40);
+    return { pass: ctl.current.name === "full" && r.delivered === 40,
+        detail: `ended at ${ctl.current.name} with every frame delivered — ${r.trace}` };
 });
 
 def("unlocking: climbs back to full pictures", () => {
