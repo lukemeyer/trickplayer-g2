@@ -478,6 +478,7 @@ import * as store from "./store";
                 setLoadProgress(1, "Ready");
                 hideLoadProgress();
                 setStatus(`Ready: ${item.title}`, "active");
+                ensureMenu();
                 return sceneStats();
             }
 
@@ -1162,11 +1163,28 @@ import * as store from "./store";
             // the picture will be — and an invitation.
             const IDLE_TEXT = "Select video to begin";
             const MENU_RECENT_ID = 1;
+            const MENU_PLAYPAUSE_ID = 2;
+            const MENU_STOP_ID = 3;
             const RECENT_CONTAINER_ID = 3;
 
             /** Titles of the last few played items, set by the flow (src/ui.ts). */
             let recentTitles = [];
             let menuSignature = "";
+            let lastMenuShape = "";
+
+            /**
+             * Rebuild only when the menu's SHAPE changes — loading an item adds
+             * Play/Pause and Stop, stopping takes them away. A rebuild empties
+             * the image container, so doing it on any other schedule would blank
+             * the picture for no reason.
+             */
+            function ensureMenu() {
+                if (!bridgeInstance || !startupPageReady) return;
+                const shape = menuShape();
+                if (shape === lastMenuShape) return;
+                lastMenuShape = shape;
+                applyPage(showingRecent ? "recent" : "player").catch(() => {});
+            }
             export function setRecentTitles(titles) {
                 recentTitles = (titles || []).slice(0, 5).map((t) => String(t || "").slice(0, 40));
                 // Rebuild only when the MENU would actually change. Rebuilding
@@ -1186,11 +1204,34 @@ import * as store from "./store";
 
             /** Which page the glasses are on: the picker, or the player. */
             let showingRecent = false;
+            /** When the contextual menu last did something — see the FOREGROUND_EXIT guard. */
+            let menuActiveAt = 0;
+            let foregroundEnteredAt = 0;
 
+            /**
+             * The contextual menu, raised on the glasses with tap-then-long-press.
+             *
+             * Labels are verbs, not state: the menu is replaced wholesale by a
+             * page rebuild and cannot be edited item by item, so one "Play /
+             * Pause" entry that toggles beats two entries that lie half the time.
+             * A rebuild also clears the picture, so the set only changes when
+             * there is a real change of state — loaded or not.
+             */
             function menuObject() {
-                return recentTitles.length
-                    ? { menuItems: [{ itemID: MENU_RECENT_ID, itemName: "Recently played" }] }
-                    : undefined;
+                const items = [];
+                if (sceneList.length) {
+                    items.push({ itemID: MENU_PLAYPAUSE_ID, itemName: "Play / Pause" });
+                    items.push({ itemID: MENU_STOP_ID, itemName: "Stop" });
+                }
+                if (recentTitles.length) {
+                    items.push({ itemID: MENU_RECENT_ID, itemName: "Recently played" });
+                }
+                return items.length ? { menuItems: items } : undefined;
+            }
+
+            /** What the menu currently offers, so a rebuild happens only when it changes. */
+            function menuShape() {
+                return (menuObject()?.menuItems || []).map((m) => m.itemID).join(",");
             }
 
             function recentListContainer() {
@@ -1239,6 +1280,7 @@ import * as store from "./store";
                 if (menuObject()) page.menuObject = menuObject();
                 const ok = (await bridgeInstance.rebuildPageContainer(page)) === true;
                 if (ok) {
+                    lastMenuShape = menuShape();
                     showingRecent = wantRecent;
                     ble.forgetText();
                     // A rebuild empties the image container, so the idle frame
@@ -2209,6 +2251,24 @@ import * as store from "./store";
                 // The glasses host lost/regained foreground (e.g. the user
                 // switched to another glasses app, or the phone screen
                 // locked) — see pauseForBackground/resumeFromBackground.
+                if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+                    foregroundEnteredAt = Date.now();
+                }
+                if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+                    // The menu overlay hands the foreground back on the way out,
+                    // and pausing on that would stop the video every time the
+                    // wearer used the menu — including the moment they chose
+                    // "Play / Pause", which would then undo itself.
+                    const sinceMenu = Date.now() - menuActiveAt;
+                    const sinceEnter = Date.now() - foregroundEnteredAt;
+                    if (sinceMenu < 4000 || sinceEnter < 4000) {
+                        noteLifecycle("host-foreground-exit", {
+                            wasPlaying: isPlaying, ignored: "menu overlay",
+                            sinceMenuMs: sinceMenu, sinceEnterMs: sinceEnter,
+                        });
+                        return;
+                    }
+                }
                 if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
                     // Marked separately from the pause it causes: whether the
                     // host sends this when the PHONE sleeps — rather than only
@@ -2224,10 +2284,24 @@ import * as store from "./store";
                     return;
                 }
 
-                // The contextual menu: one entry, back to the recent list.
-                if (event.menuItemClickEvent?.itemID === MENU_RECENT_ID) {
-                    noteLifecycle("menu-recently-played", {});
-                    showRecentOnGlasses().catch(() => {});
+                // The contextual menu. Selecting an item is bracketed by
+                // FOREGROUND_ENTER and FOREGROUND_EXIT — the overlay taking and
+                // giving back the foreground — and the EXIT half would otherwise
+                // pause playback every time the menu is used. See `menuActiveAt`.
+                const menuId = event.menuItemClickEvent?.itemID;
+                if (menuId != null) {
+                    menuActiveAt = Date.now();
+                    noteLifecycle("menu-item", { itemID: menuId });
+                    if (menuId === MENU_RECENT_ID) {
+                        showRecentOnGlasses().catch(() => {});
+                    } else if (menuId === MENU_PLAYPAUSE_ID) {
+                        console.log(`[Menu] play/pause (was ${isPlaying ? "playing" : "paused"})`);
+                        togglePlay();
+                    } else if (menuId === MENU_STOP_ID) {
+                        console.log("[Menu] stop — back to the recent list");
+                        stop();
+                        showRecentOnGlasses().catch(() => {});
+                    }
                     return;
                 }
 
@@ -2973,6 +3047,7 @@ import * as store from "./store";
                 if (bridgeInstance) sendSubtitleToGlasses("Stream terminated.").catch(() => {});
                 if (source && source.release) source.release();
                 resetPipelineState();
+                ensureMenu();
                 ui.playing(false);
                 ui.stopped();
             }

@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.18
+# Trickplayer for G2 — beta 0.9.19
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.18.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.19.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,22 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## New in 0.9.19
+
+- **A menu on the glasses.** Tap, then long press, to raise it:
+  - **Play / Pause** — one entry that toggles, because menu labels cannot be
+    changed while the page is up.
+  - **Stop** — ends playback and returns to the recent list.
+  - **Recently played** — the list, without stopping.
+- **Using the menu no longer pauses playback.** Opening the menu hands the
+  foreground to the overlay and back, and the app treated the "back" half as the
+  phone leaving the app — so a menu selection would have paused the video, and
+  choosing Play / Pause would have undone itself.
+
+Worth checking: does raising the menu (the *tap* half of tap-then-long-press)
+pause playback on its own? A tap is also the pause gesture. The report now marks
+taps and menu items, so a session will show it.
 
 ## Fixed in 0.9.18
 
