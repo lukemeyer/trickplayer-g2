@@ -764,7 +764,11 @@ export function analyse(session) {
     }
 
     // Paused by the host while the wearer was still watching.
-    const hostExits = (out.keyEvents || []).filter((m) => m.name === "host-foreground-exit" && m.wasPlaying);
+    // Not the ones the app deliberately ignored: raising the contextual menu
+    // hands the foreground back on the way out, and counting those said the app
+    // "PAUSED 4x while playing" in a session where it had paused none.
+    const hostExits = (out.keyEvents || []).filter(
+        (m) => m.name === "host-foreground-exit" && m.wasPlaying && !m.ignored);
     const userPlays = (out.keyEvents || []).filter((m) => m.name === "user-play" && m.wasBackgroundPaused);
     if (hostExits.length) {
         f.push(`The glasses host told the app it had lost the foreground ${hostExits.length}x while playing, ` +

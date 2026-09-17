@@ -621,6 +621,33 @@ def("playback stopping with nothing to explain it is called out, not excused", a
     };
 });
 
+def("menu overlays are not counted as the host pausing the app", async () => {
+    // A session using the glasses menu four times was told "the host told the
+    // app it had lost the foreground 4x while playing, and each time the app
+    // PAUSED" — when the app had ignored all four on purpose, which the mark
+    // itself says.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    for (let i = 0; i < 10; i++) {
+        rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock + 1900, queuedMs: 0, durationMs: 1900, depthAtEnqueue: 1, bytes: 16600 });
+        clock += 5000; rec.tick({ playing: true, lagMs: 3 });
+    }
+    const ignored = analyse((() => {
+        for (let i = 0; i < 4; i++) rec.mark("host-foreground-exit", { wasPlaying: true, ignored: "menu overlay" });
+        return rec.session();
+    })());
+    const real = analyse((() => {
+        rec.mark("host-foreground-exit", { wasPlaying: true });
+        return rec.session();
+    })());
+    const said = (a) => a.findings.some((x) => /lost the foreground/.test(x));
+    return {
+        pass: !said(ignored) && said(real),
+        detail: `4 ignored -> ${said(ignored) ? "WRONGLY BLAMED" : "quiet"}; a real one -> ${said(real) ? "reported" : "MISSED"}`,
+    };
+});
+
 def("the 12:03 lock session: the verdict comes from subtitles, and backoff is not blamed", async () => {
     // 14 minutes of full pictures, then the lock: lightest pictures ~50% at
     // ~4.7s, a backoff pause while playing. Run twice — subtitles slowing with

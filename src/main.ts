@@ -430,6 +430,17 @@ import * as store from "./store";
             }
 
             async function prepareItem(item) {
+                // Stop whatever is running FIRST. Choosing something from the
+                // recent list while an episode was playing left both pipelines
+                // alive, and the wearer got two films interleaved on one screen.
+                if (isPlaying || scenePipelineRunning) {
+                    noteLifecycle("playback-stopped", { by: "another item was chosen" });
+                    isPlaying = false;
+                    stopScenePipeline();
+                    try { silentAudio.pause(); } catch (e) {}
+                    playBtn.innerText = "Play";
+                    ui.playing(false);
+                }
                 document.getElementById("playing-title").textContent = item.title;
 
                 // On the GLASSES too. The idle line says "Select video to begin";
@@ -672,6 +683,14 @@ import * as store from "./store";
              * see src/quality.ts for the measurements and the rules.
              */
             const pictureQuality = createQualityController();
+            /**
+             * Ignore one sample after playback restarts.
+             *
+             * The first frame out of a resume or a seek queues behind the
+             * one-shot update that goes with it, and the ladder read that queue
+             * wait as a slow link.
+             */
+            let skipNextQualitySample = false;
 
             /** Harness only: show what a given picture level looks like on the glasses. */
             export function forcePictureQuality(name) {
@@ -1093,13 +1112,21 @@ import * as store from "./store";
                 // not the transport's capped duration, since "how slow" is the
                 // whole signal. A superseded frame never went out and says
                 // nothing about the link.
-                if (r.reason !== "superseded") {
-                    const change = pictureQuality.onResult(r.ok, Date.now() - sendStartedAt);
+                if (r.reason !== "superseded" && !skipNextQualitySample) {
+                    // The transport's own duration — the WRITE — not wall clock
+                    // from when this function asked. Resuming fires a one-shot
+                    // update and the pipeline together, so the second send waits
+                    // behind the first and read as a 4s "slow link": the picture
+                    // dropped a level every single time playback was resumed.
+                    const took = r.ok ? (r.duration ?? (Date.now() - sendStartedAt))
+                                      : (Date.now() - sendStartedAt);
+                    const change = pictureQuality.onResult(r.ok, took);
                     if (change) {
                         noteLifecycle("picture-quality", change);
                         console.warn(`[Picture] ${change.from} -> ${change.to} (${change.why})`);
                     }
                 }
+                skipNextQualitySample = false;
 
                 if (r.reason === "superseded") {
                     console.log(
@@ -1195,11 +1222,15 @@ import * as store from "./store";
                 if (sig === menuSignature) return;
                 menuSignature = sig;
                 if (!bridgeInstance) return;
-                // If the picker is ON SCREEN, redraw it. Playing something moves
-                // it to the top of the list, and a stale picker meant tapping
-                // the first row started whatever USED to be first — the wearer
-                // picked one episode and got another.
-                applyPage(showingRecent ? "recent" : "player").catch(() => {});
+                // ONLY when the picker is on screen. The labels carry a resume
+                // time that moves as playback advances, so this fires every
+                // fifteen seconds while watching — and a rebuild empties the
+                // image container. That is what the wearer saw as the whole
+                // display blanking and redrawing between scenes, all session.
+                // The titles are still updated; the picker is built from them
+                // the next time it is shown.
+                if (showingRecent) applyPage("recent").catch(() => {});
+                else ensureMenu();
             }
 
             /** Which page the glasses are on: the picker, or the player. */
@@ -2132,6 +2163,7 @@ import * as store from "./store";
                 ble.forgetText();
                 if (!bifs || bifs.length === 0) return;
                 isPlaying = true;
+                skipNextQualitySample = true;
                 playBtn.innerText = "Pause";
                 silentAudio.play().catch(() => {});
                 const title =
@@ -2982,6 +3014,7 @@ import * as store from "./store";
             export function play() {
                 if (isPlaying || !sceneList.length) return;
                 isPlaying = true;
+                skipNextQualitySample = true;
                 // The picker is a full-screen page; leaving it up meant the
                 // picture had nowhere to appear while subtitles showed
                 // underneath it.
@@ -3023,6 +3056,7 @@ import * as store from "./store";
                 // session could be nudged into sending images one drag at a
                 // time and never actually resume.
                 if (backgroundedWhilePlaying) resumeFromBackground("seek");
+                skipNextQualitySample = true;      // the frame after a seek queues behind its one-shot
                 const wasPlaying = isPlaying;
                 if (wasPlaying) stopScenePipeline();
                 currentTimeMs = Number(ms);

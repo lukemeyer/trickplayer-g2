@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.19
+# Trickplayer for G2 — beta 0.9.20
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.19.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.20.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,22 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.20
+
+- **Blank screens between scenes.** The recent list's labels include a resume
+  time, which moves as you watch — and changing the labels rebuilt the whole
+  glasses page, which empties the picture. That happened every 15 seconds for
+  the entire session. Labels are still kept up to date; the page is only rebuilt
+  when the list is actually on screen.
+- **Quality dropping after a pause.** Your guess was almost exactly right: on
+  resume, the first frame queues behind the catch-up frame that goes with it, so
+  a ~2s picture took ~4.5s of wall clock and the app read that as a slow link.
+  It now judges the send itself, and ignores the first frame after resuming or
+  seeking entirely.
+- **Two videos playing at once.** Picking from the recent list while something
+  was playing started the new one without stopping the old. Preparing any item
+  now stops whatever is running first.
 
 ## New in 0.9.19
 

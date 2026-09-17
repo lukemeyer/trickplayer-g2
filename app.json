@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.19",
+  "version": "0.9.20",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.20",
+      "notes": [
+        "The display no longer blanks and redraws every 15 seconds during playback. The recent list's labels carry a resume time that ticks along with playback, and updating them was rebuilding the whole glasses page.",
+        "Resuming after a pause no longer drops the picture quality. The first frame after resuming waits behind another send, and that wait was being counted as a slow link.",
+        "Choosing something from the recent list while a video is playing now stops the first one instead of playing both at once."
+      ]
+    },
     {
       "version": "0.9.19",
       "notes": [

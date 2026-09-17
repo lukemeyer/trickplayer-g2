@@ -87,6 +87,23 @@ def("a collapsed link: falls through to minimal pictures, which keep landing", (
         detail: `${r.delivered}/40 delivered — ${r.trace}` };
 });
 
+def("a queue wait after resuming does not cost a picture level", () => {
+    // Reported: "after pausing, then playing, the quality was often lower".
+    // Resuming fires a one-shot update and the pipeline together, so the first
+    // frame waits behind the other — ~4s of wall clock for a ~2s write. The
+    // ladder is fed the WRITE time, and the first sample after a resume is
+    // skipped entirely; here that is the caller's job, so this asserts the
+    // rule the caller implements: a 2s write after a 4.5s wall clock must not
+    // move the rung.
+    const ctl = createQualityController();
+    const noChange = ctl.onResult(true, 1950);        // the write, not the wait
+    const wouldHaveDropped = createQualityController().onResult(true, 4500);
+    return {
+        pass: noChange === null && wouldHaveDropped?.to === "lighter",
+        detail: `write time keeps full; wall clock would have dropped to ${wouldHaveDropped?.to}`,
+    };
+});
+
 def("a merely mediocre link still climbs back", () => {
     // The reported session: every send landed, none of them fast, and the
     // picture stayed at the smallest rung for the rest of the session because
