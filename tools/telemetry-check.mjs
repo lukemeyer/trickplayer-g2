@@ -342,7 +342,7 @@ def("it does not blame the app for sitting idle when nothing is playing", async 
     // From a real session: a 50s gap while the wearer picked an episode was
     // reported as "the scene pipeline stopping, and it is ours". Choosing what
     // to watch is not a fault, and counting it inflates the dead-time headline.
-    const build = (playing) => {
+    const build = (playing, marked = true) => {
         let clock = 1_700_000_000_000;
         const rec = createRecorder({ now: () => clock });
         const put = () => {
@@ -351,6 +351,9 @@ def("it does not blame the app for sitting idle when nothing is playing", async 
             clock += 5000;
         };
         for (let i = 0; i < 4; i++) put();
+        // Leaving the item to browse marks itself; an idle stretch nobody asked
+        // for does not, and that is a different thing entirely.
+        if (!playing && marked) rec.mark("playback-stopped", { by: "left the item" });
         for (let i = 0; i < 12; i++) { rec.tick({ playing }); clock += 5000; }
         for (let i = 0; i < 4; i++) put();
         return analyse(rec.session());
@@ -559,6 +562,37 @@ def("the 'connection lost' session: no sweep blamed, no verdicts from one frame"
             `${(all.match(/under 20KB[^.]*/) || ["NO THRESHOLD"])[0]}; ` +
             `${/too few lighter/.test(all) ? "ladder: too few to judge" : "LADDER JUDGED"}; ` +
             `${/cut off/.test(lead2) ? "cut-off named" : "CUT-OFF MISSED"}`,
+    };
+});
+
+def("playback stopping with nothing to explain it is called out, not excused", async () => {
+    // The session that exposed this: 12 minutes of perfect delivery with the
+    // phone locked, then playback stopped mid-episode on a wearer's face. No
+    // pause, no end of media, no host event — because a tap on the glasses took
+    // an unmarked branch. The report called it "browsing".
+    const build = (marks) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        for (let i = 0; i < 20; i++) {
+            rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+                endedAt: clock + 1900, queuedMs: 0, durationMs: 1900, depthAtEnqueue: 1, bytes: 16600 });
+            clock += 5000; rec.tick({ playing: true, lagMs: 4 });
+        }
+        for (const m of marks) rec.mark(m.name, m.detail || {});
+        for (let i = 0; i < 20; i++) { rec.tick({ playing: false, lagMs: 4 }); clock += 5000; }
+        return analyse(rec.session());
+    };
+    const silent = build([]);
+    const tapped = build([{ name: "glasses-tap", detail: { wasPlaying: true, to: "paused" } }]);
+    const lead = (a) => a.findings[0] || "";
+    return {
+        pass: /PLAYBACK STOPPED at 100s and nothing says why/.test(lead(silent)) &&
+              /which is ours/.test(lead(silent)) &&
+              !silent.findings.some((x) => /browsing/.test(x)) &&
+              !tapped.findings.some((x) => /PLAYBACK STOPPED/.test(x)) &&
+              tapped.findings.some((x) => /browsing/.test(x)),
+        detail: `unmarked: ${/PLAYBACK STOPPED/.test(lead(silent)) ? "flagged" : "MISSED"}; ` +
+            `after a glasses tap: ${tapped.findings.some((x) => /PLAYBACK STOPPED/.test(x)) ? "WRONGLY FLAGGED" : "excused"}`,
     };
 });
 

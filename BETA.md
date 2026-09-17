@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.13
+# Trickplayer for G2 — beta 0.9.14
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.13.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.14.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,22 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.14
+
+Your 1:47 session answered two things. **Locking the phone did not slow anything
+this time** — 187 pictures, 100% delivered, ~1.9s each, for 11 minutes after you
+locked at 1:49. And the freeze at 2:02 was a **pause**, not a stall.
+
+- **A tap on the glasses pauses playback, and now says so on the glasses:**
+  "Paused - tap to resume". Before, it just stopped changing the picture, which
+  looks exactly like the freezes we have been chasing. If the glasses are on
+  your face, a brush against the temple can do this.
+- **Everything that can stop playback is now recorded** — glasses taps,
+  double-taps, exits, leaving the item, end of episode. None of those were
+  marked, which is why the report could only say "the app was idle".
+- **Reports call out playback stopping for no visible reason** instead of
+  writing it off as browsing.
 
 ## Changed in 0.9.13
 

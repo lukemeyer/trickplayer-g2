@@ -1795,6 +1795,7 @@ import * as store from "./store";
                     currentTimeMs += dt;
 
                     if (currentTimeMs >= durationMs) {
+                        noteLifecycle("playback-ended", { by: "clock" });
                         isPlaying = false;
                         currentTimeMs = 0;
                         playBtn.innerText = "Play";
@@ -1823,6 +1824,7 @@ import * as store from "./store";
             function cleanup() {
                 if (cleanedUp) return;
                 cleanedUp = true;
+                noteLifecycle("app-cleanup", { wasPlaying: isPlaying });
                 if (typeof stopScenePipeline === 'function') stopScenePipeline();
                 isPlaying = false;
                 playBtn.innerText = "Play";
@@ -1939,12 +1941,20 @@ import * as store from "./store";
             
                 // Double Tap Exit
                 if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+                    noteLifecycle("glasses-double-tap", { wasPlaying: isPlaying });
                     cleanup();
                     return;
                 }
             
                 // Pause / Play toggle on single tap
                 if (sysType === OsEventTypeList.CLICK_EVENT) {
+                    // MARKED, because an unmarked one cost a session. Playback
+                    // stopped mid-episode with the glasses on a wearer's face and
+                    // the report could say nothing: no user pause, no background
+                    // pause, no end of media — because a tap on the glasses took
+                    // this branch and left no trace. A brush against the temple
+                    // pauses the picture, and that has to be visible.
+                    noteLifecycle("glasses-tap", { wasPlaying: isPlaying, to: isPlaying ? "paused" : "playing" });
                     const title =
                         document.getElementById("playing-title")
                             ?.textContent || "media";
@@ -1954,6 +1964,15 @@ import * as store from "./store";
                         try { silentAudio.pause(); } catch (e) {}
                         playBtn.innerText = "Play";
                         setStatus(`Paused: ${title}`, "active");
+                        // SAY SO ON THE GLASSES. `setStatus` writes to the phone,
+                        // which is in a pocket. A tester's playback stopped
+                        // mid-episode and all the glasses showed was a picture
+                        // that had stopped changing — indistinguishable from the
+                        // freezes we have been chasing for days. A brush against
+                        // the temple pauses this, so the pause has to be legible
+                        // where the wearer is actually looking.
+                        ble.forgetText();
+                        sendSubtitleToGlasses("Paused - tap to resume").catch(() => {});
                     } else if (bifs && bifs.length > 0) {
                         isPlaying = true;
                         backgroundedWhilePlaying = false;
@@ -1984,6 +2003,8 @@ import * as store from "./store";
                 }
 
                 if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
+                    noteLifecycle("glasses-exit-event", {
+                        abnormal: sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT, wasPlaying: isPlaying });
                     cleanup();
                 }
                 });
@@ -2640,6 +2661,7 @@ import * as store from "./store";
 
             export function pause() {
                 if (!isPlaying) return;
+                noteLifecycle("playback-stopped", { by: "pause" });
                 isPlaying = false;
                 playBtn.innerText = "Play";
                 stopScenePipeline();
@@ -2675,6 +2697,7 @@ import * as store from "./store";
 
             /** Leave the item. The one moment every object URL is certainly dead. */
             export function stop() {
+                noteLifecycle("playback-stopped", { by: "left the item", wasPlaying: isPlaying });
                 isPlaying = false;
                 stopScenePipeline();
                 stopClock();

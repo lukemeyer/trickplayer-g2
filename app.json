@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.13",
+  "version": "0.9.14",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.14",
+      "notes": [
+        "A tap on the glasses pauses playback \u2014 it now says \"Paused - tap to resume\" on the glasses instead of just stopping, which looked identical to a freeze.",
+        "Everything that can stop playback is now recorded: taps on the glasses, double-taps, exits, leaving the item, and the end of an episode. A session stopped mid-episode and nothing in the report could say what did it.",
+        "Logging reports now call out playback stopping with nothing to explain it, instead of writing it off as browsing."
+      ]
+    },
     {
       "version": "0.9.13",
       "notes": [

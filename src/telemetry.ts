@@ -504,7 +504,8 @@ export function analyse(session) {
         "user-play", "user-pause", "phone-screen-off", "phone-screen-on",
         "image-backoff", "image-resumed", "page-rebuilt", "containers-repaired",
         "image-format-changed", "page-reloaded", "session-discarded",
-        "picture-quality", "playback-ended",
+        "picture-quality", "playback-ended", "playback-stopped",
+        "glasses-tap", "glasses-double-tap", "glasses-exit-event", "app-cleanup",
     ]);
     out.keyEvents = (session.marks || []).filter((m) => KEY_EVENTS.has(m.name));
 
@@ -590,7 +591,12 @@ export function analyse(session) {
                 for (const d of t.doing) if (!stuck || d.ms > stuck.ms) stuck = d;
             }
             const backoff = ticks.some((t) => t.at >= a && t.at <= b && t.imageBackoffMs);
-            gaps.push({ fromMs: a, toMs: b, ms: b - a, kind, playing: !!playing,
+            // What the app believed by the END of the silence. A pipeline that
+            // stalls keeps saying "playing"; an app that STOPPED says so, and
+            // only the second one can be an unexplained stop.
+            const within = ticks.filter((t) => t.at >= a && t.at <= b);
+            const endedPlaying = within.length ? !!within[within.length - 1].playing : !!playing;
+            gaps.push({ fromMs: a, toMs: b, ms: b - a, kind, playing: !!playing, endedPlaying,
                 ...(stuck ? { stuck } : {}), ...(backoff ? { backoff: true } : {}),
                 ...(endedHere && b === toMs ? { endedHere: true } : {}) });
         };
@@ -1054,9 +1060,13 @@ export function analyse(session) {
         // headline quotes.
         // A pause the app took ON PURPOSE (backoff) is not the pipeline
         // stopping; it said "it is ours" about exactly that once.
-        const ourIdle = idle.filter((g) => g.playing && !g.backoff);
-        const pausedIdle = idle.filter((g) => g.playing && g.backoff);
-        const benignIdle = idle.filter((g) => !g.playing);
+        // Split by what the app believed at the END of the silence, not by
+        // whether any heartbeat in it said playing: the last heartbeat before a
+        // stop still says playing, which filed a stop under "the pipeline
+        // stopped" and a browse under it too.
+        const ourIdle = idle.filter((g) => g.endedPlaying && !g.backoff);
+        const pausedIdle = idle.filter((g) => g.endedPlaying && g.backoff);
+        const benignIdle = idle.filter((g) => !g.endedPlaying);
         if (pausedIdle.length) {
             f.push(`${pausedIdle.length} silence(s) while playing were the app pausing pictures on purpose ` +
                 `after repeated failures (backoff), not the pipeline stopping.`);
@@ -1067,10 +1077,32 @@ export function analyse(session) {
                 `WHILE THE APP BELIEVED IT WAS PLAYING — that is the scene pipeline ` +
                 `stopping, and it is ours.`);
         }
-        if (benignIdle.length) {
-            const secs = benignIdle.reduce((t, g) => t + g.ms, 0) / 1000;
+        // A silence with nothing playing is only harmless if something ASKED
+        // playback to stop. A session froze on a wearer's face mid-episode and
+        // this called it "browsing, or waiting to be told what to watch".
+        const STOPPERS = new Set(["playback-stopped", "playback-ended", "app-paused", "user-pause",
+            "glasses-tap", "glasses-double-tap", "glasses-exit-event", "app-cleanup",
+            "host-foreground-exit", "session-discarded", "page-reloaded"]);
+        // Any idle gap, not only the ones flagged "not playing": the last
+        // heartbeat before a stop often still says playing, which put the
+        // reported session in the other bucket.
+        const unexplained = idle.filter((g) => {
+            if (!sent || g.endedPlaying) return false;
+            return !(session.marks || []).some((m) =>
+                STOPPERS.has(m.name) && m.at > g.fromMs - 30000 && m.at < g.fromMs + 10000);
+        });
+        for (const g of unexplained) {
+            f.unshift(`PLAYBACK STOPPED at ${Math.round(g.fromMs / 1000)}s and nothing says why: ` +
+                `no pause, no end of media, no glasses input, no host event in the 30s before it — ` +
+                `and then ${Math.round(g.ms / 1000)}s of silence with the app no longer playing. ` +
+                `Pictures had been landing normally until then, so this is playback stopping on its ` +
+                `own, which is ours.`);
+        }
+        const explained = benignIdle.filter((g) => !unexplained.includes(g));
+        if (explained.length) {
+            const secs = explained.reduce((t, g) => t + g.ms, 0) / 1000;
             f.push(`${secs.toFixed(0)}s of that silence was the app sitting idle with nothing ` +
-                `playing (${benignIdle.length} of the gaps) — browsing, or waiting to be told ` +
+                `playing (${explained.length} of the gaps) — browsing, or waiting to be told ` +
                 `what to watch. Not a fault; discount it before reading the rest.`);
         }
         // Said last, because it is the one kind of silence nobody needs to act
