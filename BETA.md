@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.8
+# Trickplayer for G2 — beta 0.9.9
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.8.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.9.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,27 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Changed in 0.9.9
+
+**Pictures stop when the phone locks; subtitles keep going.** The last session
+narrowed it down: with the glasses worn and the phone locked, Trickplayer kept
+running normally — every timer on time, no pauses, every subtitle delivered —
+and each picture it handed to the Even Realities app came back failed after
+8 to 14 seconds.
+
+Even Hub's guidelines expect every image to load with the phone locked, so the
+question is what is different about a picture. One explanation fits all of it:
+the Bluetooth link slows down when the phone locks, a full picture no longer
+finishes in time, and a one-line subtitle still does. If that is right, smaller
+pictures while locked would fix it.
+
+- **New in the logging build: "Sweep with the phone LOCKED".** Tap it, lock the
+  phone within 20 seconds, keep the glasses on, and unlock after about five
+  minutes. It sends test pictures from small to large and the report says
+  which of three things happened: small ones land and large ones fail (the link
+  slowed — fixable here), nothing lands (the glasses app stops taking pictures
+  while locked), or everything lands (something else about playback).
 
 ## Changed in 0.9.8
 

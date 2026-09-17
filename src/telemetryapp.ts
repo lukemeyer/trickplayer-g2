@@ -101,6 +101,11 @@ if (flags.has("stubborntest")) {
     }, 4000);
 }
 
+/** `?locksweep=1` presses the locked-sweep button — for checking the flow, not locking. */
+if (flags.has("locksweep")) {
+    setTimeout(() => $("tlm-lockprobe").click(), 3000);
+}
+
 if (flags.has("noimage")) {
     engine.simulateImageRejection(flags.get("noimage") || "rgba");
 }

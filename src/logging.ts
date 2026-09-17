@@ -43,6 +43,7 @@ const PANEL = `
   <div class="control-row"><span>Saved state</span><span id="tlm-store">—</span></div>
   <button class="btn-secondary" id="tlm-formats">Which image formats work? (~20s)</button>
   <button class="btn-secondary" id="tlm-probe">Sweep payload sizes (~1 min)</button>
+  <button class="btn-secondary" id="tlm-lockprobe">Sweep with the phone LOCKED (lock it within 20s)</button>
   <button class="btn-secondary" id="tlm-prep">Time the prepare path (no glasses needed)</button>
   <button class="btn-secondary" id="tlm-report">Generate report</button>
   <button class="btn-secondary" id="tlm-copy">Copy report</button>
@@ -355,6 +356,31 @@ function mountPanel(engine) {
             $("tlm-hint").textContent = "Sweep done — generate the report.";
         } catch (e) {
             $("tlm-hint").textContent = `Sweep failed: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+            refresh(engine);
+        }
+    };
+
+    $("tlm-lockprobe").onclick = async () => {
+        // Nobody can watch a panel on a locked phone, so it counts down, runs
+        // on its own, and leaves the report ready to copy on unlocking.
+        const btn = $("tlm-lockprobe");
+        btn.disabled = true;
+        try {
+            for (let n = 20; n > 0; n--) {
+                $("tlm-hint").textContent = `Lock the phone now — sweep starts in ${n}s. ` +
+                    `Keep the glasses on; unlock in about 5 minutes.`;
+                await new Promise((r) => setTimeout(r, 1000));
+            }
+            recorder.mark("locked-sweep-start");
+            await engine.probeLockedLink();
+            recorder.mark("locked-sweep-end");
+            persist();
+            $("tlm-report").click();
+            $("tlm-hint").textContent = "Locked sweep done — the report is below. Copy it.";
+        } catch (e) {
+            $("tlm-hint").textContent = `Locked sweep failed: ${e.message}`;
         } finally {
             btn.disabled = false;
             refresh(engine);

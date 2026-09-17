@@ -483,6 +483,62 @@ def("a silence while playing names what the engine was stuck behind", async () =
     };
 });
 
+def("the locked sweep says which of three answers it found", async () => {
+    // Throughput explanation: small payloads land locked, large ones time out.
+    // The sweep must be able to confirm it AND to rule it out both ways.
+    const build = (landsBelowKb) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        for (const kb of [1, 3, 6, 9, 13, 17, 22]) {
+            for (let n = 0; n < 3; n++) {
+                const ok = kb < landsBelowKb;
+                rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock,
+                    endedAt: clock + (ok ? 300 + kb * 60 : 9000), queuedMs: 0,
+                    durationMs: ok ? 300 + kb * 60 : 9000, depthAtEnqueue: 1,
+                    bytes: kb * 1024 + 100, probe: true, sweep: "locked",
+                    ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+                clock += ok ? 2000 : 10000;
+            }
+        }
+        return analyse(rec.session());
+    };
+    const threshold = build(10), none = build(0), all = build(100);
+    const lead = (a) => a.findings[0] || "";
+    const text = formatReport({ events: [], marks: [], durationMs: 0 }, threshold);
+    return {
+        pass: /SMALL PICTURES STILL LAND: payloads up to 10KB were delivered and from 12KB/.test(lead(threshold)) &&
+              /even the SMALLEST payloads failed/.test(lead(none)) &&
+              /payloads of every size were delivered/.test(lead(all)) &&
+              /LOCKED sweep by payload size/.test(text) && /failures took p50 9000ms/.test(text),
+        detail: lead(threshold).slice(0, 120),
+    };
+});
+
+def("a frozen picture with the app running normally is placed below the app", async () => {
+    // The session that settled it: glasses worn, phone asleep, every heartbeat
+    // on time, subtitles all delivered — and each picture refused after 8-14s.
+    // The report must say the app was fine and the host is where it failed.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const both = (ok) => {
+        rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock + (ok ? 1500 : 8000), queuedMs: 0, durationMs: ok ? 1500 : 8000,
+            depthAtEnqueue: 1, bytes: 16600, ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+        rec.event({ id: 0, kind: "text", ok: true, enqueuedAt: clock + 100, startedAt: clock + 100,
+            endedAt: clock + 220, queuedMs: 0, durationMs: 120, depthAtEnqueue: 1 });
+    };
+    for (let i = 0; i < 12; i++) { both(true); clock += 5000; rec.tick({ playing: true, lagMs: 3 }); }
+    for (let i = 0; i < 8; i++) { both(false); clock += 10000; rec.tick({ playing: true, lagMs: 4 }); }
+    const a = analyse(rec.session());
+    const text = formatReport(rec.session(), a);
+    const lead = a.findings[0] || "";
+    return {
+        pass: lead.startsWith("THE PICTURE STOPPED") && /below this app/.test(lead) &&
+              /8s \(p50\)/.test(lead),
+        detail: lead.slice(lead.indexOf("The app itself"), lead.indexOf("The app itself") + 120),
+    };
+});
+
 def("the glasses' worn flag is not used to blame the headset", async () => {
     // A tester wore the glasses for a whole session while the host reported
     // isWearing:false for most of it, phone asleep. A finding built on that flag

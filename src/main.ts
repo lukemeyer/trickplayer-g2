@@ -2336,7 +2336,30 @@ import * as store from "./store";
                 return results;
             }
 
-            export async function probeLink({ densities = null, perSize = 4 } = {}) {
+            /**
+             * The same sweep, meant to be run with the phone LOCKED.
+             *
+             * Pictures stop the moment the phone locks while subtitles carry
+             * on, each failure taking 8-14 seconds, with the app's own timers on
+             * time throughout. One explanation fits all of it: the link slows
+             * when the phone locks (Android commonly lowers a background app's
+             * Bluetooth priority), a 16 KB frame no longer completes inside the
+             * host's transfer time limit, and a one-line subtitle still does.
+             *
+             * If that is right, small payloads land locked and large ones fail,
+             * with a threshold between. If everything fails, or everything
+             * lands, it is wrong. Finer steps than the normal sweep, because the
+             * threshold is the thing being looked for.
+             */
+            export async function probeLockedLink() {
+                return probeLink({
+                    densities: [0.004, 0.012, 0.025, 0.04, 0.06, 0.08, 0.1],
+                    perSize: 3,
+                    label: "locked",
+                });
+            }
+
+            export async function probeLink({ densities = null, perSize = 4, label = null } = {}) {
                 // Noise density, not a byte target: what a PNG of dithered grey
                 // actually compresses to is not something to predict, and the
                 // ACTUAL size is what gets recorded. These five bracket the
@@ -2368,7 +2391,8 @@ import * as store from "./store";
                                   })
                                 : { containerID: 2, containerName: "g2_bif", imageData: bytes };
                         let probeResult = "";
-                        const probeMeta = { bytes: bytes.byteLength, probe: true };
+                        const probeMeta = { bytes: bytes.byteLength, probe: true,
+                            ...(label ? { sweep: label } : {}) };
                         const pr = await ble.sendImage(
                             async (p) => {
                                 if (imageWedgeInjected ||

@@ -167,6 +167,36 @@ export function analyse(session) {
         writeMs: summarise(b.ms),
     }));
 
+    // 2b. THE LOCKED SWEEP, on its own. It exists to answer one question — is
+    //     there a payload size below which pictures still land with the phone
+    //     locked — so it gets finer buckets and is kept apart from the awake
+    //     sweep it would otherwise be averaged with.
+    out.lockedSweep = null;
+    {
+        const locked = real(images).filter((e) => e.sweep === "locked" && e.bytes);
+        if (locked.length) {
+            const lb = new Map();
+            for (const e of locked) {
+                const k = Math.floor(e.bytes / 2048) * 2;          // 2 KB buckets
+                const b = lb.get(k) || { kb: k, n: 0, ok: 0, ms: [], failMs: [] };
+                b.n++;
+                if (e.ok) { b.ok++; b.ms.push(e.durationMs); } else b.failMs.push(e.durationMs);
+                lb.set(k, b);
+            }
+            const rows = [...lb.values()].sort((a, b) => a.kb - b.kb).map((b) => ({
+                kb: b.kb, n: b.n, successPct: (100 * b.ok) / b.n,
+                writeMs: summarise(b.ms), failMs: summarise(b.failMs),
+            }));
+            const landed = rows.filter((r) => r.successPct >= 67);
+            const failed = rows.filter((r) => r.successPct <= 33);
+            out.lockedSweep = {
+                rows,
+                largestLandedKb: landed.length ? landed[landed.length - 1].kb : null,
+                smallestFailedKb: failed.length ? failed[0].kb : null,
+            };
+        }
+    }
+
     // 3. Is retrying worth what it costs? A retry that almost never succeeds is
     //    latency spent on a frame that is already lost, and the budget should
     //    shrink. One that usually succeeds argues for a longer one.
@@ -677,6 +707,30 @@ export function analyse(session) {
             `wrong for a glasses app.`);
     }
 
+    // What the locked sweep says about the throughput explanation — in all
+    // three directions, since two of them rule it out.
+    const ls = out.lockedSweep;
+    if (ls && ls.rows.reduce((t, r) => t + r.n, 0) >= 6) {
+        const all = ls.rows.reduce((t, r) => t + r.n, 0);
+        const okAll = ls.rows.reduce((t, r) => t + (r.successPct / 100) * r.n, 0);
+        if (ls.largestLandedKb != null && ls.smallestFailedKb != null &&
+            ls.largestLandedKb < ls.smallestFailedKb) {
+            f.unshift(`WITH THE PHONE LOCKED, SMALL PICTURES STILL LAND: payloads up to ` +
+                `${ls.largestLandedKb + 2}KB were delivered and from ${ls.smallestFailedKb}KB they failed. ` +
+                `So the glasses app has not stopped taking pictures when locked — the link has slowed ` +
+                `and larger ones no longer finish in time. The fix is on this side: send smaller, more ` +
+                `compressible pictures while the phone is locked.`);
+        } else if (okAll / all <= 0.1) {
+            f.unshift(`With the phone locked, even the SMALLEST payloads failed (${Math.round(100 * okAll / all)}% ` +
+                `of ${all} delivered). This is not the link slowing down: the glasses app stops taking ` +
+                `pictures at all while locked, and a smaller picture will not help.`);
+        } else if (okAll / all >= 0.9) {
+            f.unshift(`With the phone locked, payloads of every size were delivered ` +
+                `(${Math.round(100 * okAll / all)}% of ${all}) — so being locked does not by itself stop ` +
+                `pictures. Whatever freezes playback is something playback does that this sweep does not.`);
+        }
+    }
+
     const c = out.contention;
     if (c && c.contended.n >= 3 && c.clear.n >= 3) {
         const factor = c.contended.p50 / Math.max(1, c.clear.p50);
@@ -819,7 +873,18 @@ export function analyse(session) {
             `after ${sent} frames had been delivered — while text kept landing ` +
             `(${textAfter} lines after the picture died). The link was alive, so this is the ` +
             `image path wedging, not a disconnect. ` +
-            (recovery.length ? `Recovery: ${recovery.join("; ")}.` : `No recovery was attempted.`),
+            (recovery.length ? `Recovery: ${recovery.join("; ")}.` : `No recovery was attempted.`) +
+            // Where the fault is NOT. With every heartbeat on time the app's
+            // JavaScript was running normally, so a picture that takes seconds
+            // to be refused has failed inside the glasses host, below anything
+            // this app controls — which is the sentence a bug report to the
+            // host's makers needs.
+            (out.throttling && out.throttling.lateBeats === 0 && out.failedWriteMs?.n
+                ? ` The app itself was running normally throughout (0 of ${out.throttling.beats} ` +
+                  `heartbeats late), and each refusal took ${Math.round(out.failedWriteMs.p50 / 1000)}s ` +
+                  `(p50) to come back — so the glasses host accepted each picture and failed to deliver ` +
+                  `it. That is below this app.`
+                : ""),
         );
     } else if (out.longestStallMs > 10000) {
         f.push(`Longest frozen picture ${(out.longestStallMs / 1000).toFixed(1)}s ` +
@@ -919,6 +984,16 @@ export function formatReport(session, a = analyse(session)) {
             const t = b.writeMs.n ? `p50 ${ms(b.writeMs.p50)}` : "no successful write";
             L.push(`  ${String(b.kb).padStart(3)}KB  n=${String(b.n).padStart(4)}  ` +
                 `ok ${b.successPct.toFixed(0).padStart(3)}%  ${t}`);
+        }
+    }
+    if (a.lockedSweep) {
+        L.push("");
+        L.push("LOCKED sweep by payload size   (PNG size; bigger = less compressible = more air time)");
+        for (const b of a.lockedSweep.rows) {
+            const t = b.writeMs.n ? `p50 ${ms(b.writeMs.p50)}` : "none landed";
+            const f = b.failMs.n ? `  failures took p50 ${ms(b.failMs.p50)}` : "";
+            L.push(`  ${String(b.kb).padStart(3)}KB  n=${String(b.n).padStart(3)}  ` +
+                `ok ${b.successPct.toFixed(0).padStart(3)}%  ${t}${f}`);
         }
     }
     if (a.synthetic) {
