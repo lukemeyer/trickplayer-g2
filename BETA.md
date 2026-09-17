@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.20
+# Trickplayer for G2 — beta 0.9.21
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.20.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.21.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,17 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## New in 0.9.21
+
+- **"Play from start"** in the glasses menu.
+- **Resume follows your media server.** Plex and Jellyfin each report where an
+  item was left off — including when you were watching on a TV or phone — and
+  that position is now preferred over the one Trickplayer keeps itself. Plex was
+  sending it with every listing and the app was throwing it away.
+
+Trickplayer does not yet write progress BACK to your server; see the note in the
+session where that was discussed.
 
 ## Fixed in 0.9.20
 

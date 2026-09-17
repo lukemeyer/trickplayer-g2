@@ -351,6 +351,11 @@ export function createPlexAccount(saved = {}) {
                 ? `${md.grandparentTitle || ""} — S${pad(md.parentIndex)}E${pad(md.index)} — ${md.title}`
                 : md.title,
             kind: "item",
+            // Where the SERVER thinks this was left off. Plex sends it with every
+            // listing — it is what "Continue watching" is built from — and it was
+            // being dropped here, so resuming only ever knew about episodes this
+            // app itself had played.
+            resumeMs: md.viewOffset || 0,
         };
     }
 
@@ -380,6 +385,9 @@ export function createPlexAccount(saved = {}) {
                 return {
                     title: item.title,
                     durationMs: md.duration || null,
+                    // The metadata fetch has the authoritative one; the listing's
+                    // copy can be older.
+                    resumeMs: md.viewOffset || item.resumeMs || 0,
                     badges: [media.videoResolution ? `${media.videoResolution}p` : null, "SRT"]
                         .filter(Boolean),
                     config: { timelineRef: part.id, subtitleRef: sub.key },

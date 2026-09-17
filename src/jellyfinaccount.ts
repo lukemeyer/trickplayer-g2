@@ -128,7 +128,10 @@ export function createJellyfinAccount(saved = {}) {
 
     // Everything eligibility needs, asked for once with the listing, so
     // resolvePlayable costs no second request here (unlike Plex).
-    const ITEM_FIELDS = "MediaSources,MediaStreams,Trickplay,RunTimeTicks";
+    // `UserData` carries the server's own resume position. It is returned by
+    // default on user-scoped queries, but asked for explicitly so a listing that
+    // is not user-scoped does not silently lose it.
+    const ITEM_FIELDS = "MediaSources,MediaStreams,Trickplay,RunTimeTicks,UserData";
 
     async function listChildren(ref) {
         if (ref.kind === "resume") {
@@ -183,7 +186,12 @@ export function createJellyfinAccount(saved = {}) {
             : it.Name;
         // The whole item rides along: the listing already asked for the fields
         // eligibility needs, so resolvePlayable can answer without a request.
-        return { ref: { kind: "item", id: it.Id, raw: it }, title, kind: "item" };
+        return {
+            ref: { kind: "item", id: it.Id, raw: it }, title, kind: "item",
+            // Ticks are 100-nanosecond units; milliseconds is what everything
+            // above this line speaks.
+            resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
+        };
     }
 
     const pad = (n) => String(n || 0).padStart(2, "0");
@@ -216,6 +224,7 @@ export function createJellyfinAccount(saved = {}) {
         return {
             title: item.title,
             durationMs: it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : null,
+            resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
             badges: [`${width}px`, sub.IsExternal ? "SRT" : "Embedded"],
             config: {
                 itemId: it.Id,

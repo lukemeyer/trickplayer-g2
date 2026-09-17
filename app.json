@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.20",
+  "version": "0.9.21",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,13 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.21",
+      "notes": [
+        "New glasses menu entry: Play from start.",
+        "Resume now uses your media server's own position. Plex and Jellyfin both report where an item was left off, including from other apps and devices, and that is preferred over what Trickplayer itself remembers."
+      ]
+    },
     {
       "version": "0.9.20",
       "notes": [

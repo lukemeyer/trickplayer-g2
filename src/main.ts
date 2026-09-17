@@ -1192,6 +1192,7 @@ import * as store from "./store";
             const MENU_RECENT_ID = 1;
             const MENU_PLAYPAUSE_ID = 2;
             const MENU_STOP_ID = 3;
+            const MENU_RESTART_ID = 4;
             const RECENT_CONTAINER_ID = 3;
 
             /** Titles of the last few played items, set by the flow (src/ui.ts). */
@@ -1252,6 +1253,7 @@ import * as store from "./store";
                 const items = [];
                 if (sceneList.length) {
                     items.push({ itemID: MENU_PLAYPAUSE_ID, itemName: "Play / Pause" });
+                    items.push({ itemID: MENU_RESTART_ID, itemName: "Play from start" });
                     items.push({ itemID: MENU_STOP_ID, itemName: "Stop" });
                 }
                 if (recentTitles.length) {
@@ -2329,6 +2331,10 @@ import * as store from "./store";
                     } else if (menuId === MENU_PLAYPAUSE_ID) {
                         console.log(`[Menu] play/pause (was ${isPlaying ? "playing" : "paused"})`);
                         togglePlay();
+                    } else if (menuId === MENU_RESTART_ID) {
+                        console.log("[Menu] play from start");
+                        seekTo(0);
+                        if (!isPlaying) play();
                     } else if (menuId === MENU_STOP_ID) {
                         console.log("[Menu] stop — back to the recent list");
                         stop();

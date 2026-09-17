@@ -176,14 +176,21 @@ function recentLabel(r) {
     return `${title} · ${time}`;
 }
 
-/** Where to start an item that has been watched before. */
-function resumeAt(entry) {
-    if (!entry?.positionMs) return 0;
-    // Nearly finished is finished: resuming into the credits is worse than
-    // starting again, and the wearer cannot easily seek from the glasses.
-    if (entry.durationMs && entry.positionMs > entry.durationMs * 0.97) return 0;
-    return entry.positionMs;
+/**
+ * Where to start an item that has been watched before.
+ *
+ * `serverMs` is Plex's or Jellyfin's own position, which is the one that knows
+ * about the TV in the living room. It wins when it has something to say: this
+ * app's copy only knows about what this app played.
+ */
+function resumeAt(entry, serverMs = 0) {
+    const at = serverMs || entry?.positionMs || 0;
+    if (!at) return 0;
+    const duration = entry?.durationMs;
+    if (duration && at > duration * 0.97) return 0;
+    return at;
 }
+
 
 /**
  * Keep the remembered position current while something plays.
@@ -625,7 +632,7 @@ async function openItem(match) {
         // Carry on where this one stopped, however it was opened.
         const [provider, accountId] = (sourceKey || ":").split(":");
         const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
-        const from = resumeAt(seen);
+        const from = resumeAt(seen, match.resumeMs || 0);
         if (from) {
             engine.seekTo(from);
             $("item-title").textContent = `${match.title} — resuming at ${clock(from)}`;
