@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.15
+# Trickplayer for G2 — beta 0.9.16
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.15.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.16.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,21 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## New in 0.9.16
+
+- **The glasses have an idle screen.** A thin frame where the picture will be,
+  and "Select video to begin" — instead of "Sign in to Plex", which you usually
+  are not being asked to do.
+- **Recently played, on the glasses.** The last five items you played appear as
+  a list at startup: scroll with the temple, tap to start. That means picking up
+  where you left off without taking the phone out. They are on the phone's first
+  screen too.
+- **"Recently played" in the glasses menu** brings that list back during
+  playback.
+- **Browsing is faster.** Going into an episode and back out used to re-check
+  every episode in the list. Answers are now kept for the session. (Not kept
+  between launches on purpose — the reasoning is in the README.)
 
 ## Changed in 0.9.15
 

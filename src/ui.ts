@@ -69,6 +69,10 @@ function loadSaved() {
 
 function saveSource(account) {
     const rec = account.persist();
+    // A freshly authorised source is also "the open one", and the eligibility
+    // cache is scoped by it.
+    if (sourceKey !== `${rec.provider}:${rec.id}`) eligibility.clear();
+    sourceKey = `${rec.provider}:${rec.id}`;
     const all = loadSaved().filter((s) => !(s.provider === rec.provider && s.id === rec.id));
     all.push(rec);
     store.setItem(STORE_KEY, JSON.stringify(all));
@@ -85,6 +89,85 @@ function accountFrom(rec) {
 let account = null;      // the live source we are browsing
 let stack = [];          // container refs, deepest last — the breadcrumb
 let scanGeneration = 0;  // bumped to abandon an in-flight eligibility scan
+let sourceKey = null;    // provider:id of the open source — scopes the cache below
+
+/**
+ * Answers to "can this item be played", kept for the session.
+ *
+ * Eligibility is one network round trip per item (F-015), and walking into an
+ * episode and back out asked every one of them again — the list rebuilt itself
+ * from scratch each time, several seconds of "Checking 7 of 24" for answers it
+ * already had.
+ *
+ * Session-scoped, deliberately. The answer depends on what the server currently
+ * has — a subtitle added later makes an ineligible item eligible — and each
+ * entry is ~200 bytes, so a library of a thousand episodes would be ~200 KB to
+ * carry across launches, hydrated on every start by everyone. Not worth it for
+ * a question this cheap to re-ask once per session; see the note in README.
+ */
+const eligibility = new Map();
+const eligibilityKey = (item) => `${sourceKey}|${JSON.stringify(item.ref)}`;
+
+/** Ask once per item per session. `null` (ineligible) is an answer worth keeping. */
+async function resolveCached(item) {
+    const key = eligibilityKey(item);
+    if (eligibility.has(key)) return eligibility.get(key);
+    const match = await account.resolvePlayable(item);
+    eligibility.set(key, match);
+    return match;
+}
+
+// ------------------------------------------------------------ recently played
+//
+// So the glasses alone can start something: five entries, each a resolved
+// playable plus the source it came from, which is everything `prepareItem`
+// needs. No browsing, no phone.
+
+const RECENT_KEY = "trickplayer.recent";
+const RECENT_MAX = 5;
+
+function loadRecent() {
+    try { return JSON.parse(store.getItem(RECENT_KEY) || "[]"); }
+    catch (e) { return []; }
+}
+
+function rememberPlayed(match) {
+    if (!match || !sourceKey) return;
+    const [provider, id] = sourceKey.split(":");
+    const entry = {
+        provider, accountId: id, title: match.title,
+        durationMs: match.durationMs ?? null, config: match.config,
+    };
+    const rest = loadRecent().filter(
+        (r) => !(r.accountId === entry.accountId &&
+                 JSON.stringify(r.config) === JSON.stringify(entry.config)));
+    const all = [entry, ...rest].slice(0, RECENT_MAX);
+    store.setItem(RECENT_KEY, JSON.stringify(all));
+    engine.setRecentTitles(all.map((r) => r.title));
+}
+
+/** Play a remembered item without going through the browser. */
+async function playRecent(index) {
+    const all = loadRecent();
+    const entry = all[index];
+    if (!entry) return false;
+    const rec = loadSaved().find((sv) => sv.provider === entry.provider && sv.id === entry.accountId);
+    if (!rec) return false;
+    if (!account || sourceKey !== `${entry.provider}:${entry.accountId}`) {
+        account = accountFrom(rec);
+        sourceKey = `${entry.provider}:${entry.accountId}`;
+        eligibility.clear();
+    }
+    const match = { title: entry.title, durationMs: entry.durationMs, badges: [], config: entry.config };
+    playable = match;
+    show("panel-player");
+    await engine.prepareItem({
+        title: match.title, durationMs: match.durationMs, source: account.openSource(match),
+    });
+    applyOptionsToEngine();
+    engine.play();
+    return true;
+}
 let playable = null;     // the resolved item on the item panel
 let previewUrls = [];
 
@@ -94,6 +177,21 @@ function showSources() {
     const saved = loadSaved();
     const list = $("source-list");
     list.innerHTML = "";
+    // Recently played first: the whole point is not having to browse, and that
+    // is as true on the phone as on the glasses.
+    const recent = loadRecent();
+    if (recent.length) {
+        const head = document.createElement("p");
+        head.className = "text-muted";
+        head.textContent = "Recently played";
+        list.appendChild(head);
+        recent.forEach((r, i) => row(list, r.title, null, () => playRecent(i),
+            [r.provider === "jellyfin" ? "Jellyfin" : "Plex"]));
+        const sep = document.createElement("p");
+        sep.className = "text-muted";
+        sep.textContent = "Servers";
+        list.appendChild(sep);
+    }
     // Listed by SERVER name, not provider name — users think in servers, and
     // the provider is a badge (UI.md §1).
     for (const rec of saved) {
@@ -108,6 +206,8 @@ function showSources() {
 
 async function openSource(rec) {
     account = accountFrom(rec);
+    if (sourceKey !== `${rec.provider}:${rec.id}`) eligibility.clear();
+    sourceKey = `${rec.provider}:${rec.id}`;
     store.setItem(LAST_KEY, `${rec.provider}:${rec.id}`);
     stack = [];
     await showBrowse();
@@ -151,6 +251,19 @@ if (harness.has("logging")) {
 }
 // `?play=1` starts the first playable item, so a harness can measure the real
 // pipeline rather than an idle page.
+// `?demorecent=1` draws the glasses picker with placeholder titles. The
+// simulator has no server to sign into, and the list container is a piece of
+// glasses UI that cannot be checked any other way.
+if (harness.has("demorecent")) {
+    setTimeout(() => {
+        engine.setRecentTitles([
+            "The Expanse — S1E1", "Finding Dory", "Arrival",
+            "Chernobyl — E3", "Paddington 2",
+        ]);
+        engine.showRecentOnGlasses();
+    }, 2000);
+}
+
 if (harness.has("play")) {
     setTimeout(() => { firstPlayable(); }, 2500);
 }
@@ -406,7 +519,7 @@ async function renderList() {
             // The ONLY eligibility signal. Plex needs the sidecar-subtitle
             // rule and Jellyfin must not have it (F-037), so this file never
             // asks the question itself.
-            match = await account.resolvePlayable(items[i]);
+            match = await resolveCached(items[i]);
         } catch (e) {
             console.warn(`eligibility check failed for ${items[i].title}: ${e.message}`);
         }
@@ -573,7 +686,11 @@ function repaintPreview() {
 }
 
 $("item-back").onclick = () => { engine.stop(); releasePreview(); renderList(); };
-$("item-play").onclick = () => { show("panel-player"); engine.play(); };
+$("item-play").onclick = () => {
+    show("panel-player");
+    rememberPlayed(playable);
+    engine.play();
+};
 
 // ================================================================== PLAYER
 
@@ -592,7 +709,7 @@ export async function firstPlayable() {
     for (const root of await account.listRoots()) {
         const children = await account.listChildren(root.ref);
         for (const item of children.filter((c) => c.kind === "item")) {
-            const p = await account.resolvePlayable(item).catch(() => null);
+            const p = await resolveCached(item).catch(() => null);
             if (!p) continue;
             await openItem(p);
             $("item-play").click();
@@ -606,6 +723,9 @@ export async function firstPlayable() {
 
 engine.setUiHooks({
     stopped: () => { releasePreview(); show("panel-item"); },
+    // The glasses picked something from their own list. Nothing above this
+    // line knows what a list index is; this does.
+    playRecent: (index) => { playRecent(index).catch(() => {}); },
 });
 
 (async function boot() {
@@ -626,6 +746,10 @@ engine.setUiHooks({
     // crash is exactly when nobody is there to press the button a second time.
     // The flag is read from the store rather than from the recorder module, so
     // that a launch which is NOT logging never loads the recorder at all.
+    // The glasses need these before anything is on screen: they are what the
+    // idle picker is made of.
+    engine.setRecentTitles(loadRecent().map((r) => r.title));
+
     if (store.getItem("trickplayer.logging") === "1") {
         const { enableLogging } = await import("./logging");
         await enableLogging(engine);
@@ -636,6 +760,10 @@ engine.setUiHooks({
 
     const saved = loadSaved();
     if (!saved.length) return startAddSource();
+
+    // Something to resume: show the list rather than dropping into a library,
+    // so one tap on the glasses (or the phone) starts where they left off.
+    if (loadRecent().length) return showSources();
 
     // The last-used source is the default, and browsing starts there.
     const last = store.getItem(LAST_KEY);

@@ -21,6 +21,8 @@ import * as store from "./store";
                 status: (_text, _state) => {},
                 stopped: () => {},
                 playing: (_isPlaying) => {},
+                /** Start the nth remembered item — the glasses' own way in. */
+                playRecent: (_index) => {},
             };
             export function setUiHooks(h) { Object.assign(ui, h); }
 
@@ -363,7 +365,7 @@ import * as store from "./store";
                         borderWidth: 0,
                         containerID: 1,
                         containerName: "g2_subs",
-                        content: "Sign in to Plex",
+                        content: IDLE_TEXT,
                         isEventCapture: 1, // designates subtitle container as primary event receiver
                     };
 
@@ -381,6 +383,10 @@ import * as store from "./store";
                     if (result === 0) {
                         startupPageReady = true;
                         setStatus("G2 Glass Engine Connected via BLE!", "active");
+                        // The idle screen: the frame, and the picker if there is
+                        // anything to pick. Failures here are cosmetic.
+                        showIdleSkeleton().catch(() => {});
+                        if (recentTitles.length) showRecentOnGlasses().catch(() => {});
                     } else {
                         // 0 success, 1 invalid, 2 oversize, 3 outOfMemory.
                         throw new Error(
@@ -1097,6 +1103,137 @@ import * as store from "./store";
              * but no text" — and it is silent, because a text write that names
              * a dead container fails the same way a busy link does.
              */
+            // --- WHAT THE GLASSES SHOW WHEN NOTHING IS PLAYING ------------------
+            //
+            // The first thing a wearer sees used to be "Sign in to Plex", which
+            // is both wrong (they are usually signed in already) and an
+            // instruction they cannot act on from the glasses. The idle screen
+            // is now the shape of the thing that is coming — a thin frame where
+            // the picture will be — and an invitation.
+            const IDLE_TEXT = "Select video to begin";
+            const MENU_RECENT_ID = 1;
+            const RECENT_CONTAINER_ID = 3;
+
+            /** Titles of the last few played items, set by the flow (src/ui.ts). */
+            let recentTitles = [];
+            let menuSignature = "";
+            export function setRecentTitles(titles) {
+                recentTitles = (titles || []).slice(0, 5).map((t) => String(t || "").slice(0, 40));
+                // Rebuild only when the MENU would actually change. Rebuilding
+                // unconditionally wiped the idle frame that had just been drawn:
+                // the flow calls this at boot, milliseconds after the picture
+                // went out, and a rebuild empties the image container.
+                const sig = recentTitles.join("\u0000");
+                if (sig === menuSignature) return;
+                menuSignature = sig;
+                if (bridgeInstance && !showingRecent) applyPage("player").catch(() => {});
+            }
+
+            /** Which page the glasses are on: the picker, or the player. */
+            let showingRecent = false;
+
+            function menuObject() {
+                return recentTitles.length
+                    ? { menuItems: [{ itemID: MENU_RECENT_ID, itemName: "Recently played" }] }
+                    : undefined;
+            }
+
+            function recentListContainer() {
+                return {
+                    xPosition: 72, yPosition: 24, width: 432, height: 240,
+                    borderWidth: 0, containerID: RECENT_CONTAINER_ID, containerName: "g2_recent",
+                    isEventCapture: 1,
+                    itemContainer: {
+                        itemCount: recentTitles.length,
+                        itemWidth: 432,
+                        isItemSelectBorderEn: 1,
+                        itemName: recentTitles,
+                    },
+                };
+            }
+
+            /**
+             * Put the glasses on one page or the other.
+             *
+             * `rebuildPageContainer` is the call for a page after launch (F-047);
+             * the startup declaration happens once, at connect.
+             */
+            async function applyPage(which) {
+                if (!bridgeInstance || typeof bridgeInstance.rebuildPageContainer !== "function") return false;
+                const wantRecent = which === "recent" && recentTitles.length > 0;
+                const page = wantRecent
+                    ? { containerTotalNum: 2,
+                        listObject: [recentListContainer()],
+                        // `isEventCapture: 0` is load-bearing: ONE container per
+                        // page may capture events, and a page with two is
+                        // refused outright — `rebuildPageContainer` returns
+                        // false, with no error and nothing in the SDK's own
+                        // validator to catch it (F-053). The subtitle container
+                        // this is cloned from captures events, so the copy must
+                        // give that up to the list.
+                        textObject: [{ ...glassesSubtitleContainer, yPosition: 264, height: 24,
+                            isEventCapture: 0, content: "Tap to start" }] }
+                    : { containerTotalNum: 2,
+                        textObject: [glassesSubtitleContainer],
+                        imageObject: [glassesImageContainer] };
+                if (menuObject()) page.menuObject = menuObject();
+                const ok = (await bridgeInstance.rebuildPageContainer(page)) === true;
+                if (ok) {
+                    showingRecent = wantRecent;
+                    ble.forgetText();
+                    // A rebuild empties the image container, so the idle frame
+                    // has to be put back — otherwise the picture area is simply
+                    // blank until something plays.
+                    if (!wantRecent && !isPlaying) showIdleSkeleton().catch(() => {});
+                }
+                noteLifecycle("page-shown", { which: wantRecent ? "recent" : "player", ok });
+                console.log(`[Page] ${wantRecent ? "recent list" : "player"}: ` +
+                    `${ok ? "shown" : "REFUSED by the host"} (${recentTitles.length} recent)`);
+                return ok;
+            }
+
+            /** Show the recent-items picker on the glasses. */
+            export async function showRecentOnGlasses() {
+                return applyPage("recent");
+            }
+
+            /**
+             * The idle screen's picture: a thin frame where the video will be.
+             *
+             * Sent as a real frame rather than described, because the image
+             * container shows whatever was last put in it — which, before this,
+             * was nothing at all.
+             */
+            async function showIdleSkeleton() {
+                if (!bridgeInstance) return;
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+                const levels = new Uint8Array(w * h);      // 0 = dark
+                // Full brightness: the display is monochrome and a dim outline on
+                // a dark field is not a visible frame, it is nothing.
+                const edge = 3;
+                const CORNER_X = 40, CORNER_Y = 26;
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const onEdge = x < edge || y < edge || x >= w - edge || y >= h - edge;
+                        if (!onEdge) continue;
+                        // Corner brackets rather than a full box: it reads as
+                        // "a picture goes here" instead of an empty panel.
+                        const inCorner = (x < CORNER_X || x >= w - CORNER_X) ||
+                                         (y < CORNER_Y || y >= h - CORNER_Y);
+                        if (inCorner) levels[y * w + x] = 15;
+                    }
+                }
+                const png = encodeGreyPng(levels, w, h, 4);
+                const payload = typeof ImageRawDataUpdate !== "undefined"
+                    ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: png })
+                    : { containerID: 2, containerName: "g2_bif", imageData: png };
+                const r = await ble.sendImage(
+                    async (pl) => (await bridgeInstance.updateImageRawData(pl)) === "success",
+                    payload, { idle: true, bytes: png.byteLength },
+                );
+                console.log(`[Idle] frame ${r.ok ? "shown" : `failed (${r.reason})`}`);
+            }
+
             async function createGlassesContainers() {
                 return await bridgeInstance.createStartUpPageContainer({
                     containerTotalNum: 2,
@@ -2002,6 +2139,32 @@ import * as store from "./store";
                 if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
                     noteLifecycle("host-foreground-enter", { paused: backgroundedWhilePlaying });
                     resumeFromBackground();
+                    return;
+                }
+
+                // The contextual menu: one entry, back to the recent list.
+                if (event.menuItemClickEvent?.itemID === MENU_RECENT_ID) {
+                    noteLifecycle("menu-recently-played", {});
+                    showRecentOnGlasses().catch(() => {});
+                    return;
+                }
+
+                // A pick from the recent list on the glasses. The flow decides
+                // what that means; this file does not know what an item is.
+                // The glasses handle scrolling themselves and only tell us about a
+                // SELECTION, which arrives with no `eventType` at all — a filter
+                // on CLICK_EVENT matched nothing and the picker did nothing when
+                // tapped. Any list event on our container is a choice.
+                const listEvent = event.listEvent || null;
+                if (listEvent && listEvent.containerID === RECENT_CONTAINER_ID &&
+                    (listEvent.eventType == null || listEvent.eventType === OsEventTypeList.CLICK_EVENT)) {
+                    const index = listEvent.currentSelectItemIndex ?? 0;
+                    console.log(`[Recent] picked "${recentTitles[index] ?? index}"`);
+                    noteLifecycle("recent-picked", { index, title: recentTitles[index] });
+                    showingRecent = false;
+                    applyPage("player")
+                        .then(() => ui.playRecent(index))
+                        .catch((e) => console.warn(`[Recent] could not start: ${e?.message || e}`));
                     return;
                 }
 

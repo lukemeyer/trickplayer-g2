@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.15",
+  "version": "0.9.16",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,15 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.16",
+      "notes": [
+        "The glasses now show a frame where the picture will be and \"Select video to begin\" when nothing is playing, instead of \"Sign in to Plex\".",
+        "Your last five played items are remembered. They appear as a list on the glasses at startup \u2014 scroll with the temple, tap to start \u2014 so you can resume without touching the phone.",
+        "A \"Recently played\" entry in the glasses menu brings that list back during playback.",
+        "Browsing into an episode and back no longer re-checks every episode in the list; answers are kept for the session."
+      ]
+    },
     {
       "version": "0.9.15",
       "notes": [

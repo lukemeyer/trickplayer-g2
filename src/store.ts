@@ -41,6 +41,9 @@ const KEYS = [
     // is far too big to hydrate for everyone, so it goes through the bulk
     // accessors below instead.
     "trickplayer.logging",
+    // The last five things played, with everything needed to start one again
+    // from the glasses alone. ~200 bytes each.
+    "trickplayer.recent",
     // `trickplayer.imageFormat` used to live here and is gone on purpose: it
     // remembered an encoding escalation made during a transient wedge, which
     // would have pinned a device to the four-second encoder for good. See

@@ -155,6 +155,33 @@ That filter is a Plex limitation rather than a rule about media, which matters
 for the roadmap: Jellyfin converts and serves embedded subtitles on demand, so
 the same filter there would hide most of a library.
 
+## Why eligibility is cached for the session and not longer
+
+Eligibility is one round trip per item (F-015), so walking into an episode and
+back out used to re-ask every question in the list. Answers are now kept in
+memory for as long as the source stays open.
+
+Keeping them **across launches** was considered and rejected for now:
+
+| | |
+|---|---|
+| Size per answer | ~250 B (title, duration, badges, `timelineRef`, `subtitleRef`, plus the item ref used as the key) |
+| A 1,000-episode library | ~250 KB |
+| A 5,000-item library | ~1.2 MB |
+
+The size is survivable — it would go through the store's bulk accessors, not
+the boot hydrate, so only a session that browses pays to read it. The reason
+not to is **staleness**: the answer is a claim about what the server has right
+now. Add a subtitle sidecar to an episode and an ineligible item becomes
+eligible; re-analyse a library and the part IDs the answer is built from
+change. A stale "no" hides content the user owns, and a stale "yes" resolves to
+a dead reference at play time — both worse than the second or two of re-asking.
+
+If it is worth persisting later, the shape that would be safe: keyed by source,
+capped at ~300 most-recent entries (~75 KB), carrying a schema version and a
+short TTL, and treated as a hint that still gets verified when the item is
+actually opened.
+
 ## Measuring the link
 
 `telemetry.html` is a **separate entry point**, not a flag on the player.
