@@ -6,7 +6,8 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
-import { toGlassesLevels } from "./pixels";
+import { toGlassesLevels, expandBlocks } from "./pixels";
+import { createQualityController } from "./quality";
 import { encodeGreyPng } from "./png";
 import * as store from "./store";
 
@@ -608,20 +609,41 @@ import * as store from "./store";
                 });
             }
 
+            /**
+             * How much picture to send, moved by how sends are going (F-050).
+             * With the phone locked the link slows and full frames time out;
+             * see src/quality.ts for the measurements and the rules.
+             */
+            const pictureQuality = createQualityController();
+
+            /** Harness only: show what a given picture level looks like on the glasses. */
+            export function forcePictureQuality(name) {
+                const rung = pictureQuality.force(name);
+                noteLifecycle("picture-quality", { to: rung.name, why: "forced by harness" });
+                return rung.name;
+            }
+
             async function resizeAndPrepareImage(blob, targetWidth, targetHeight, meta = {}) {
                 const bitmap = await timed("decode", meta, () => decodeFrame(blob));
+                // Read once: the rung can move while this frame is being made,
+                // and the send has to report the rung it was actually made at.
+                const rung = pictureQuality.current;
+                meta.quality = rung.name;
                 try {
                     const { canvas, ctx } = prepSurface(targetWidth, targetHeight);
                     const levels = await timed("pixels", meta, () => {
+                        const sw = targetWidth / rung.block, sh = targetHeight / rung.block;
                         ctx.clearRect(0, 0, targetWidth, targetHeight);
-                        ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
-                        const d = ctx.getImageData(0, 0, targetWidth, targetHeight);
-                        return toGlassesLevels(d.data, targetWidth, targetHeight, {
+                        ctx.drawImage(bitmap, 0, 0, sw, sh);
+                        const d = ctx.getImageData(0, 0, sw, sh);
+                        const small = toGlassesLevels(d.data, sw, sh, {
                             brightness: brightnessValue,
                             contrast: contrastValue,
                             gamma: gammaValue,
                             dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
+                            shades: rung.shades,
                         });
+                        return expandBlocks(small, sw, sh, rung.block);
                     });
                     // Our own encoder for the first two rungs: synchronous,
                     // about a tenth of a millisecond, against the four seconds
@@ -932,12 +954,13 @@ import * as store from "./store";
                     consecutiveFetchFailures = 0;
                 }
 
+                const prepMeta = { frameIndex };
                 const preparedBytes = await timed("prepare", { frameIndex }, () =>
                     resizeAndPrepareImage(
                         assets.blob,
                         GLASSES_IMAGE_WIDTH,
                         GLASSES_IMAGE_HEIGHT,
-                        { frameIndex },
+                        prepMeta,
                     ),
                 );
 
@@ -971,7 +994,9 @@ import * as store from "./store";
                 // Filled in by the send below and read by the transport when it
                 // writes the record — which is why it is one object rather than
                 // a value passed in.
-                const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength };
+                const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength,
+                    quality: prepMeta.quality };
+                const sendStartedAt = Date.now();
                 const r = await during("image write", ble.sendImage(
                     async (p) => {
                         if (imageWedgeInjected ||
@@ -999,6 +1024,18 @@ import * as store from "./store";
                 // display's own format, but the decoder is in someone else's
                 // firmware — so the exact format is tried, the answer is
                 // watched, and the session drops to 8-bit if it has to.
+                // Feed the picture ladder the frame's real cost — wall clock,
+                // not the transport's capped duration, since "how slow" is the
+                // whole signal. A superseded frame never went out and says
+                // nothing about the link.
+                if (r.reason !== "superseded") {
+                    const change = pictureQuality.onResult(r.ok, Date.now() - sendStartedAt);
+                    if (change) {
+                        noteLifecycle("picture-quality", change);
+                        console.warn(`[Picture] ${change.from} -> ${change.to} (${change.why})`);
+                    }
+                }
+
                 if (r.reason === "superseded") {
                     console.log(
                         `[Scene Engine] Image ${frame.tsMs / 1000}s: skipped — a newer frame is queued`,
@@ -2110,6 +2147,7 @@ import * as store from "./store";
                 runs = 12,
                 sourceWidth = 320,
                 sourceHeight = 180,
+                sendLast = false,
             } = {}) {
                 const src = document.createElement("canvas");
                 src.width = sourceWidth;
@@ -2221,6 +2259,13 @@ import * as store from "./store";
                     );
                     totals.push(Date.now() - t0);
                     outBytes = out.byteLength;
+                    if (sendLast && n === runs - 1 && bridgeInstance) {
+                        const result = await bridgeInstance.updateImageRawData(
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: out })
+                                : { containerID: 2, containerName: "g2_bif", imageData: out });
+                        console.log(`[prep-probe] sent the last frame at "${pictureQuality.current.name}": ${result}`);
+                    }
                     // Yield between runs: back to back they would all land in
                     // one task and measure a burst nothing in the app performs.
                     await new Promise((r) => setTimeout(r, 0));

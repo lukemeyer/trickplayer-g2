@@ -14,6 +14,7 @@
     "telemetry-check": "node tools/telemetry-check.mjs",
     "png-check": "node tools/png-check.mjs",
     "route-check": "node tools/route-check.mjs",
+    "quality-check": "node tools/quality-check.mjs",
     "wire-size": "node tools/wire-size.mjs",
     "pixel-bench": "node tools/pixel-bench.mjs"
   },

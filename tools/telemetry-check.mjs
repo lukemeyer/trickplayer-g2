@@ -483,6 +483,30 @@ def("a silence while playing names what the engine was stuck behind", async () =
     };
 });
 
+def("lighter pictures are reported by level, and whether they kept coming", async () => {
+    // F-050: full frames time out locked, the ladder drops, lighter ones land.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = (quality, ok, ms) => {
+        rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock, endedAt: clock + ms,
+            queuedMs: 0, durationMs: ms, depthAtEnqueue: 1, bytes: 16600, quality,
+            ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+        clock += 5000;
+    };
+    for (let i = 0; i < 10; i++) img("full", true, 1700);
+    img("full", false, 8500);
+    rec.mark("picture-quality", { from: "full", to: "lighter", why: "failed" });
+    for (let i = 0; i < 20; i++) img("lighter", true, 900);
+    const a = analyse(rec.session());
+    const text = formatReport(rec.session(), a);
+    const hit = a.findings.find((x) => /made lighter/.test(x)) || "";
+    return {
+        pass: /100% of 20 were delivered/.test(hit) && /doing its job/.test(hit) &&
+              /by picture level/.test(text) && /lighter\s+n=\s*20\s+ok 100%/.test(text),
+        detail: hit.slice(0, 130) || "MISSED",
+    };
+});
+
 def("the locked sweep says which of three answers it found", async () => {
     // Throughput explanation: small payloads land locked, large ones time out.
     // The sweep must be able to confirm it AND to rule it out both ways.
@@ -506,7 +530,7 @@ def("the locked sweep says which of three answers it found", async () => {
     const lead = (a) => a.findings[0] || "";
     const text = formatReport({ events: [], marks: [], durationMs: 0 }, threshold);
     return {
-        pass: /SMALL PICTURES STILL LAND: payloads up to 10KB were delivered and from 12KB/.test(lead(threshold)) &&
+        pass: /SMALL PICTURES STILL LAND: payloads up to 10KB were mostly delivered and from 12KB mostly failed/.test(lead(threshold)) &&
               /even the SMALLEST payloads failed/.test(lead(none)) &&
               /payloads of every size were delivered/.test(lead(all)) &&
               /LOCKED sweep by payload size/.test(text) && /failures took p50 9000ms/.test(text),

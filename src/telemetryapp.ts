@@ -140,6 +140,18 @@ if (flags.has("prep")) {
     }, 2500);
 }
 
+/**
+ * `?quality=lighter|lightest` prepares frames at that picture level and puts
+ * the last one on the glasses — to look at what the ladder sends, not guess.
+ */
+if (flags.get("quality")) {
+    setTimeout(async () => {
+        const q = engine.forcePictureQuality(flags.get("quality"));
+        const r = await engine.probePrepare({ runs: 4, sendLast: true });
+        console.log(`[quality-probe] ${q}: ${(r.outBytes / 1024).toFixed(1)}KB prepared, p50 ${r.p50}ms`);
+    }, 3000);
+}
+
 // Last, so the recorder is attached before the app can send anything.
 import("./ui").then(() => {
     // The markup came across with the "Connect with logging" buttons in it, and

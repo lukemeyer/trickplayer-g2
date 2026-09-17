@@ -1,0 +1,87 @@
+// @ts-nocheck
+//
+// How much picture to send, decided by how the link is behaving (F-050).
+//
+// With the phone locked the Bluetooth link slows, and the glasses host gives
+// up on a picture transfer after roughly eight seconds. Measured with a locked
+// sweep: payloads up to ~8 KB landed in about half a second, ~10 KB took 3.7s,
+// 14-18 KB mostly failed after 8-9s, 20 KB always failed. A normal frame is
+// 8-19 KB on the air — right across that cliff. That is why the picture died
+// the instant the phone locked while subtitles, a few hundred bytes, carried on.
+//
+// The app cannot see the phone lock (the host keeps the WebView "visible" and
+// its timers run on time). It can see the CONSEQUENCE: a send that fails, or
+// takes seconds. So this is a bitrate ladder driven by outcomes, not by a
+// lock signal — which also means it helps with any other slow link, for free.
+//
+//   - a failure, or a success slower than `slowMs`: drop one rung now.
+//   - `probeAfter` fast successes in a row on a lower rung: try one rung up.
+//   - that probe fails or is slow: drop back, and double how long to wait
+//     before probing again (capped). A probe that holds resets the wait.
+//
+// Pure, so it can be tested without glasses (tools/quality-check.mjs).
+
+/** Measured with zlib on a detailed scene; the host's compressor is a different one, so ratios, not bytes. */
+export const PICTURE_LADDER = [
+    { name: "full", shades: 16, block: 1 },          // 100%
+    { name: "lighter", shades: 4, block: 1 },        // ~43% — shapes stay sharp, tone is dithered
+    { name: "lightest", shades: 4, block: 2 },       // ~15% — half resolution as well
+];
+
+export function createQualityController({
+    ladder = PICTURE_LADDER,
+    slowMs = 4000,
+    fastMs = 2500,
+    probeAfter = 4,
+    maxProbeAfter = 64,
+} = {}) {
+    let index = 0;
+    let fastRun = 0;
+    let waitBeforeProbe = probeAfter;
+    let probing = false;
+
+    return {
+        get current() { return ladder[index]; },
+        get index() { return index; },
+        /** For harnesses: put the ladder on a named rung. */
+        force(name) {
+            const i = ladder.findIndex((r) => r.name === name);
+            if (i >= 0) { index = i; fastRun = 0; probing = false; }
+            return ladder[index];
+        },
+
+        /**
+         * Feed one real frame's outcome.
+         * @returns a change `{ from, to, why }` when the rung moved, else null.
+         */
+        onResult(ok, ms) {
+            const from = ladder[index].name;
+            const bad = !ok || ms > slowMs;
+
+            if (bad) {
+                fastRun = 0;
+                if (probing) waitBeforeProbe = Math.min(waitBeforeProbe * 2, maxProbeAfter);
+                probing = false;
+                if (index < ladder.length - 1) {
+                    index++;
+                    return { from, to: ladder[index].name, why: ok ? `slow (${Math.round(ms)}ms)` : "failed" };
+                }
+                return null;
+            }
+
+            if (ms <= fastMs) {
+                if (probing) { probing = false; waitBeforeProbe = probeAfter; }
+                fastRun++;
+                if (index > 0 && fastRun >= waitBeforeProbe) {
+                    fastRun = 0;
+                    probing = true;
+                    index--;
+                    return { from, to: ladder[index].name, why: `probe after ${waitBeforeProbe} fast frames` };
+                }
+            } else {
+                fastRun = 0;             // landed, but not quickly enough to call the link recovered
+            }
+            return null;
+        },
+    };
+}

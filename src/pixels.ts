@@ -46,6 +46,20 @@ function quantisePlane(data, w, h, opts = {}) {
     const gamma = opts.gamma ?? 1;
     const dither = opts.dither ?? "floyd-steinberg";
 
+    // How many grey levels to quantise to. 16 is everything the display can
+    // show; fewer makes a frame far more compressible, and the host compresses
+    // what it sends — which, with the phone locked and the link slowed, is the
+    // difference between a picture landing and timing out (F-050). The levels
+    // chosen are always a subset of the display's 16, evenly spaced.
+    const shades = opts.shades ?? 16;
+    const step = 255 / (shades - 1);
+    const top = shades - 1;
+    const quant = (v) => {
+        let k = Math.round(v / step);
+        k = k < 0 ? 0 : k > top ? top : k;
+        return k * step;
+    };
+
     const n = w * h;
     const gray = new Float32Array(n);
     const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
@@ -66,7 +80,7 @@ function quantisePlane(data, w, h, opts = {}) {
             for (let x = 0; x < w; x++) {
                 const idx = y * w + x;
                 const oldVal = gray[idx];
-                const newVal = clampLevel(Math.round(oldVal / STEP)) * STEP;
+                const newVal = quant(oldVal);
                 gray[idx] = newVal;
                 const err = oldVal - newVal;
                 if (x + 1 < w) gray[idx + 1] += (err * 7) / 16;
@@ -82,7 +96,7 @@ function quantisePlane(data, w, h, opts = {}) {
             for (let x = 0; x < w; x++) {
                 const idx = y * w + x;
                 const oldVal = gray[idx];
-                const newVal = clampLevel(Math.round(oldVal / STEP)) * STEP;
+                const newVal = quant(oldVal);
                 gray[idx] = newVal;
                 // Atkinson spreads only 3/4 of the error, which is why it looks
                 // sparser and holds edges better than Floyd-Steinberg.
@@ -102,15 +116,15 @@ function quantisePlane(data, w, h, opts = {}) {
             for (let x = 0; x < w; x++) {
                 const idx = y * w + x;
                 const oldVal = gray[idx];
-                const level = Math.floor(oldVal / STEP);
-                const remainder = (oldVal % STEP) / STEP;
+                const level = Math.floor(oldVal / step);
+                const remainder = (oldVal % step) / step;
                 const threshold = (BAYER_4X4[y & 3][x & 3] + 0.5) / 16;
-                gray[idx] = Math.min(255, (remainder > threshold ? level + 1 : level) * STEP);
+                gray[idx] = Math.min(255, Math.min(top, remainder > threshold ? level + 1 : level) * step);
             }
         }
     } else {
         for (let i = 0; i < n; i++) {
-            gray[i] = clampLevel(Math.round(gray[i] / STEP)) * STEP;
+            gray[i] = quant(gray[i]);
         }
     }
 
@@ -155,6 +169,24 @@ export function toGlassesGrey(data, w, h, opts = {}) {
         data[o + 3] = 255;
     }
     return data;
+}
+
+/**
+ * Repeat each pixel of a small level plane into a `block` x `block` square.
+ *
+ * The cheapest large reduction in what a frame costs to send: a picture drawn
+ * at half resolution and doubled has runs the host's compressor collapses, and
+ * it still fills the same 256x128 container, so nothing about the page changes.
+ */
+export function expandBlocks(small, sw, sh, block) {
+    if (block === 1) return small;
+    const w = sw * block, h = sh * block;
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+        const row = ((y / block) | 0) * sw;
+        for (let x = 0; x < w; x++) out[y * w + x] = small[row + ((x / block) | 0)];
+    }
+    return out;
 }
 
 /** Every value the glasses can show, for assertions. */

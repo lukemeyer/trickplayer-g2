@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,13 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.10",
+      "notes": [
+        "Pictures now keep coming with the phone locked. Locking the phone slows the Bluetooth link, and full-size pictures stopped finishing in time \u2014 subtitles, being tiny, still did. When sending gets slow or fails, the app now switches to lighter pictures (4 shades, then half resolution as well) that get through, and returns to full pictures once the link is fast again.",
+        "Logging reports show results for each picture level and every switch between them."
+      ]
+    },
     {
       "version": "0.9.9",
       "notes": [

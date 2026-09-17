@@ -187,13 +187,32 @@ export function analyse(session) {
                 kb: b.kb, n: b.n, successPct: (100 * b.ok) / b.n,
                 writeMs: summarise(b.ms), failMs: summarise(b.failMs),
             }));
-            const landed = rows.filter((r) => r.successPct >= 67);
-            const failed = rows.filter((r) => r.successPct <= 33);
+            // "Mostly delivered" and "mostly failed" — a 1-of-3 bucket is 33.3%,
+            // which a <= 33 test quietly counted as neither.
+            const landed = rows.filter((r) => r.successPct >= 66);
+            const failed = rows.filter((r) => r.successPct < 50);
             out.lockedSweep = {
                 rows,
                 largestLandedKb: landed.length ? landed[landed.length - 1].kb : null,
                 smallestFailedKb: failed.length ? failed[0].kb : null,
             };
+        }
+    }
+
+    // 2c. BY PICTURE LEVEL. The ladder drops to lighter pictures when sends
+    //     slow or fail (F-050); this is how to tell whether that worked —
+    //     delivered at the lighter level, and how fast.
+    out.byQuality = null;
+    {
+        const withQ = real(images).filter((e) => e.quality && !e.probe);
+        if (withQ.some((e) => e.quality !== "full")) {
+            const order = ["full", "lighter", "lightest"];
+            out.byQuality = order.map((q) => {
+                const list = withQ.filter((e) => e.quality === q);
+                return { quality: q, n: list.length,
+                    okPct: list.length ? (100 * list.filter((e) => e.ok).length) / list.length : null,
+                    writeMs: summarise(list.filter((e) => e.ok).map((e) => e.durationMs)) };
+            }).filter((r) => r.n);
         }
     }
 
@@ -481,6 +500,7 @@ export function analyse(session) {
         "user-play", "user-pause", "phone-screen-off", "phone-screen-on",
         "image-backoff", "image-resumed", "page-rebuilt", "containers-repaired",
         "image-format-changed", "page-reloaded", "session-discarded",
+        "picture-quality",
     ]);
     out.keyEvents = (session.marks || []).filter((m) => KEY_EVENTS.has(m.name));
 
@@ -716,7 +736,7 @@ export function analyse(session) {
         if (ls.largestLandedKb != null && ls.smallestFailedKb != null &&
             ls.largestLandedKb < ls.smallestFailedKb) {
             f.unshift(`WITH THE PHONE LOCKED, SMALL PICTURES STILL LAND: payloads up to ` +
-                `${ls.largestLandedKb + 2}KB were delivered and from ${ls.smallestFailedKb}KB they failed. ` +
+                `${ls.largestLandedKb + 2}KB were mostly delivered and from ${ls.smallestFailedKb}KB mostly failed. ` +
                 `So the glasses app has not stopped taking pictures when locked — the link has slowed ` +
                 `and larger ones no longer finish in time. The fix is on this side: send smaller, more ` +
                 `compressible pictures while the phone is locked.`);
@@ -729,6 +749,23 @@ export function analyse(session) {
                 `(${Math.round(100 * okAll / all)}% of ${all}) — so being locked does not by itself stop ` +
                 `pictures. Whatever freezes playback is something playback does that this sweep does not.`);
         }
+    }
+
+    // Did dropping to lighter pictures keep them coming?
+    const bq = out.byQuality;
+    const downs = (out.keyEvents || []).filter((m) => m.name === "picture-quality" &&
+        ["lighter", "lightest"].includes(m.to) && !/probe/.test(m.why || ""));
+    if (bq && downs.length) {
+        const full = bq.find((q) => q.quality === "full");
+        const light = bq.filter((q) => q.quality !== "full");
+        const lightN = light.reduce((t, q) => t + q.n, 0);
+        const lightOk = light.reduce((t, q) => t + (q.okPct / 100) * q.n, 0);
+        f.push(`Pictures were made lighter ${downs.length}x when sends slowed or failed. At the lighter ` +
+            `levels ${Math.round((100 * lightOk) / Math.max(1, lightN))}% of ${lightN} were delivered` +
+            (full ? `, against ${full.okPct.toFixed(0)}% of ${full.n} at full` : "") +
+            ` — ${lightOk / Math.max(1, lightN) >= 0.8
+                ? "so the ladder is doing its job."
+                : "so even lighter pictures are not getting through; it is not only the link slowing."}`);
     }
 
     const c = out.contention;
@@ -984,6 +1021,15 @@ export function formatReport(session, a = analyse(session)) {
             const t = b.writeMs.n ? `p50 ${ms(b.writeMs.p50)}` : "no successful write";
             L.push(`  ${String(b.kb).padStart(3)}KB  n=${String(b.n).padStart(4)}  ` +
                 `ok ${b.successPct.toFixed(0).padStart(3)}%  ${t}`);
+        }
+    }
+    if (a.byQuality) {
+        L.push("");
+        L.push("by picture level   (lighter/lightest are sent when the link slows — F-050)");
+        for (const q of a.byQuality) {
+            L.push(`  ${q.quality.padEnd(9)} n=${String(q.n).padStart(4)}  ` +
+                `ok ${q.okPct == null ? "  —" : q.okPct.toFixed(0).padStart(3) + "%"}  ` +
+                `${q.writeMs.n ? "p50 " + ms(q.writeMs.p50) : "none landed"}`);
         }
     }
     if (a.lockedSweep) {
