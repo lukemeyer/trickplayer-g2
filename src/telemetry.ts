@@ -1086,8 +1086,15 @@ export function analyse(session) {
         // Any idle gap, not only the ones flagged "not playing": the last
         // heartbeat before a stop often still says playing, which put the
         // reported session in the other bucket.
+        const beatsBefore = (session.marks || []).filter((m) => m.name === "tick");
         const unexplained = idle.filter((g) => {
             if (!sent || g.endedPlaying) return false;
+            // Playback has to have BEEN running. A browse before anything was
+            // played — with a preview frame or two on the glasses — was reported
+            // as "PLAYBACK STOPPED at 5s and nothing says why".
+            const wasPlaying = beatsBefore.some(
+                (m) => m.playing && m.at > g.fromMs - 60000 && m.at <= g.fromMs + 2000);
+            if (!wasPlaying) return false;
             return !(session.marks || []).some((m) =>
                 STOPPERS.has(m.name) && m.at > g.fromMs - 30000 && m.at < g.fromMs + 10000);
         });

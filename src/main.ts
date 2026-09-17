@@ -1794,7 +1794,10 @@ import * as store from "./store";
                     lastFrameTime = now;
                     currentTimeMs += dt;
 
-                    if (currentTimeMs >= durationMs) {
+                    // `durationMs` is 0 with nothing loaded, and `0 >= 0` reported
+                    // the end of playback three times while the wearer was still
+                    // browsing.
+                    if (durationMs > 0 && currentTimeMs >= durationMs) {
                         noteLifecycle("playback-ended", { by: "clock" });
                         isPlaying = false;
                         currentTimeMs = 0;
@@ -2697,7 +2700,10 @@ import * as store from "./store";
 
             /** Leave the item. The one moment every object URL is certainly dead. */
             export function stop() {
-                noteLifecycle("playback-stopped", { by: "left the item", wasPlaying: isPlaying });
+                // Only when there was playback to stop. Backing out of five
+                // screens while browsing produced five "playback stopped" marks
+                // and no playback.
+                if (isPlaying) noteLifecycle("playback-stopped", { by: "left the item" });
                 isPlaying = false;
                 stopScenePipeline();
                 stopClock();

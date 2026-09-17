@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,12 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.15",
+      "notes": [
+        "Logging reports no longer claim playback stopped for no reason when you were only browsing, and no longer record an \"end of playback\" or \"left the item\" while nothing is playing."
+      ]
+    },
     {
       "version": "0.9.14",
       "notes": [

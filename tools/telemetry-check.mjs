@@ -565,6 +565,31 @@ def("the 'connection lost' session: no sweep blamed, no verdicts from one frame"
     };
 });
 
+def("browsing before anything is played is not 'playback stopped'", async () => {
+    // Three minutes of browsing, with a preview frame or two reaching the
+    // glasses, then playback starts and runs clean. The report led with
+    // "PLAYBACK STOPPED at 5s and nothing says why" — while the wearer was
+    // choosing an episode and nothing had played yet.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = () => rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock,
+        startedAt: clock, endedAt: clock + 1400, queuedMs: 0, durationMs: 1400,
+        depthAtEnqueue: 1, bytes: 16600 });
+    for (let i = 0; i < 3; i++) { img(); clock += 1500; }     // preview frames, not playing
+    for (let i = 0; i < 8; i++) { rec.tick({ playing: false, lagMs: 4 }); clock += 5000; }
+    for (let i = 0; i < 30; i++) {                             // then real playback
+        img(); clock += 5000; rec.tick({ playing: true, lagMs: 4 });
+    }
+    const a = analyse(rec.session());
+    return {
+        pass: !a.findings.some((x) => /PLAYBACK STOPPED/.test(x)) &&
+              a.findings.some((x) => /sitting idle with nothing playing/.test(x)),
+        detail: a.findings.some((x) => /PLAYBACK STOPPED/.test(x))
+            ? `FALSE POSITIVE: ${a.findings.find((x) => /PLAYBACK STOPPED/.test(x)).slice(0, 90)}`
+            : "browsing gap treated as browsing",
+    };
+});
+
 def("playback stopping with nothing to explain it is called out, not excused", async () => {
     // The session that exposed this: 12 minutes of perfect delivery with the
     // phone locked, then playback stopped mid-episode on a wearer's face. No
