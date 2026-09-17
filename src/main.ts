@@ -1887,10 +1887,16 @@ import * as store from "./store";
                 // switched to another glasses app, or the phone screen
                 // locked) — see pauseForBackground/resumeFromBackground.
                 if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+                    // Marked separately from the pause it causes: whether the
+                    // host sends this when the PHONE sleeps — rather than only
+                    // when the wearer leaves the app — is the open question, and
+                    // "app-paused" alone cannot answer it.
+                    noteLifecycle("host-foreground-exit", { wasPlaying: isPlaying });
                     pauseForBackground();
                     return;
                 }
                 if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+                    noteLifecycle("host-foreground-enter", { paused: backgroundedWhilePlaying });
                     resumeFromBackground();
                     return;
                 }
@@ -2012,6 +2018,11 @@ import * as store from "./store";
                         .sort((a, b) => a.since - b.since)
                         .map((a) => ({ what: a.what, ms: t - a.since })),
                     ...(imageBackoffUntil > t ? { imageBackoffMs: imageBackoffUntil - t } : {}),
+                    // The silent loop is what is supposed to keep the WebView
+                    // running with the phone asleep. Whether it actually is
+                    // playing then has never been observed — only assumed.
+                    keepAlive: silentAudio.paused ? "paused" : "playing",
+                    backgroundPaused: backgroundedWhilePlaying,
                 };
             }
 
@@ -2511,6 +2522,12 @@ import * as store from "./store";
             }
 
             export function togglePlay() {
+                // A tester woke the phone, found the stream paused and pressed
+                // play. Without this, that press is indistinguishable in the
+                // report from the app resuming by itself.
+                noteLifecycle(isPlaying ? "user-pause" : "user-play", {
+                    wasBackgroundPaused: backgroundedWhilePlaying,
+                });
                 if (isPlaying) pause(); else play();
             }
 

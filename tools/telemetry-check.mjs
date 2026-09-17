@@ -483,30 +483,64 @@ def("a silence while playing names what the engine was stuck behind", async () =
     };
 });
 
-def("it tells the headset being off apart from a transport fault", async () => {
-    const build = (offOk) => {
+def("the glasses' worn flag is not used to blame the headset", async () => {
+    // A tester wore the glasses for a whole session while the host reported
+    // isWearing:false for most of it, phone asleep. A finding built on that flag
+    // would have blamed the headset for a freeze on someone's face.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    for (let i = 0; i < 20; i++) {
+        const wearing = i < 10;
+        rec.setContext({ wearing });
+        rec.event({ id: 0, kind: "image", ok: wearing, enqueuedAt: clock, startedAt: clock,
+            endedAt: clock + 6000, queuedMs: 0, durationMs: 6000, depthAtEnqueue: 1, bytes: 16600,
+            ...(wearing ? {} : { reason: "failed", result: "sendFailed" }) });
+        clock += 8000;
+    }
+    const a = analyse(rec.session());
+    const text = formatReport(rec.session(), a);
+    return {
+        pass: !a.findings.some((x) => /head|headset/i.test(x)) && /reported not worn/.test(text) &&
+              a.failedWriteMs.p50 === 6000,
+        detail: a.findings.some((x) => /head|headset/i.test(x)) ? "BLAMED THE HEADSET" :
+            "table kept, no attribution; failure took p50 6000ms",
+    };
+});
+
+def("image failures that line up with the phone asleep are called out", async () => {
+    // The shape of the sessions that froze: fine while timers ran on time, then
+    // Android throttling the WebView (heartbeat a minute late) and images
+    // failing while text trickled through. document.hidden never changed.
+    const build = (asleepFails) => {
         let clock = 1_700_000_000_000;
         const rec = createRecorder({ now: () => clock });
-        const img = (ok, wearing) => {
-            rec.setContext({ wearing });
+        const both = (ok) => {
             rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock,
-                endedAt: clock + (ok ? 1500 : 6000), queuedMs: 0, durationMs: ok ? 1500 : 6000,
-                depthAtEnqueue: 1, bytes: 16600, ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
-            clock += 8000;
+                endedAt: clock + 2000, queuedMs: 0, durationMs: 2000, depthAtEnqueue: 1, bytes: 16600,
+                ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+            rec.event({ id: 0, kind: "text", ok: true, enqueuedAt: clock + 100, startedAt: clock + 100,
+                endedAt: clock + 220, queuedMs: 0, durationMs: 120, depthAtEnqueue: 1 });
         };
-        for (let i = 0; i < 10; i++) img(true, true);
-        for (let i = 0; i < 10; i++) img(offOk ? i % 10 !== 0 : false, false);
+        for (let i = 0; i < 10; i++) {                         // awake
+            both(true); clock += 5000; rec.tick({ playing: true, lagMs: 20, keepAlive: "playing" });
+        }
+        rec.mark("host-foreground-exit", { wasPlaying: true });
+        for (let i = 0; i < 8; i++) {                          // asleep
+            both(!asleepFails); clock += 60000;
+            rec.tick({ playing: true, lagMs: 55000, keepAlive: "paused" });
+        }
+        rec.mark("user-play", { wasBackgroundPaused: true });
         return analyse(rec.session());
     };
-    const offFails = build(false), offFine = build(true);
-    const text = formatReport({ ...{}, ...{} , events: [], marks: [], durationMs: 0 }, offFails);
+    const asleep = build(true), fine = build(false);
+    const text = formatReport({ events: [], marks: [], durationMs: 0 }, asleep);
+    const hit = asleep.findings.find((x) => /phone is ASLEEP/.test(x)) || "";
     return {
-        pass: offFails.findings.some((x) => /OFF the head/.test(x)) &&
-              offFine.findings.some((x) => /made little difference/.test(x)) &&
-              offFails.failedWriteMs.p50 === 6000 && /not worn/.test(text),
-        detail: `failures off-head: ${offFails.byWearing.off.imageOkPct}% ok -> ` +
-            `${offFails.findings.some((x) => /OFF the head/.test(x)) ? "blamed on headset" : "MISSED"}; ` +
-            `failure took p50 ${offFails.failedWriteMs.p50}ms`,
+        pass: /0% delivered/.test(hit) && /keep-alive was PAUSED/.test(hit) &&
+              fine.findings.some((x) => /Throttling does not explain/.test(x)) &&
+              asleep.findings.some((x) => /lost the foreground 1x while playing/.test(x) && /resumed by hand/.test(x)) &&
+              /app events \(whole session\)/.test(text) && /host-foreground-exit/.test(text),
+        detail: hit ? hit.slice(0, 140) : asleep.findings.join(" | ").slice(0, 140),
     };
 });
 

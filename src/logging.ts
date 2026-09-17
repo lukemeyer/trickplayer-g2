@@ -240,7 +240,19 @@ export async function enableLogging(engine, { resume = true } = {}) {
      * ticks is a page that was not running; a span with ticks and no images
      * while the app believed it was playing is the pipeline stopping.
      */
-    setInterval(() => { if (running) recorder.tick(engine.playbackState()); }, 5000);
+    // With the timer's LATENESS, measured rather than inferred. The host keeps
+    // the WebView "visible" while the phone is asleep — a session spent almost
+    // entirely with the screen off recorded every write as foreground — so
+    // `document.hidden` cannot say when Android started throttling us. A
+    // five-second heartbeat that arrives sixty seconds late can.
+    let lastTickAt = Date.now();
+    setInterval(() => {
+        if (!running) return;
+        const at = Date.now();
+        const lagMs = Math.max(0, at - lastTickAt - 5000);
+        lastTickAt = at;
+        recorder.tick({ ...engine.playbackState(), lagMs });
+    }, 5000);
     setInterval(persist, 15000);
     window.addEventListener("beforeunload", persist);
 

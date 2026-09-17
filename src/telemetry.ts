@@ -406,6 +406,54 @@ export function analyse(session) {
         return { on: side(split.on), off: side(split.off) };
     })();
 
+    // 6h. WAS ANDROID THROTTLING US? Measured from the heartbeat's lateness,
+    //     because nothing else can say. The host keeps the WebView "visible"
+    //     with the phone asleep — a session spent mostly with the screen off
+    //     recorded every write as foreground — so `document.hidden` is blind
+    //     to the one state every freeze so far has happened in.
+    //
+    //     A heartbeat reports the lateness of the interval that ENDS at it, so
+    //     an operation belongs to the first heartbeat after it.
+    const LATE_MS = 10000;
+    const beats = (session.marks || []).filter((m) => m.name === "tick" && typeof m.lagMs === "number");
+    out.throttling = null;
+    if (beats.length >= 3) {
+        const late = beats.filter((b) => b.lagMs > LATE_MS);
+        const beatAfter = (at) => beats.find((b) => b.at >= at && b.at - at < 70000);
+        const split = { throttled: [], onTime: [] };
+        for (const e of [...images, ...texts]) {
+            if (e.probe || e.reason === "superseded") continue;
+            const b = beatAfter(e.startedAt);
+            if (!b) continue;
+            (b.lagMs > LATE_MS ? split.throttled : split.onTime).push(e);
+        }
+        const side = (list) => {
+            const im = list.filter((e) => e.kind === "image");
+            const tx = list.filter((e) => e.kind === "text");
+            const pct = (l) => (l.length ? (100 * l.filter((e) => e.ok).length) / l.length : null);
+            return { images: im.length, imageOkPct: pct(im), texts: tx.length, textOkPct: pct(tx) };
+        };
+        out.throttling = {
+            lateBeats: late.length, beats: beats.length,
+            maxLagMs: beats.reduce((m, b) => Math.max(m, b.lagMs), 0),
+            firstLateAt: late[0]?.at ?? null,
+            keepAlivePausedBeats: beats.filter((b) => b.keepAlive === "paused" && b.playing).length,
+            throttled: side(split.throttled), onTime: side(split.onTime),
+        };
+    }
+
+    // 6i. WHAT THE APP DID, in full. Pauses, resumes, what the host told it and
+    //     what the wearer pressed, shown for the whole session — not only near
+    //     gaps. A tester found the stream paused on waking the phone and the
+    //     report could not show when, or why, it had stopped.
+    const KEY_EVENTS = new Set([
+        "host-foreground-exit", "host-foreground-enter", "app-paused", "app-resumed",
+        "user-play", "user-pause", "phone-screen-off", "phone-screen-on",
+        "image-backoff", "image-resumed", "page-rebuilt", "containers-repaired",
+        "image-format-changed", "page-reloaded", "session-discarded",
+    ]);
+    out.keyEvents = (session.marks || []).filter((m) => KEY_EVENTS.has(m.name));
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -587,21 +635,46 @@ export function analyse(session) {
         );
     }
 
-    // Failures concentrated while the glasses were OFF the head are the
-    // glasses doing what glasses do, not the app — say so before anyone chases
-    // a transport bug that is really a headset on a desk.
-    const bw = out.byWearing;
-    if (bw && bw.off.images >= 3 && bw.off.imageOkPct != null) {
-        const onPct = bw.on.imageOkPct;
-        if (onPct == null || bw.off.imageOkPct + 30 < onPct) {
-            f.push(`Images fail far more with the glasses OFF the head: ${bw.off.imageOkPct.toFixed(0)}% ` +
-                `delivered not worn` + (onPct == null ? "" : ` against ${onPct.toFixed(0)}% worn`) +
-                `. The G2 may stop drawing when it is taken off, so freezes in that window are ` +
-                `probably the headset, not the link — test with them on.`);
-        } else {
-            f.push(`Being worn or not made little difference (${bw.off.imageOkPct.toFixed(0)}% of images ` +
-                `delivered off the head, ${onPct.toFixed(0)}% on) — the failures are not the headset sleeping.`);
-        }
+    // The glasses' own "worn" flag is NOT evidence. A tester wore them for a
+    // whole session while the host reported `isWearing: false` for most of it,
+    // phone asleep — so a finding built on it would have blamed the headset for
+    // a freeze that happened on someone's face. The split stays in the report
+    // as a raw table; it is not used to explain anything.
+
+    // Failures that line up with Android throttling the WebView — the phone
+    // asleep — are the leading suspect, and this says whether they do.
+    const th = out.throttling;
+    if (th && th.throttled.images >= 3 && th.onTime.images >= 3 &&
+        th.throttled.imageOkPct != null && th.onTime.imageOkPct != null) {
+        const gapPct = th.onTime.imageOkPct - th.throttled.imageOkPct;
+        f.push(gapPct > 30
+            ? `Images fail while the phone is ASLEEP: ${th.throttled.imageOkPct.toFixed(0)}% delivered ` +
+              `while Android was throttling the app (heartbeat up to ${Math.round(th.maxLagMs / 1000)}s late), ` +
+              `against ${th.onTime.imageOkPct.toFixed(0)}% with timers on time. Text: ` +
+              `${th.throttled.textOkPct == null ? "—" : th.throttled.textOkPct.toFixed(0) + "%"} vs ` +
+              `${th.onTime.textOkPct == null ? "—" : th.onTime.textOkPct.toFixed(0) + "%"}.` +
+              (th.keepAlivePausedBeats
+                  ? ` The silent-audio keep-alive was PAUSED on ${th.keepAlivePausedBeats} heartbeat(s) while ` +
+                    `playing, so the thing meant to stop the throttling was not running.`
+                  : "")
+            : `Throttling does not explain the failures: ${th.throttled.imageOkPct.toFixed(0)}% of images ` +
+              `delivered while the phone was asleep, ${th.onTime.imageOkPct.toFixed(0)}% with it awake.`);
+    } else if (th && th.lateBeats && th.onTime.images === 0 && th.throttled.images >= 3) {
+        f.push(`Every measured write happened while Android was throttling the app (heartbeat up to ` +
+            `${Math.round(th.maxLagMs / 1000)}s late) — there is no awake period to compare against.`);
+    }
+
+    // Paused by the host while the wearer was still watching.
+    const hostExits = (out.keyEvents || []).filter((m) => m.name === "host-foreground-exit" && m.wasPlaying);
+    const userPlays = (out.keyEvents || []).filter((m) => m.name === "user-play" && m.wasBackgroundPaused);
+    if (hostExits.length) {
+        f.push(`The glasses host told the app it had lost the foreground ${hostExits.length}x while playing, ` +
+            `and each time the app PAUSED. ` +
+            (userPlays.length
+                ? `${userPlays.length} of those had to be resumed by hand. `
+                : "") +
+            `If this lines up with the phone sleeping rather than with leaving the app, pausing on it is ` +
+            `wrong for a glasses app.`);
     }
 
     const c = out.contention;
@@ -868,13 +941,24 @@ export function formatReport(session, a = analyse(session)) {
         L.push(`failure took p50 ${ms(a.failedWriteMs.p50)}  p90 ${ms(a.failedWriteMs.p90)}  ` +
             `max ${ms(a.failedWriteMs.max)}`);
     }
+    if (a.throttling) {
+        const t = a.throttling;
+        const fmt = (x) => `${x.images} images ${x.imageOkPct == null ? "—" : x.imageOkPct.toFixed(0) + "% ok"}, ` +
+            `${x.texts} lines ${x.textOkPct == null ? "—" : x.textOkPct.toFixed(0) + "% ok"}`;
+        L.push("");
+        L.push(`timers      ${t.lateBeats}/${t.beats} heartbeats late (>10s), worst ${Math.round(t.maxLagMs / 1000)}s` +
+            (t.firstLateAt != null ? `, first at ${Math.round(t.firstLateAt / 1000)}s` : ""));
+        L.push(`  on time   ${fmt(t.onTime)}`);
+        L.push(`  throttled ${fmt(t.throttled)}`);
+        if (t.keepAlivePausedBeats) L.push(`  keep-alive audio paused on ${t.keepAlivePausedBeats} heartbeat(s) while playing`);
+    }
     if (a.byWearing) {
         const w = a.byWearing;
         const fmt = (x) => `${x.images} images ${x.imageOkPct == null ? "—" : x.imageOkPct.toFixed(0) + "% ok"}, ` +
             `${x.texts} lines ${x.textOkPct == null ? "—" : x.textOkPct.toFixed(0) + "% ok"}`;
         L.push("");
-        L.push(`worn        ${fmt(w.on)}`);
-        L.push(`not worn    ${fmt(w.off)}`);
+        L.push(`reported worn      ${fmt(w.on)}`);
+        L.push(`reported not worn  ${fmt(w.off)}   (the host's flag — seen wrong with the phone asleep)`);
     }
     if (a.fetchMs.n || a.prepareMs.n) {
         L.push("");
@@ -926,6 +1010,18 @@ export function formatReport(session, a = analyse(session)) {
             `${g.kind}${g.playing ? ", app thought it was playing" : ""}${g.endedHere ? ", session ended here" : ""}` +
             (g.stuck ? `\n              stuck behind: ${g.stuck.what} (${(g.stuck.ms / 1000).toFixed(0)}s)` : "") +
             (g.backoff ? `\n              images deliberately paused (backoff)` : ""));
+    }
+    if (a.keyEvents && a.keyEvents.length) {
+        L.push("");
+        L.push("app events (whole session)");
+        const shown = a.keyEvents.length > 30
+            ? [...a.keyEvents.slice(0, 10), null, ...a.keyEvents.slice(-19)] : a.keyEvents;
+        for (const m of shown) {
+            if (!m) { L.push(`  … ${a.keyEvents.length - 29} more`); continue; }
+            const { at, name, ...rest } = m;
+            L.push(`  ${(at / 1000).toFixed(0).padStart(5)}s  ${name}` +
+                `${Object.keys(rest).length ? "  " + JSON.stringify(rest).slice(0, 60) : ""}`);
+        }
     }
     if (a.lifecycle.length) {
         L.push("");

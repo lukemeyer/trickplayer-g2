@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.7
+# Trickplayer for G2 — beta 0.9.8
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.7.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.8.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,23 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Changed in 0.9.8
+
+Reporting only — nothing about playback changed. From the last session: the
+glasses were worn the whole time but reported "not worn", and the phone was
+asleep for most of it, which the app could not see at all.
+
+- **Reports measure whether the phone was asleep**, from how late the app's
+  own timers fire — the phone never tells the app directly.
+- **Every pause and resume is listed**, for the whole session: when the glasses
+  app says it lost the foreground, when the app paused because of it, and when
+  you pressed play.
+- **Reports no longer draw conclusions from the "worn" flag.**
+
+Most useful next session: start playing, **let the phone sleep for several
+minutes with the glasses on**, then wake it — and if the phone can be plugged
+in over USB, I can watch the Bluetooth traffic live while it sleeps.
 
 ## Changed in 0.9.7
 
