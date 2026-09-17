@@ -253,6 +253,10 @@ export function analyse(session) {
     let run = 0, runStart = 0;
     const stalls = [];
     for (const e of real(images)) {
+        // A sweep's failures are the sweep doing its job — it sends sizes chosen
+        // to fail. Counted here, they reported "the picture stopped at 80s"
+        // while nothing was playing.
+        if (e.probe) continue;
         if (!e.ok) { if (run === 0) runStart = e.startedAt; run++; }
         else if (run) { stalls.push({ failures: run, ms: e.endedAt - runStart }); run = 0; }
     }
@@ -758,11 +762,14 @@ export function analyse(session) {
         const okAll = ls.rows.reduce((t, r) => t + (r.successPct / 100) * r.n, 0);
         if (ls.largestLandedKb != null && ls.smallestFailedKb != null &&
             ls.largestLandedKb < ls.smallestFailedKb) {
-            f.unshift(`WITH THE PHONE LOCKED, SMALL PICTURES STILL LAND: payloads up to ` +
-                `${ls.largestLandedKb + 2}KB were mostly delivered and from ${ls.smallestFailedKb}KB mostly failed. ` +
-                `So the glasses app has not stopped taking pictures when locked — the link has slowed ` +
-                `and larger ones no longer finish in time. The fix is on this side: send smaller, more ` +
-                `compressible pictures while the phone is locked.`);
+            // Buckets are 2 KB wide; when the delivered and failed ones touch,
+            // "up to 20 KB delivered, from 20 KB failed" contradicted itself.
+            const edge = ls.largestLandedKb + 2 === ls.smallestFailedKb
+                ? `payloads under ${ls.smallestFailedKb}KB were mostly delivered and from ${ls.smallestFailedKb}KB mostly failed`
+                : `payloads up to ${ls.largestLandedKb + 2}KB were mostly delivered and from ${ls.smallestFailedKb}KB mostly failed`;
+            f.unshift(`WITH THE PHONE LOCKED, SMALL PICTURES STILL LAND: ${edge}. ` +
+                `So the glasses app still takes pictures while locked; the larger ones did not finish in ` +
+                `time. Smaller, more compressible pictures are what gets through.`);
         } else if (okAll / all <= 0.1) {
             f.unshift(`With the phone locked, even the SMALLEST payloads failed (${Math.round(100 * okAll / all)}% ` +
                 `of ${all} delivered). This is not the link slowing down: the glasses app stops taking ` +
@@ -790,12 +797,18 @@ export function analyse(session) {
         const light = bq.filter((q) => q.quality !== "full");
         const lightN = light.reduce((t, q) => t + q.n, 0);
         const lightOk = light.reduce((t, q) => t + (q.okPct / 100) * q.n, 0);
+        // A verdict needs frames to base it on. One lighter frame, sent on a
+        // link seconds from dropping, produced "even lighter pictures are not
+        // getting through; it is not only the link slowing".
+        const MIN_LIGHT = 5;
         f.push(`Pictures were made lighter ${downs.length}x when sends slowed or failed. At the lighter ` +
             `levels ${Math.round((100 * lightOk) / Math.max(1, lightN))}% of ${lightN} were delivered` +
             (full ? `, against ${full.okPct.toFixed(0)}% of ${full.n} at full` : "") +
-            ` — ${lightOk / Math.max(1, lightN) >= 0.8
-                ? "so the ladder is doing its job."
-                : "so even lighter pictures are not getting through; it is not only the link slowing."}`);
+            ` — ${lightN < MIN_LIGHT
+                ? `too few lighter frames to say whether it helped (need ${MIN_LIGHT}).`
+                : lightOk / lightN >= 0.8
+                    ? "so the ladder is doing its job."
+                    : "so even lighter pictures are not getting through; it is not only the link slowing."}`);
     }
 
     const c = out.contention;
@@ -919,6 +932,7 @@ export function analyse(session) {
         ? ok(texts).filter((e) => e.startedAt >= dead.fromMs).length : 0;
     if (dead && sent > 0 && textAfter > 0) {
         const marks = (session.marks || []).filter((m) => m.at >= dead.fromMs);
+        const cutOffAt = marks.find((m) => m.name === "page-reloaded")?.at ?? null;
         const rebuilds = marks.filter((m) => m.name === "page-rebuilt");
         const redeclares = marks.filter((m) => m.name === "containers-repaired");
         const formats = marks.filter((m) => m.name === "image-format-changed");
@@ -948,8 +962,13 @@ export function analyse(session) {
             `THE PICTURE STOPPED at ${(dead.fromMs / 1000).toFixed(0)}s and never came back: ` +
             `${dead.failures} image failures in a row over ${(dead.ms / 60000).toFixed(1)} min, ` +
             `after ${sent} frames had been delivered — while text kept landing ` +
-            `(${textAfter} lines after the picture died). The link was alive, so this is the ` +
-            `image path wedging, not a disconnect. ` +
+            `(${textAfter} lines after the picture died). ` +
+            (cutOffAt != null
+                ? `The session was then cut off: the app was reloaded at ${Math.round(cutOffAt / 1000)}s, ` +
+                  `which is what a dropped connection to the glasses looks like from here — so this may ` +
+                  `have been the link failing, not only the picture path. `
+                : `Subtitles kept landing to the end, so the link itself stayed up and this is the ` +
+                  `picture path failing. `) +
             (recovery.length ? `Recovery: ${recovery.join("; ")}.` : `No recovery was attempted.`) +
             // Where the fault is NOT. With every heartbeat on time the app's
             // JavaScript was running normally, so a picture that takes seconds

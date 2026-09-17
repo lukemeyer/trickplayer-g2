@@ -1288,14 +1288,31 @@ import * as store from "./store";
              * pictures are PAUSED rather than hammered, and that coming back is
              * noticed and recorded.
              */
+            /**
+             * A person's sweep against failing pictures must leave recovery alone:
+             * no rebuild, no backoff, no failure count for playback to inherit.
+             */
+            export async function checkSweepLeavesRecoveryAlone() {
+                const before = { failures: consecutiveImageFailures, backoff: imagesBackingOff(),
+                    rebuiltAt: lastContainerRepairAt };
+                simulateImageWedge({ survivesRebuild: true });
+                await probeLink({ perSize: 1 });
+                imageWedgeInjected = false;
+                const after = { failures: consecutiveImageFailures, backoff: imagesBackingOff(),
+                    rebuiltAt: lastContainerRepairAt };
+                const out = { untouched: JSON.stringify(before) === JSON.stringify(after), before, after };
+                console.log("[sweep-recovery-test]", JSON.stringify(out));
+                return out;
+            }
+
             export async function reproduceStubbornWedge() {
-                await probeLink({ perSize: 1 });                       // prove grey4
+                await probeLink({ perSize: 1, recover: true });                       // prove grey4
                 simulateImageWedge({ survivesRebuild: true, clearsAfterMs: 20000 });
                 lastContainerRepairAt = 0;
-                await probeLink({ perSize: 2 });                       // 10 failures
+                await probeLink({ perSize: 2, recover: true });                       // 10 failures
                 const backedOff = imagesBackingOff();
                 await new Promise((r) => setTimeout(r, 24000));         // wedge lifts
-                await probeLink({ perSize: 1 });                       // should land
+                await probeLink({ perSize: 1, recover: true });                       // should land
                 const out = { backedOff, recovered: consecutiveImageFailures === 0,
                     backoffStepAfter: backoffStep };
                 console.log("[stubborn-test]", JSON.stringify(out));
@@ -1304,14 +1321,14 @@ import * as store from "./store";
 
             export async function reproduceImageWedge() {
                 noteLifecycle("wedge-test", { step: "prove" });
-                await probeLink({ perSize: 2 });
+                await probeLink({ perSize: 2, recover: true });
                 const formatBefore = currentFormat();
                 simulateImageWedge();
                 noteLifecycle("wedge-test", { step: "wedged" });
                 // Past the rebuild cooldown, so the repair is allowed to fire
                 // however recently anything else touched the page.
                 lastContainerRepairAt = 0;
-                await probeLink({ perSize: 4 });
+                await probeLink({ perSize: 4, recover: true });
                 const out = {
                     formatBefore, formatAfter: currentFormat(),
                     wedgeCleared: !imageWedgeInjected,
@@ -2401,10 +2418,26 @@ import * as store from "./store";
                     densities: [0.004, 0.012, 0.025, 0.04, 0.06, 0.08, 0.1],
                     perSize: 3,
                     label: "locked",
+                    paceMs: 1500,
                 });
             }
 
-            export async function probeLink({ densities = null, perSize = 4, label = null } = {}) {
+            /**
+             * @param recover  let failures drive recovery (rebuilds, backoff, the
+             *   format ladder). OFF for any sweep a person runs: a sweep sends
+             *   sizes chosen to FAIL, and letting that drive recovery rebuilt the
+             *   glasses page three times mid-test (the host refused all three),
+             *   put images into backoff, and handed playback a failure count and
+             *   a backoff it had not earned — the first real frame to fail then
+             *   jumped straight to the second backoff step. On hardware, that
+             *   session ended with "connection lost". Only the simulator
+             *   harnesses, which inject a wedge on purpose, turn it on.
+             * @param paceMs   pause between sends. A person's sweep is not a
+             *   throughput test; back-to-back 20 KB transfers each spending 16s
+             *   failing are load on a link that is already struggling.
+             */
+            export async function probeLink({ densities = null, perSize = 4, label = null,
+                                              recover = false, paceMs = 0 } = {}) {
                 // Noise density, not a byte target: what a PNG of dithered grey
                 // actually compresses to is not something to predict, and the
                 // ACTUAL size is what gets recorded. These five bracket the
@@ -2453,11 +2486,7 @@ import * as store from "./store";
                             payload,
                             probeMeta,
                         );
-                        // The sweep used to bypass every failure path in the
-                        // app, so a sweep against a dead image container
-                        // measured twenty rejections and repaired nothing. It
-                        // is the same channel; it gets the same bookkeeping.
-                        await noteImageResult(pr.ok, probeResult);
+                        if (recover) await noteImageResult(pr.ok, probeResult);
                         await ble.sendText(
                             (content) => bridgeInstance.textContainerUpgrade({
                                 containerID: 1, containerName: "g2_subs",
@@ -2465,6 +2494,7 @@ import * as store from "./store";
                             }),
                             `probe ${(bytes.byteLength / 1024).toFixed(0)}KB #${n + 1}`,
                         );
+                        if (paceMs) await new Promise((r) => setTimeout(r, paceMs));
                     }
                 }
             }

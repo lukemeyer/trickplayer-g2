@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.11
+# Trickplayer for G2 — beta 0.9.12
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.11.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.12.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,26 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Fixed in 0.9.12
+
+From a session that ended with **"connection lost"** on the glasses:
+
+- **Sweeps no longer set off picture recovery.** The locked sweep deliberately
+  sends pictures too large to get through. Their failures were being handled
+  like playback failures: the app tried to rebuild the glasses display three
+  times mid-test (all refused) and paused pictures — and then video playback
+  started already in that state, so its first failed frame went straight to a
+  longer pause and another rebuild. Whether that load contributed to the
+  connection dropping isn't known, but it shouldn't have been there.
+- **The locked sweep waits 1.5s between test pictures** instead of sending them
+  back to back.
+- **Reports are more careful:** a sweep's failures aren't counted as "the
+  picture stopped", lighter pictures aren't judged from fewer than five frames,
+  and a session that gets cut off says so.
+
+If "connection lost" happens again, a session with the phone plugged in over
+USB would show what the Bluetooth link did in the seconds before.
 
 ## Changed in 0.9.11
 

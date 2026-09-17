@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.12",
+      "notes": [
+        "Running a picture sweep from the logging panel no longer sets off the app's picture recovery. The sweep sends sizes chosen to fail, and those failures were making the app rebuild the glasses display mid-test and pause pictures \u2014 and playback then started already in that state.",
+        "The locked sweep now pauses between test pictures instead of sending them back to back.",
+        "Logging reports no longer count a sweep's failures as the picture stopping, no longer judge lighter pictures from a single frame, and say when a session was cut off rather than calling it 'not a disconnect'."
+      ]
+    },
     {
       "version": "0.9.11",
       "notes": [

@@ -507,6 +507,61 @@ def("lighter pictures are reported by level, and whether they kept coming", asyn
     };
 });
 
+def("the 'connection lost' session: no sweep blamed, no verdicts from one frame", async () => {
+    // A locked sweep with 18-20 KB failures, then two real frames failing on a
+    // dying link, then the app reloaded. The report said the picture "stopped
+    // at 80s" (the sweep), "not a disconnect" (it was), "up to 20KB delivered
+    // and from 20KB failed", and judged the picture ladder from ONE frame.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const ev = (o) => rec.event({ id: 0, queuedMs: 0, depthAtEnqueue: 1, enqueuedAt: clock,
+        startedAt: clock, endedAt: clock + o.durationMs, ...o });
+    const txt = () => ev({ kind: "text", ok: true, durationMs: 120 });
+    for (const [kb, oks] of [[2, 3], [8, 3], [14, 3], [18, 2], [20, 0]]) {
+        for (let n = 0; n < 3; n++) {
+            const ok = n < oks;
+            ev({ kind: "image", ok, durationMs: ok ? 900 : 12000, bytes: kb * 1024 + 50,
+                probe: true, sweep: "locked", ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+            txt(); clock += ok ? 2500 : 14000;
+            rec.tick({ playing: false, lagMs: 5 });
+        }
+    }
+    for (const [q, to] of [["full", "lighter"], ["lighter", "lightest"]]) {
+        ev({ kind: "image", ok: false, durationMs: 11000, bytes: 16600, quality: q,
+            reason: "failed", result: "sendFailed" });
+        rec.mark("picture-quality", { from: q, to, why: "failed" });
+        txt(); clock += 30000; rec.tick({ playing: true, lagMs: 5 });
+    }
+    rec.mark("page-reloaded", { discarded: false });
+    const a = analyse(rec.session());
+    const all = a.findings.join(" || ");
+
+    // And the same cut-off applied to a genuine long picture death.
+    let c2 = 1_700_000_000_000;
+    const r2 = createRecorder({ now: () => c2 });
+    const e2 = (ok) => r2.event({ id: 0, kind: "image", ok, queuedMs: 0, depthAtEnqueue: 1,
+        enqueuedAt: c2, startedAt: c2, endedAt: c2 + 1500, durationMs: 1500, bytes: 16600,
+        ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+    const t2 = () => r2.event({ id: 0, kind: "text", ok: true, queuedMs: 0, depthAtEnqueue: 1,
+        enqueuedAt: c2, startedAt: c2 + 100, endedAt: c2 + 200, durationMs: 100 });
+    for (let i = 0; i < 6; i++) { e2(true); t2(); c2 += 10000; }
+    for (let i = 0; i < 6; i++) { e2(false); t2(); c2 += 10000; }
+    r2.mark("page-reloaded", {});
+    const lead2 = analyse(r2.session()).findings[0] || "";
+
+    return {
+        pass: !/THE PICTURE STOPPED at 80s/.test(all) &&
+              !a.stalls.some((st) => st.failures > 2) &&
+              /under 20KB were mostly delivered and from 20KB mostly failed/.test(all) &&
+              /too few lighter frames to say/.test(all) && !/even lighter pictures are not/.test(all) &&
+              /cut off/.test(lead2) && !/link itself stayed up/.test(lead2),
+        detail: `stalls ${JSON.stringify(a.stalls.map((st) => st.failures))}; ` +
+            `${(all.match(/under 20KB[^.]*/) || ["NO THRESHOLD"])[0]}; ` +
+            `${/too few lighter/.test(all) ? "ladder: too few to judge" : "LADDER JUDGED"}; ` +
+            `${/cut off/.test(lead2) ? "cut-off named" : "CUT-OFF MISSED"}`,
+    };
+});
+
 def("a slow patch shows up in the minute-by-minute timeline", async () => {
     // The link slowdown is intermittent and the report cannot see a lock, so
     // the timeline has to show WHEN sends got slow, and at which picture level.

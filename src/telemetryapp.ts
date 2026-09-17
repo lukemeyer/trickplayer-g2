@@ -106,6 +106,10 @@ if (flags.has("locksweep")) {
     setTimeout(() => $("tlm-lockprobe").click(), 3000);
 }
 
+if (flags.has("sweeptest")) {
+    setTimeout(() => engine.checkSweepLeavesRecoveryAlone(), 3000);
+}
+
 if (flags.has("noimage")) {
     engine.simulateImageRejection(flags.get("noimage") || "rgba");
 }
