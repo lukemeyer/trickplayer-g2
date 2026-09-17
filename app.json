@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.12",
+  "version": "0.9.13",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,15 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.13",
+      "notes": [
+        "A fourth, smallest picture level for when the link slows badly: very coarse, but about a third the size of the previous smallest, so it has a much better chance of getting through.",
+        "Pictures are no longer paused for up to a minute while smaller ones are still getting through. Pausing now only happens once even the smallest pictures keep failing, and never for more than 20 seconds.",
+        "The app no longer rebuilds the glasses display when pictures are merely slow \u2014 that only helps when the glasses refuse a picture outright.",
+        "Logging reports show subtitle send times per minute alongside pictures, which tells a slow link apart from a picture problem."
+      ]
+    },
     {
       "version": "0.9.12",
       "notes": [

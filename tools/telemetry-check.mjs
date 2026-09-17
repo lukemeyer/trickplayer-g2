@@ -562,6 +562,44 @@ def("the 'connection lost' session: no sweep blamed, no verdicts from one frame"
     };
 });
 
+def("the 12:03 lock session: the verdict comes from subtitles, and backoff is not blamed", async () => {
+    // 14 minutes of full pictures, then the lock: lightest pictures ~50% at
+    // ~4.7s, a backoff pause while playing. Run twice — subtitles slowing with
+    // the pictures (the whole link slowed), and subtitles unaffected (it is
+    // pictures specifically) — the report must say different things.
+    const build = (subsSlow) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        const img = (ok, ms, quality) => rec.event({ id: 0, kind: "image", ok, queuedMs: 0,
+            depthAtEnqueue: 1, enqueuedAt: clock, startedAt: clock, endedAt: clock + ms,
+            durationMs: ms, bytes: 16600, quality, ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+        const txt = (ms) => rec.event({ id: 0, kind: "text", ok: true, queuedMs: 0, depthAtEnqueue: 1,
+            enqueuedAt: clock + 50, startedAt: clock + 50, endedAt: clock + 50 + ms, durationMs: ms });
+        for (let i = 0; i < 60; i++) {                       // 5 minutes, full
+            img(true, 2200, "full"); txt(120); clock += 5000; rec.tick({ playing: true, lagMs: 3 });
+        }
+        rec.mark("picture-quality", { from: "full", to: "lighter", why: "failed" });
+        rec.mark("picture-quality", { from: "lighter", to: "lightest", why: "slow (7437ms)" });
+        for (let i = 0; i < 40; i++) {                       // after the lock
+            img(i % 2 === 0, i % 2 === 0 ? 4700 : 8200, "lightest");
+            txt(subsSlow ? 900 : 125);
+            clock += 12000; rec.tick({ playing: true, lagMs: 3 });
+        }
+        for (let i = 0; i < 6; i++) { clock += 5000; rec.tick({ playing: true, lagMs: 3, imageBackoffMs: 15000 }); }
+        img(true, 4500, "lightest"); txt(subsSlow ? 900 : 125);
+        return analyse(rec.session());
+    };
+    const slowLink = build(true), picturesOnly = build(false);
+    const say = (a, re) => a.findings.some((x) => re.test(x));
+    return {
+        pass: say(slowLink, /subtitles slowed [\d.]+x too/) && say(slowLink, /A smaller level would help/) &&
+              say(picturesOnly, /subtitles did NOT slow/) &&
+              !say(slowLink, /it is not only the link slowing/) &&
+              !say(slowLink, /and it is ours/) && say(slowLink, /pausing pictures on purpose/),
+        detail: (slowLink.findings.find((x) => /made lighter/.test(x)) || "MISSED").slice(90, 230),
+    };
+});
+
 def("a slow patch shows up in the minute-by-minute timeline", async () => {
     // The link slowdown is intermittent and the report cannot see a lock, so
     // the timeline has to show WHEN sends got slow, and at which picture level.

@@ -884,8 +884,16 @@ import * as store from "./store";
             // wedged. And it turns "does it recover if left alone?" from a guess
             // into a line in the report: every backoff and every resumption is
             // marked.
-            const BACKOFF_AFTER = 4;                    // failures in a row
-            const BACKOFF_STEPS_MS = [10000, 20000, 40000, 60000];
+            // Tuned down after a locked session where backoff did more harm than
+            // good: pictures at the smallest level were still landing about half
+            // the time, and pauses of 10, 20, 40 and then 60 seconds made the
+            // longest freeze 226s — mostly deliberate. Now it only engages once
+            // the picture ladder has nothing smaller to try, needs a longer run of
+            // failures there, and never pauses for more than 20s.
+            const BACKOFF_AFTER = 6;                    // failures in a row, at the smallest level
+            const BACKOFF_STEPS_MS = [10000, 20000];
+            /** Faster than this, a failure is the glasses REFUSING, not a transfer timing out. */
+            const QUICK_REFUSAL_MS = 2000;
             let imageBackoffUntil = 0;
             let backoffStep = 0;
             let skippedDuringBackoff = 0;
@@ -1064,7 +1072,8 @@ import * as store from "./store";
                 // was ever marked proven — and the rule that stops the ladder
                 // climbing past a format that works could never fire in the
                 // exact situation it was written for.
-                await noteImageResult(r.ok, lastResult);
+                await noteImageResult(r.ok, lastResult,
+                    { ms: Date.now() - sendStartedAt, quality: prepMeta.quality });
 
                 const attemptsNote = (r.tried?.length ?? 0) > 1 ? ` attempts[${r.tried.join(", ")}]` : "";
                 const stuckNote = consecutiveImageFailures > 0 ? ` STUCK x${consecutiveImageFailures}` : "";
@@ -1158,7 +1167,12 @@ import * as store from "./store";
              * attempted no recovery, and reported a link problem that was not
              * one.
              */
-            async function noteImageResult(ok, result) {
+            /**
+             * @param sent.ms       how long the send took, when known.
+             * @param sent.quality  the picture level it was made at, when known.
+             *   Unknown only for the simulator harnesses' injected wedges.
+             */
+            async function noteImageResult(ok, result, sent = {}) {
                 if (ok) {
                     provenFormats.add(currentFormat());
                     if (backoffStep > 0) {
@@ -1180,7 +1194,9 @@ import * as store from "./store";
                 // Back off once failures are clearly not a blip. Each further
                 // failure — which can only be the single probe frame let through
                 // when a backoff ends — lengthens the next one.
-                if (consecutiveImageFailures >= BACKOFF_AFTER && !imagesBackingOff()) {
+                const atSmallest = sent.quality == null || sent.quality === pictureQuality.current.name &&
+                    pictureQuality.atLowest;
+                if (atSmallest && consecutiveImageFailures >= BACKOFF_AFTER && !imagesBackingOff()) {
                     const ms = BACKOFF_STEPS_MS[Math.min(backoffStep, BACKOFF_STEPS_MS.length - 1)];
                     backoffStep++;
                     imageBackoffUntil = Date.now() + ms;
@@ -1205,7 +1221,15 @@ import * as store from "./store";
                 // rejection — the SDK answering before the radio is touched,
                 // which is why those writes time at 0ms — is the clearest
                 // version of the same signal.
-                await repairContainersIfOneChannelIsDead("image");
+                // Only for a picture the glasses REFUSED quickly. A rebuild answers
+                // a lost container, which shows up as an instant rejection; a send
+                // that failed after eight seconds is a slow link, and rebuilding
+                // the page there only adds another write to it. A locked session
+                // rebuilt the page eight times that way, every one accepted and
+                // none of them helping.
+                if (sent.ms == null || sent.ms < QUICK_REFUSAL_MS) {
+                    await repairContainersIfOneChannelIsDead("image");
+                }
             }
 
             async function repairContainersIfOneChannelIsDead(dead) {
@@ -1601,6 +1625,10 @@ import * as store from "./store";
                             document.getElementById("playing-title")
                                 ?.textContent || "media";
                         setStatus(`Finished: ${title}`, "active");
+                        // A session stopped sending at 1365s with no pause and no
+                        // error, and nothing could say whether the episode had
+                        // simply ended.
+                        noteLifecycle("playback-ended", { atMs: durationMs });
                     }
                 } catch (e) {
                     console.error("[Scene Engine] Pipeline error:", e);

@@ -24,8 +24,8 @@ const { toGlassesLevels, expandBlocks } = await import(pathToFileURL(path.join(T
  * Locked numbers are shaped on the measured sweep — full frames time out,
  * ~40% frames are slow-ish, the smallest are quick.
  */
-const AWAKE = { full: 1700, lighter: 900, lightest: 500 };
-const LOCKED = { full: null, lighter: 3000, lightest: 600 };
+const AWAKE = { full: 1700, lighter: 900, lightest: 500, minimal: 300 };
+const LOCKED = { full: null, lighter: 3000, lightest: 600, minimal: 400 };
 
 function play(ctl, link, frames) {
     const trace = [];
@@ -62,7 +62,7 @@ def("locked for a long time: probing up gets rarer, not constant", () => {
     // A locked link where the lighter rung is FAST, so the controller keeps
     // being tempted to try full pictures again. Each try costs a timeout, so the
     // wait between tries has to grow: 4, 8, 16, 32, then 64 frames.
-    const TEMPTING = { full: null, lighter: 800, lightest: 500 };
+    const TEMPTING = { full: null, lighter: 800, lightest: 500, minimal: 300 };
     const ctl = createQualityController();
     const r = play(ctl, TEMPTING, 300);
     const at = [...r.trace].map((c, i) => (c === "f" ? i : -1)).filter((i) => i >= 0);
@@ -70,6 +70,16 @@ def("locked for a long time: probing up gets rarer, not constant", () => {
     const growing = gaps.every((g, i) => i === 0 || g >= gaps[i - 1]);
     return { pass: at.length <= 8 && growing && r.delivered >= 290,
         detail: `${at.length} full-size attempts in 300 frames at ${at.join(",")}; ${r.delivered} delivered` };
+});
+
+def("a collapsed link: falls through to minimal pictures, which keep landing", () => {
+    // The session behind the fourth rung: lightest took ~5s and failed half the
+    // time. Only minimal frames are quick enough to get through.
+    const COLLAPSED = { full: null, lighter: null, lightest: 9000, minimal: 1500 };
+    const ctl = createQualityController();
+    const r = play(ctl, COLLAPSED, 40);
+    return { pass: ctl.current.name === "minimal" && r.delivered >= 36,
+        detail: `${r.delivered}/40 delivered — ${r.trace}` };
 });
 
 def("unlocking: climbs back to full pictures", () => {

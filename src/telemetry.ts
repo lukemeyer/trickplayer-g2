@@ -504,7 +504,7 @@ export function analyse(session) {
         "user-play", "user-pause", "phone-screen-off", "phone-screen-on",
         "image-backoff", "image-resumed", "page-rebuilt", "containers-repaired",
         "image-format-changed", "page-reloaded", "session-discarded",
-        "picture-quality",
+        "picture-quality", "playback-ended",
     ]);
     out.keyEvents = (session.marks || []).filter((m) => KEY_EVENTS.has(m.name));
 
@@ -516,18 +516,30 @@ export function analyse(session) {
     out.timeline = (() => {
         const MIN = 60000;
         const rows = new Map();
-        for (const e of real(images)) {
+        const row = (k) => rows.get(k) ||
+            rows.set(k, { minute: k, n: 0, ok: 0, ms: [], levels: new Set(), textMs: [], dropped: 0 }).get(k);
+        for (const e of images) {
             if (e.probe) continue;
-            const k = Math.floor(e.startedAt / MIN);
-            const r = rows.get(k) || { minute: k, n: 0, ok: 0, ms: [], levels: new Set() };
+            const r = row(Math.floor(e.startedAt / MIN));
+            // Dropped as stale: a newer frame overtook it in the queue. Worth
+            // seeing per minute — seeking drops frames by design, a slow link
+            // drops them as a symptom.
+            if (e.reason === "superseded") { r.dropped++; continue; }
             r.n++;
             if (e.ok) { r.ok++; r.ms.push(e.durationMs); }
             if (e.quality) r.levels.add(e.quality);
-            rows.set(k, r);
         }
-        return [...rows.values()].sort((a, b) => a.minute - b.minute).map((r) => ({
-            minute: r.minute, n: r.n, okPct: (100 * r.ok) / r.n,
+        // Subtitles on the same clock. A subtitle is a few hundred bytes, so if
+        // subtitles slow down alongside the pictures the whole link slowed; if
+        // they do not, it is something about pictures.
+        for (const e of ok(texts)) {
+            const r = rows.get(Math.floor(e.startedAt / MIN));
+            if (r) r.textMs.push(e.durationMs);
+        }
+        return [...rows.values()].filter((r) => r.n || r.dropped).sort((a, b) => a.minute - b.minute).map((r) => ({
+            minute: r.minute, n: r.n, okPct: r.n ? (100 * r.ok) / r.n : 0,
             writeMs: summarise(r.ms), levels: [...r.levels],
+            textMs: summarise(r.textMs), dropped: r.dropped,
         }));
     })();
 
@@ -603,8 +615,10 @@ export function analyse(session) {
         // that the quiet minute between "the page went away" and "something
         // was playing again" reads as the pipeline stalling. It is not ours,
         // and mislabelling it as ours buries the gaps that are.
+        // Inside the silence, not on its edge: a reload at the very end is the
+        // page coming back AFTER a silence it did not cause.
         const reloaded = allMarks.some(
-            (m) => m.name === "page-reloaded" && m.at >= fromMs && m.at <= toMs);
+            (m) => m.name === "page-reloaded" && m.at > fromMs + 2000 && m.at < toMs - 2000);
         add(first, last, reloaded ? "session restarted" : "pipeline idle",
             !reloaded && inside.some((t) => t.playing));
         add(last, toMs, deadOr(last, toMs), false);
@@ -801,6 +815,28 @@ export function analyse(session) {
         // link seconds from dropping, produced "even lighter pictures are not
         // getting through; it is not only the link slowing".
         const MIN_LIGHT = 5;
+        // Whether subtitles slowed too is what separates "the whole link got
+        // slower than pictures can shrink" from "something about pictures". The
+        // old sentence asserted the second from picture numbers alone.
+        const lighterVerdict = () => {
+            const tl = out.timeline || [];
+            const fullMin = tl.filter((r) => r.levels.length && r.levels.every((q) => q === "full") && r.textMs.n);
+            const lightMin = tl.filter((r) => r.levels.some((q) => q !== "full") && r.textMs.n);
+            if (!fullMin.length || !lightMin.length) {
+                return "so even lighter pictures struggled; there are no subtitle timings to say whether the whole link slowed.";
+            }
+            const med = (xs) => { const v = [...xs].sort((a, b) => a - b); return v[v.length >> 1]; };
+            const before = med(fullMin.map((r) => r.textMs.p50));
+            const during = med(lightMin.map((r) => r.textMs.p50));
+            const factor = during / Math.max(1, before);
+            return factor >= 2
+                ? `so even lighter pictures struggled — and subtitles slowed ${factor.toFixed(1)}x too ` +
+                  `(${Math.round(before)}ms -> ${Math.round(during)}ms), so the whole link slowed further ` +
+                  `than these pictures shrink. A smaller level would help.`
+                : `so even lighter pictures struggled, while subtitles did NOT slow ` +
+                  `(${Math.round(before)}ms -> ${Math.round(during)}ms). The link carries small writes fine — ` +
+                  `this is about pictures specifically, and shrinking them further may not help.`;
+        };
         f.push(`Pictures were made lighter ${downs.length}x when sends slowed or failed. At the lighter ` +
             `levels ${Math.round((100 * lightOk) / Math.max(1, lightN))}% of ${lightN} were delivered` +
             (full ? `, against ${full.okPct.toFixed(0)}% of ${full.n} at full` : "") +
@@ -808,7 +844,7 @@ export function analyse(session) {
                 ? `too few lighter frames to say whether it helped (need ${MIN_LIGHT}).`
                 : lightOk / lightN >= 0.8
                     ? "so the ladder is doing its job."
-                    : "so even lighter pictures are not getting through; it is not only the link slowing."}`);
+                    : lighterVerdict()}`);
     }
 
     const c = out.contention;
@@ -1016,8 +1052,15 @@ export function analyse(session) {
         // that "the pipeline stopping, and it is ours" both accuses the app of
         // a fault it does not have and pads the dead-time total that the
         // headline quotes.
-        const ourIdle = idle.filter((g) => g.playing);
+        // A pause the app took ON PURPOSE (backoff) is not the pipeline
+        // stopping; it said "it is ours" about exactly that once.
+        const ourIdle = idle.filter((g) => g.playing && !g.backoff);
+        const pausedIdle = idle.filter((g) => g.playing && g.backoff);
         const benignIdle = idle.filter((g) => !g.playing);
+        if (pausedIdle.length) {
+            f.push(`${pausedIdle.length} silence(s) while playing were the app pausing pictures on purpose ` +
+                `after repeated failures (backoff), not the pipeline stopping.`);
+        }
         if (ourIdle.length) {
             f.splice((stopped.length ? 1 : 0) + (throttled.length ? 1 : 0) + 1, 0,
                 `${ourIdle.length} of those: the page kept ticking and still sent nothing ` +
@@ -1193,12 +1236,14 @@ export function formatReport(session, a = analyse(session)) {
     }
     if (a.timeline && a.timeline.length > 1) {
         L.push("");
-        L.push("picture sends by minute   (◀ marks a slow or failing minute)");
+        L.push("picture sends by minute   (subs = subtitle send p50; ◀ marks a slow or failing minute)");
         for (const r of a.timeline) {
             const slow = r.okPct < 100 || (r.writeMs.n && r.writeMs.p50 > 4000);
             L.push(`  ${String(r.minute).padStart(3)}m  n=${String(r.n).padStart(3)}  ` +
                 `ok ${r.okPct.toFixed(0).padStart(3)}%  ` +
                 `${r.writeMs.n ? `p50 ${ms(r.writeMs.p50)}  max ${ms(r.writeMs.max)}` : "none landed"}` +
+                `${r.textMs.n ? `  subs ${ms(r.textMs.p50)}` : ""}` +
+                `${r.dropped ? `  dropped ${r.dropped}` : ""}` +
                 `${r.levels.length && !(r.levels.length === 1 && r.levels[0] === "full") ? "  [" + r.levels.join(",") + "]" : ""}` +
                 `${slow ? "  ◀" : ""}`);
         }

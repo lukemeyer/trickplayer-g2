@@ -26,6 +26,11 @@ export const PICTURE_LADDER = [
     { name: "full", shades: 16, block: 1 },          // 100%
     { name: "lighter", shades: 4, block: 1 },        // ~43% — shapes stay sharp, tone is dithered
     { name: "lightest", shades: 4, block: 2 },       // ~15% — half resolution as well
+    // ~5%. Added after a locked session where even "lightest" took 4.7s and
+    // landed only 47% of the time. It is crude — a 64x32 picture — and it is
+    // also a test: if frames this small are still slow, picture size is not
+    // what limits a locked link, and shrinking further is pointless.
+    { name: "minimal", shades: 4, block: 4 },
 ];
 
 export function createQualityController({
@@ -42,6 +47,8 @@ export function createQualityController({
 
     return {
         get current() { return ladder[index]; },
+        /** On the smallest rung: nothing left to shrink. */
+        get atLowest() { return index === ladder.length - 1; },
         get index() { return index; },
         /** For harnesses: put the ladder on a named rung. */
         force(name) {
