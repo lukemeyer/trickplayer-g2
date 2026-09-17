@@ -377,6 +377,35 @@ export function analyse(session) {
         };
     })();
 
+    // 6f. HOW LONG A FAILURE TAKES. The write-time table above is successes
+    //     only, and failures turned out to be the interesting half: a session
+    //     where no failure was ever retried meant every one had outlasted the
+    //     five-second retry budget on its FIRST attempt. Instant, a few
+    //     hundred ms, or many seconds are three different faults.
+    out.failedWriteMs = summarise(images
+        .filter((e) => !e.ok && e.reason !== "superseded" && !e.probe)
+        .map((e) => e.durationMs));
+
+    // 6g. ON THE HEAD OR NOT. The glasses report whether they are being worn,
+    //     and a G2 taken off may well stop drawing. Split outcomes by it, so a
+    //     freeze can be told apart from glasses lying on a table.
+    out.byWearing = (() => {
+        const split = { on: [], off: [] };
+        for (const e of [...images, ...texts]) {
+            if (e.probe || e.reason === "superseded") continue;
+            if (e.wearing === true) split.on.push(e);
+            else if (e.wearing === false) split.off.push(e);
+        }
+        if (!split.off.length) return null;
+        const side = (list) => {
+            const im = list.filter((e) => e.kind === "image");
+            const tx = list.filter((e) => e.kind === "text");
+            const pct = (l) => (l.length ? (100 * l.filter((e) => e.ok).length) / l.length : null);
+            return { images: im.length, imageOkPct: pct(im), texts: tx.length, textOkPct: pct(tx) };
+        };
+        return { on: side(split.on), off: side(split.off) };
+    })();
+
     // 7. GAPS — the thing the first version of this report could not see.
     //
     //    An operation record is proof something happened; a frozen stream is
@@ -416,7 +445,16 @@ export function analyse(session) {
         const alive = proofOfLife.filter((m) => m.at > fromMs + 2000 && m.at < toMs - 2000);
         const add = (a, b, kind, playing) => {
             if (b - a <= GAP_MS) return;
+            // The longest wait any heartbeat in the span reported — the thing a
+            // silence "while the app believed it was playing" was stuck behind.
+            let stuck = null;
+            for (const t of ticks) {
+                if (t.at < a || t.at > b || !Array.isArray(t.doing)) continue;
+                for (const d of t.doing) if (!stuck || d.ms > stuck.ms) stuck = d;
+            }
+            const backoff = ticks.some((t) => t.at >= a && t.at <= b && t.imageBackoffMs);
             gaps.push({ fromMs: a, toMs: b, ms: b - a, kind, playing: !!playing,
+                ...(stuck ? { stuck } : {}), ...(backoff ? { backoff: true } : {}),
                 ...(endedHere && b === toMs ? { endedHere: true } : {}) });
         };
         if (!inside.length) {
@@ -549,6 +587,23 @@ export function analyse(session) {
         );
     }
 
+    // Failures concentrated while the glasses were OFF the head are the
+    // glasses doing what glasses do, not the app — say so before anyone chases
+    // a transport bug that is really a headset on a desk.
+    const bw = out.byWearing;
+    if (bw && bw.off.images >= 3 && bw.off.imageOkPct != null) {
+        const onPct = bw.on.imageOkPct;
+        if (onPct == null || bw.off.imageOkPct + 30 < onPct) {
+            f.push(`Images fail far more with the glasses OFF the head: ${bw.off.imageOkPct.toFixed(0)}% ` +
+                `delivered not worn` + (onPct == null ? "" : ` against ${onPct.toFixed(0)}% worn`) +
+                `. The G2 may stop drawing when it is taken off, so freezes in that window are ` +
+                `probably the headset, not the link — test with them on.`);
+        } else {
+            f.push(`Being worn or not made little difference (${bw.off.imageOkPct.toFixed(0)}% of images ` +
+                `delivered off the head, ${onPct.toFixed(0)}% on) — the failures are not the headset sleeping.`);
+        }
+    }
+
     const c = out.contention;
     if (c && c.contended.n >= 3 && c.clear.n >= 3) {
         const factor = c.contended.p50 / Math.max(1, c.clear.p50);
@@ -674,6 +729,11 @@ export function analyse(session) {
             recovery.push(`containers were re-declared ${redeclares.length}x and refused ${refused}x — ` +
                 `that is \`createStartUpPageContainer\`, which only works at launch, so none of those ` +
                 `could have helped`);
+        }
+        const backoffs = marks.filter((m) => m.name === "image-backoff");
+        if (backoffs.length) {
+            recovery.push(`pictures were paused ${backoffs.length}x to let the glasses recover ` +
+                `(longest ${Math.max(...backoffs.map((m) => m.ms)) / 1000}s) and still failed when retried`);
         }
         if (formats.length) {
             recovery.push(`the encoding was changed ${formats.length}x (to ` +
@@ -804,6 +864,18 @@ export function formatReport(session, a = analyse(session)) {
             L.push(`  ${String(k).padEnd(20)} x${n}`);
         }
     }
+    if (a.failedWriteMs && a.failedWriteMs.n) {
+        L.push(`failure took p50 ${ms(a.failedWriteMs.p50)}  p90 ${ms(a.failedWriteMs.p90)}  ` +
+            `max ${ms(a.failedWriteMs.max)}`);
+    }
+    if (a.byWearing) {
+        const w = a.byWearing;
+        const fmt = (x) => `${x.images} images ${x.imageOkPct == null ? "—" : x.imageOkPct.toFixed(0) + "% ok"}, ` +
+            `${x.texts} lines ${x.textOkPct == null ? "—" : x.textOkPct.toFixed(0) + "% ok"}`;
+        L.push("");
+        L.push(`worn        ${fmt(w.on)}`);
+        L.push(`not worn    ${fmt(w.off)}`);
+    }
     if (a.fetchMs.n || a.prepareMs.n) {
         L.push("");
         L.push(`fetch        n=${a.fetchMs.n}  p50 ${ms(a.fetchMs.p50)}  p90 ${ms(a.fetchMs.p90)}  ` +
@@ -851,7 +923,9 @@ export function formatReport(session, a = analyse(session)) {
         `${(a.deadMs / 1000).toFixed(0)}s dead, longest ${(a.longestGapMs / 1000).toFixed(0)}s`);
     for (const g of a.gaps.slice(0, 8)) {
         L.push(`  ${(g.fromMs / 1000).toFixed(0).padStart(5)}s +${(g.ms / 1000).toFixed(0).padStart(4)}s  ` +
-            `${g.kind}${g.playing ? ", app thought it was playing" : ""}${g.endedHere ? ", session ended here" : ""}`);
+            `${g.kind}${g.playing ? ", app thought it was playing" : ""}${g.endedHere ? ", session ended here" : ""}` +
+            (g.stuck ? `\n              stuck behind: ${g.stuck.what} (${(g.stuck.ms / 1000).toFixed(0)}s)` : "") +
+            (g.backoff ? `\n              images deliberately paused (backoff)` : ""));
     }
     if (a.lifecycle.length) {
         L.push("");

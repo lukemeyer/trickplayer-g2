@@ -1,4 +1,4 @@
-# Trickplayer for G2 — beta 0.9.6
+# Trickplayer for G2 — beta 0.9.7
 
 Watch an episode on your glasses as trick-play frames and subtitles. The
 picture updates every few seconds while the dialogue keeps pace, so you follow
@@ -6,7 +6,7 @@ the story without a screen in front of you.
 
 ## Installing
 
-**`trickplayer-0.9.6.ehpk`** — sideload through EvenHub.
+**`trickplayer-0.9.7.ehpk`** — sideload through EvenHub.
 
 Or open it in a browser with the glasses paired:
 **https://lukemeyer.github.io/trickplayer-g2/**
@@ -61,6 +61,23 @@ The first two are the ones worth trying to break:
    should return. Subtitles returning late, or not at all, is the interesting
    failure.
 3. Leave it running for **fifteen minutes** and see whether it drifts.
+
+## Changed in 0.9.7
+
+- **Rebuilding the display page does not fix a frozen picture.** On real
+  glasses the page rebuild from 0.9.5 was accepted three times and pictures
+  still failed, so that is not the cause.
+- **When pictures keep failing, the app backs off** — pauses pictures for 10s,
+  then 20s, 40s, up to a minute, trying one frame between each — instead of
+  sending another every few seconds while each refusal takes the glasses five
+  seconds or more. Subtitles continue. If pictures start landing again, the
+  report records it.
+- **Reports can now tell three things apart** that the last one could not: how
+  long a failed picture send takes, whether failures happened with the glasses
+  **on or off your head**, and what the app was waiting on during a silence.
+
+Worth testing: a long session with the glasses **on the whole time**, then one
+where you take them off for a few minutes and put them back on.
 
 ## Fixed in 0.9.6
 

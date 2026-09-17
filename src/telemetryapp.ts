@@ -93,6 +93,14 @@ if (flags.has("wedgetest")) {
     }, 4000);
 }
 
+/** `?stubborntest=1`: a wedge rebuilds cannot clear, which lifts by itself. */
+if (flags.has("stubborntest")) {
+    setTimeout(async () => {
+        await engine.reproduceStubbornWedge();
+        $("tlm-report").click();
+    }, 4000);
+}
+
 if (flags.has("noimage")) {
     engine.simulateImageRejection(flags.get("noimage") || "rgba");
 }

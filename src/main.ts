@@ -839,8 +839,47 @@ import * as store from "./store";
                 }));
             }
 
+            /** In-flight waits, so a heartbeat can say what a silence was stuck behind. */
+            const activity = new Map();
+            let activitySeq = 0;
+            async function during(what, work) {
+                const key = ++activitySeq;
+                activity.set(key, { what, since: Date.now() });
+                try { return await work; } finally { activity.delete(key); }
+            }
+
+            // --- IMAGE BACKOFF ---------------------------------------------
+            //
+            // When the glasses stop taking pictures, stop throwing pictures at
+            // them. A hardware session showed the image path refusing everything
+            // for four minutes, each refusal taking FIVE SECONDS OR MORE of host
+            // effort, while the app sent another every scene — and three
+            // accepted page rebuilds changed nothing, so the page was never the
+            // problem. Subtitles carried on throughout.
+            //
+            // Two things this buys. It stops a wedged image path being hammered
+            // back into the ground every few seconds, which may be what keeps it
+            // wedged. And it turns "does it recover if left alone?" from a guess
+            // into a line in the report: every backoff and every resumption is
+            // marked.
+            const BACKOFF_AFTER = 4;                    // failures in a row
+            const BACKOFF_STEPS_MS = [10000, 20000, 40000, 60000];
+            let imageBackoffUntil = 0;
+            let backoffStep = 0;
+            let skippedDuringBackoff = 0;
+
+            function imagesBackingOff() {
+                return Date.now() < imageBackoffUntil;
+            }
+
             async function sendImageToGlasses(frameIndex) {
                 if (!bridgeInstance || frameIndex == null || frameIndex < 0) return 0;
+                if (imagesBackingOff()) {
+                    // Not even fetched: the frame would be stale by the time the
+                    // backoff ends, and the network is not the thing resting.
+                    skippedDuringBackoff++;
+                    return 0;
+                }
                 const frame = bifs[frameIndex];
 
                 // The bytes come from the SOURCE, one frame at a time, rather
@@ -850,8 +889,8 @@ import * as store from "./store";
                 let assets;
                 const cached = !!peekFrameUrl(frameIndex);
                 try {
-                    assets = await timed("fetch", { frameIndex, cached },
-                        () => getFrameAssets(frameIndex));
+                    assets = await during("frame fetch", timed("fetch", { frameIndex, cached },
+                        () => getFrameAssets(frameIndex)));
                 } catch (e) {
                     // A frame comes off the network every scene; the subtitles
                     // were parsed once at load and live in memory. So when the
@@ -933,7 +972,7 @@ import * as store from "./store";
                 // writes the record — which is why it is one object rather than
                 // a value passed in.
                 const imageMeta = { tsMs: frame.tsMs, bytes: preparedBytes.byteLength };
-                const r = await ble.sendImage(
+                const r = await during("image write", ble.sendImage(
                     async (p) => {
                         if (imageWedgeInjected ||
                             (rejectImagesUntilFormat && currentFormat() !== rejectImagesUntilFormat)) {
@@ -941,7 +980,8 @@ import * as store from "./store";
                             imageMeta.result = lastResult;
                             return false;
                         }
-                        lastResult = await bridgeInstance.updateImageRawData(p);
+                        lastResult = await during("glasses answering an image",
+                            bridgeInstance.updateImageRawData(p));
                         imageMeta.result = lastResult;
                         return lastResult === "success";
                     },
@@ -952,7 +992,7 @@ import * as store from "./store";
                     // the write times all being 0ms. The SDK told us the reason
                     // every single time; we were throwing it away.
                     imageMeta,
-                );
+                ));
 
                 // The glasses can fail to READ a frame rather than fail to
                 // receive it, and they say which. 4-bit greyscale is the
@@ -1042,7 +1082,10 @@ import * as store from "./store";
                 })) === true;
                 // Injected faults clear only on a rebuild that WORKED — the
                 // mistake above was a test double more forgiving than the host.
-                if (ok) { containerLossInjected = false; imageWedgeInjected = false; }
+                if (ok) {
+                    containerLossInjected = false;
+                    if (!wedgeSurvivesRebuild) imageWedgeInjected = false;
+                }
                 return ok;
             }
 
@@ -1081,11 +1124,35 @@ import * as store from "./store";
             async function noteImageResult(ok, result) {
                 if (ok) {
                     provenFormats.add(currentFormat());
+                    if (backoffStep > 0) {
+                        noteLifecycle("image-resumed", {
+                            afterBackoffs: backoffStep, skipped: skippedDuringBackoff,
+                        });
+                        console.warn(`[Recovery] Images are landing again after ` +
+                            `${backoffStep} backoff(s), ${skippedDuringBackoff} frame(s) skipped`);
+                    }
+                    backoffStep = 0;
+                    skippedDuringBackoff = 0;
+                    imageBackoffUntil = 0;
                     consecutiveImageFailures = 0;
                     return;
                 }
                 consecutiveImageFailures++;
                 imageFailureCount++;
+
+                // Back off once failures are clearly not a blip. Each further
+                // failure — which can only be the single probe frame let through
+                // when a backoff ends — lengthens the next one.
+                if (consecutiveImageFailures >= BACKOFF_AFTER && !imagesBackingOff()) {
+                    const ms = BACKOFF_STEPS_MS[Math.min(backoffStep, BACKOFF_STEPS_MS.length - 1)];
+                    backoffStep++;
+                    imageBackoffUntil = Date.now() + ms;
+                    noteLifecycle("image-backoff", {
+                        ms, step: backoffStep, afterFailures: consecutiveImageFailures, result,
+                    });
+                    console.warn(`[Recovery] ${consecutiveImageFailures} image failures in a row — ` +
+                        `pausing pictures for ${ms / 1000}s (subtitles continue)`);
+                }
 
                 // Escalate on repeated failure of a format that has NEVER
                 // worked this session — `escalateFormat` refuses a proven one.
@@ -1178,6 +1245,26 @@ import * as store from "./store";
              * simulator finishes in about a second, so a wedge on a timer landed
              * after it with nothing left to fail.
              */
+            /**
+             * The wedge hardware actually produced — rebuilds accepted, images
+             * still refused — lifting on its own after a while. Checks that
+             * pictures are PAUSED rather than hammered, and that coming back is
+             * noticed and recorded.
+             */
+            export async function reproduceStubbornWedge() {
+                await probeLink({ perSize: 1 });                       // prove grey4
+                simulateImageWedge({ survivesRebuild: true, clearsAfterMs: 20000 });
+                lastContainerRepairAt = 0;
+                await probeLink({ perSize: 2 });                       // 10 failures
+                const backedOff = imagesBackingOff();
+                await new Promise((r) => setTimeout(r, 24000));         // wedge lifts
+                await probeLink({ perSize: 1 });                       // should land
+                const out = { backedOff, recovered: consecutiveImageFailures === 0,
+                    backoffStepAfter: backoffStep };
+                console.log("[stubborn-test]", JSON.stringify(out));
+                return out;
+            }
+
             export async function reproduceImageWedge() {
                 noteLifecycle("wedge-test", { step: "prove" });
                 await probeLink({ perSize: 2 });
@@ -1205,9 +1292,18 @@ import * as store from "./store";
              * telemetry page's `?noimage=1`.
              */
             let imageWedgeInjected = false;
-            export function simulateImageWedge() {
+            let wedgeSurvivesRebuild = false;
+            /**
+             * @param opts.survivesRebuild  what hardware actually did: three
+             *   accepted rebuilds, images still refused.
+             * @param opts.clearsAfterMs    let it lift on its own, so "does
+             *   backing off let it recover" can be exercised end to end.
+             */
+            export function simulateImageWedge({ survivesRebuild = false, clearsAfterMs = 0 } = {}) {
                 imageWedgeInjected = true;
-                noteLifecycle("injected-image-wedge");
+                wedgeSurvivesRebuild = survivesRebuild;
+                if (clearsAfterMs) setTimeout(() => { imageWedgeInjected = false; }, clearsAfterMs);
+                noteLifecycle("injected-image-wedge", { survivesRebuild, clearsAfterMs });
             }
 
             let containerLossInjected = false;
@@ -1321,7 +1417,7 @@ import * as store from "./store";
                             `[Scene Engine] Awaiting image at ${scene.startMs}ms (scene: ${scene.duration.toFixed(0)}ms, subs: ${scene.subtitles.length})`,
                         );
                         try {
-                            await imageSend;
+                            await during("waiting for this scene's image", imageSend);
                         } catch (e) {
                             console.error(
                                 "[Scene Engine] Image send failed:",
@@ -1377,7 +1473,7 @@ import * as store from "./store";
 
                             // Send to glasses (sendSubtitleToGlasses deduplicates automatically)
                             try {
-                                await sendSubtitleToGlasses(block.text);
+                                await during("subtitle write", sendSubtitleToGlasses(block.text));
                             } catch (e) {
                                 console.error(
                                     "[Scene Engine] Subtitle send failed:",
@@ -1393,7 +1489,7 @@ import * as store from "./store";
 
                             // Hold the block on screen for its combined duration
                             if (!signal.aborted && displayDuration > 0) {
-                                await sleep(displayDuration, signal);
+                                await during("showing a subtitle", sleep(displayDuration, signal));
                             }
 
                             // 4. Blank the screen only if the next on-screen text is a
@@ -1426,7 +1522,7 @@ import * as store from "./store";
                         const sceneElapsed = performance.now() - sceneWallStart;
                         const remainder = scene.duration - sceneElapsed;
                         if (!signal.aborted && remainder > 0) {
-                            await sleep(remainder, signal);
+                            await during("pacing the scene", sleep(remainder, signal));
                         }
 
                         // 7. Advance to the next scene; its image is already sending.
@@ -1901,12 +1997,21 @@ import * as store from "./store";
 
             /** What the app believes it is doing, for the heartbeat to stamp. */
             export function playbackState() {
+                const t = Date.now();
                 return {
                     playing: isPlaying,
                     pipeline: scenePipelineRunning,
                     scene: sceneList.length ? currentTimeMs : null,
                     bridge: !!bridgeInstance,
                     hidden: document.hidden,
+                    // What the engine is waiting on, oldest first. A report once
+                    // showed sixty seconds of silence "while the app believed it
+                    // was playing" and could not say what it was stuck behind —
+                    // a write the glasses never answered, a fetch, or a sleep.
+                    doing: [...activity.values()]
+                        .sort((a, b) => a.since - b.since)
+                        .map((a) => ({ what: a.what, ms: t - a.since })),
+                    ...(imageBackoffUntil > t ? { imageBackoffMs: imageBackoffUntil - t } : {}),
                 };
             }
 

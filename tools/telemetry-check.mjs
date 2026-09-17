@@ -460,6 +460,56 @@ def("it blames the ENCODING when only our own frames fail", async () => {
     };
 });
 
+def("a silence while playing names what the engine was stuck behind", async () => {
+    // A hardware report: "60s, app thought it was playing" — and nothing to say
+    // whether that was a write the glasses never answered, a fetch, or a sleep.
+    let clock = 1_700_000_000_000;
+    const rec = createRecorder({ now: () => clock });
+    const img = () => { rec.event({ id: 0, kind: "image", ok: true, enqueuedAt: clock, startedAt: clock,
+        endedAt: clock + 1500, queuedMs: 0, durationMs: 1500, depthAtEnqueue: 1, bytes: 16600 }); clock += 5000; };
+    for (let i = 0; i < 3; i++) img();
+    for (let i = 0; i < 12; i++) {
+        rec.tick({ playing: true, doing: [{ what: "glasses answering an image", ms: 5000 * (i + 1) }] });
+        clock += 5000;
+    }
+    for (let i = 0; i < 3; i++) img();
+    const a = analyse(rec.session());
+    const g = a.gaps.find((x) => x.playing);
+    const text = formatReport(rec.session(), a);
+    return {
+        pass: g?.stuck?.what === "glasses answering an image" && g.stuck.ms === 60000 &&
+              /stuck behind: glasses answering an image \(60s\)/.test(text),
+        detail: g?.stuck ? `stuck behind ${g.stuck.what} for ${g.stuck.ms / 1000}s` : "NO CAUSE",
+    };
+});
+
+def("it tells the headset being off apart from a transport fault", async () => {
+    const build = (offOk) => {
+        let clock = 1_700_000_000_000;
+        const rec = createRecorder({ now: () => clock });
+        const img = (ok, wearing) => {
+            rec.setContext({ wearing });
+            rec.event({ id: 0, kind: "image", ok, enqueuedAt: clock, startedAt: clock,
+                endedAt: clock + (ok ? 1500 : 6000), queuedMs: 0, durationMs: ok ? 1500 : 6000,
+                depthAtEnqueue: 1, bytes: 16600, ...(ok ? {} : { reason: "failed", result: "sendFailed" }) });
+            clock += 8000;
+        };
+        for (let i = 0; i < 10; i++) img(true, true);
+        for (let i = 0; i < 10; i++) img(offOk ? i % 10 !== 0 : false, false);
+        return analyse(rec.session());
+    };
+    const offFails = build(false), offFine = build(true);
+    const text = formatReport({ ...{}, ...{} , events: [], marks: [], durationMs: 0 }, offFails);
+    return {
+        pass: offFails.findings.some((x) => /OFF the head/.test(x)) &&
+              offFine.findings.some((x) => /made little difference/.test(x)) &&
+              offFails.failedWriteMs.p50 === 6000 && /not worn/.test(text),
+        detail: `failures off-head: ${offFails.byWearing.off.imageOkPct}% ok -> ` +
+            `${offFails.findings.some((x) => /OFF the head/.test(x)) ? "blamed on headset" : "MISSED"}; ` +
+            `failure took p50 ${offFails.failedWriteMs.p50}ms`,
+    };
+});
+
 def("a picture that dies for good leads the report, measured to the end", async () => {
     // The session that prompted this: ten minutes of frames, then every image
     // `sendFailed` until the end while text kept landing. The old report said
