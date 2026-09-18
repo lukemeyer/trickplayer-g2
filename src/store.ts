@@ -37,10 +37,14 @@ const KEYS = [
     "trickplayer.sources",
     "trickplayer.lastSource",
     "trickplayer.pendingAuth",
-    // Small on purpose — just "was the recorder on". The session it belongs to
-    // is far too big to hydrate for everyone, so it goes through the bulk
+    // Small on purpose — just "was this switched on". The report session's own
+    // data is far too big to hydrate for everyone, so it goes through the bulk
     // accessors below instead.
-    "trickplayer.logging",
+    //
+    // Two switches, because they are two features: a copy of the console, and
+    // the link recorder. Both default OFF when absent.
+    "trickplayer.logMessages",
+    "trickplayer.reportSession",
     // The last five things played, with everything needed to start one again
     // from the glasses alone. ~200 bytes each.
     "trickplayer.recent",

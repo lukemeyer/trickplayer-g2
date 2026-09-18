@@ -12,7 +12,7 @@
 // are its real remaining job: the simulator has no pointer into the webview, so
 // everything a finger would do has to be reachable from the address bar.
 
-import { enableLogging } from "./logging";
+import { openDebugPanel, startReportSession, runTest, generateReportNow, isTestRunning, hintText } from "./logging";
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,7 +43,10 @@ const engine = await import("./main");
 // `?fresh=1` starts a new session instead of resuming the stored one. A harness
 // run that resumes whatever the last run left behind cannot attribute a single
 // number in its own report.
-const recorder = await enableLogging(engine, { resume: !flags0().has("fresh") });
+// The page is the one place where recording IS the point of being here, so it
+// opens the panel and starts a session outright rather than waiting to be asked.
+openDebugPanel(engine);
+const recorder = await startReportSession(engine, { resume: !flags0().has("fresh") });
 function flags0() { return new URLSearchParams(location.search); }
 
 /** `?play=1` starts the first playable item and leaves it running. */
@@ -89,7 +92,7 @@ if (flags.has("notext")) {
 if (flags.has("wedgetest")) {
     setTimeout(async () => {
         await engine.reproduceImageWedge();
-        $("tlm-report").click();
+        generateReportNow();
     }, 4000);
 }
 
@@ -97,13 +100,13 @@ if (flags.has("wedgetest")) {
 if (flags.has("stubborntest")) {
     setTimeout(async () => {
         await engine.reproduceStubbornWedge();
-        $("tlm-report").click();
+        generateReportNow();
     }, 4000);
 }
 
 /** `?locksweep=1` presses the locked-sweep button — for checking the flow, not locking. */
 if (flags.has("locksweep")) {
-    setTimeout(() => $("tlm-lockprobe").click(), 3000);
+    setTimeout(() => runTest("lockprobe"), 3000);
 }
 
 if (flags.has("sweeptest")) {
@@ -115,7 +118,7 @@ if (flags.has("noimage")) {
 }
 
 if (flags.has("formats")) {
-    setTimeout(() => $("tlm-formats").click(), 2500);
+    setTimeout(() => runTest("formats"), 2500);
 }
 
 /**
@@ -127,8 +130,8 @@ if (flags.has("noimage")) {
 }
 
 if (flags.has("probe")) {
-    setTimeout(() => $("tlm-probe").click(), 2500);
-    setTimeout(() => $("tlm-report").click(), 90_000);
+    setTimeout(() => runTest("probe"), 2500);
+    setTimeout(() => generateReportNow(), 90_000);
 }
 
 /**
@@ -138,9 +141,9 @@ if (flags.has("probe")) {
  */
 if (flags.has("prep")) {
     setTimeout(async () => {
-        $("tlm-prep").click();
-        while ($("tlm-prep").disabled) await new Promise((r) => setTimeout(r, 100));
-        console.log("[prep-probe]", $("tlm-hint").textContent);
+        runTest("prep");
+        while (isTestRunning()) await new Promise((r) => setTimeout(r, 100));
+        console.log("[prep-probe]", hintText());
     }, 2500);
 }
 
@@ -158,11 +161,8 @@ if (flags.get("quality")) {
 
 // Last, so the recorder is attached before the app can send anything.
 import("./ui").then(() => {
-    // The markup came across with the "Connect with logging" buttons in it, and
-    // here the recorder is already on. Nothing to go to.
-    for (const btn of document.querySelectorAll("[data-logging]")) {
-        btn.remove();
-    }
+    // Nothing to strip any more: the in-app entry point is a single toolbar
+    // button, and here the panel is already open.
 }).catch((e) => {
     $("tlm-hint").textContent = `Could not load the app: ${e.message}`;
 });
