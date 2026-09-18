@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.22",
+  "version": "0.9.23",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.23",
+      "notes": [
+        "Browse on the glasses. The list now has three ways in — Recently played, Continue watching, and Playlists — and you can walk into a playlist or a show and back out again without touching the phone.",
+        "Items on the glasses show where you left off, taken from your media server, so Continue watching means the same thing here as it does everywhere else.",
+        "\"Return to list\" now returns to the level you were on, rather than to the top."
+      ]
+    },
     {
       "version": "0.9.22",
       "notes": [
