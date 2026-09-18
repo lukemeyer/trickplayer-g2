@@ -14,8 +14,71 @@
          source; it is not a screen you dismiss. -->
 
     <div class="status-bar">
+      <!-- Settings are not a property of the thing you are about to watch, so
+           they do not live on its screen. One way in, from anywhere. -->
+      <button class="icon-btn" id="settings-open" aria-label="Settings" title="Settings">⚙</button>
       <span class="status-indicator" id="status-indicator"></span>
       <span id="even-status">Starting…</span>
+    </div>
+
+    <!-- =========================== SETTINGS ============================ -->
+    <div class="overlay hidden" id="panel-settings">
+      <div class="overlay-card">
+        <div class="overlay-head">
+          <h2>Settings</h2>
+          <button class="icon-btn" id="settings-close" aria-label="Close settings" title="Close">✕</button>
+        </div>
+
+        <h3>Playback</h3>
+        <div class="control-row">
+          <label for="opt-skip-silent">Skip scenes with no subtitles</label>
+          <input type="checkbox" id="opt-skip-silent" />
+        </div>
+        <p class="text-muted" id="skip-silent-note"></p>
+
+        <div class="control-row">
+          <label for="opt-report-progress">Report progress back to server</label>
+          <input type="checkbox" id="opt-report-progress" />
+        </div>
+        <p class="text-muted">
+          Updates your Plex or Jellyfin position as you watch, so other apps
+          continue where the glasses left off. Off by default: it changes what
+          every other device shows.
+        </p>
+
+        <div class="control-row">
+          <label for="opt-bandwidth">Bandwidth</label>
+          <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
+        </div>
+        <div class="control-row">
+          <span class="text-muted">Fewer images</span>
+          <span class="text-muted">Every scene</span>
+        </div>
+        <p class="text-muted" id="bandwidth-note"></p>
+
+        <h3>Picture</h3>
+        <div class="control-row">
+          <label for="opt-contrast">Contrast</label>
+          <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
+        </div>
+        <div class="control-row">
+          <label>Texture</label>
+          <span class="segmented">
+            <button class="btn-secondary active" data-texture="floyd-steinberg">Smooth</button>
+            <button class="btn-secondary" data-texture="atkinson">Crisp</button>
+            <button class="btn-secondary" data-texture="threshold">Flat</button>
+          </span>
+        </div>
+        <div class="control-row">
+          <label for="opt-brightness">Brightness</label>
+          <input type="range" id="opt-brightness" min="-100" max="100" step="1" value="0" />
+        </div>
+        <div class="control-row">
+          <label for="opt-gamma">Gamma</label>
+          <input type="range" id="opt-gamma" min="50" max="200" step="5" value="100" />
+        </div>
+        <button class="btn-secondary" id="picture-reset">Reset picture</button>
+      </div>
     </div>
 
     <!-- ============================ SOURCES ============================ -->
@@ -96,50 +159,6 @@
         <p class="text-muted" id="preview-note"></p>
         <button class="btn-secondary hidden" id="preview-load">Preview</button>
       </div>
-
-      <h3>Options</h3>
-
-      <div class="control-row">
-        <label for="opt-skip-silent">Skip scenes with no subtitles</label>
-        <input type="checkbox" id="opt-skip-silent" checked />
-      </div>
-      <p class="text-muted" id="skip-silent-note"></p>
-
-      <div class="control-row">
-        <label for="opt-bandwidth">Bandwidth</label>
-        <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
-      </div>
-      <div class="control-row">
-        <span class="text-muted">Fewer images</span>
-        <span class="text-muted">Every scene</span>
-      </div>
-      <p class="text-muted" id="bandwidth-note"></p>
-
-      <h3>Picture</h3>
-      <div class="control-row">
-        <label for="opt-contrast">Contrast</label>
-        <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
-      </div>
-      <div class="control-row">
-        <label>Texture</label>
-        <span class="segmented">
-          <button class="btn-secondary active" data-texture="floyd-steinberg">Smooth</button>
-          <button class="btn-secondary" data-texture="atkinson">Crisp</button>
-          <button class="btn-secondary" data-texture="threshold">Flat</button>
-        </span>
-      </div>
-      <details>
-        <summary class="text-muted">More picture settings</summary>
-        <div class="control-row">
-          <label for="opt-brightness">Brightness</label>
-          <input type="range" id="opt-brightness" min="-100" max="100" step="1" value="0" />
-        </div>
-        <div class="control-row">
-          <label for="opt-gamma">Gamma</label>
-          <input type="range" id="opt-gamma" min="50" max="200" step="5" value="100" />
-        </div>
-        <button class="btn-secondary" id="picture-reset">Reset picture</button>
-      </details>
 
       <button class="btn-secondary" id="item-play">Play on glasses</button>
       <button class="btn-secondary" id="item-back">Back</button>

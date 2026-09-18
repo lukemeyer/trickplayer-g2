@@ -785,7 +785,7 @@ import * as store from "./store";
             // The two policy options. Neither is a rule: both change which
             // scenes exist, so both rebuild the list rather than being consulted
             // during playback (UI.md §4.2).
-            let skipSilent = true;
+            let skipSilent = false;   // off unless the wearer asks; see the settings overlay
             let bandwidthStride = 1; // 1 = every scene
 
             /** Per-scene bytes over BLE — fixed, whatever the provider charged (F-040). */
@@ -1189,9 +1189,8 @@ import * as store from "./store";
             // is now the shape of the thing that is coming — a thin frame where
             // the picture will be — and an invitation.
             const IDLE_TEXT = "Select video to begin";
-            const MENU_RECENT_ID = 1;
+            const MENU_RETURN_ID = 1;
             const MENU_PLAYPAUSE_ID = 2;
-            const MENU_STOP_ID = 3;
             const MENU_RESTART_ID = 4;
             const RECENT_CONTAINER_ID = 3;
 
@@ -1254,10 +1253,11 @@ import * as store from "./store";
                 if (sceneList.length) {
                     items.push({ itemID: MENU_PLAYPAUSE_ID, itemName: "Play / Pause" });
                     items.push({ itemID: MENU_RESTART_ID, itemName: "Play from start" });
-                    items.push({ itemID: MENU_STOP_ID, itemName: "Stop" });
                 }
-                if (recentTitles.length) {
-                    items.push({ itemID: MENU_RECENT_ID, itemName: "Recently played" });
+                // One way back: stopping and showing the list were two entries
+                // for what is, from the wearer's side, a single intention.
+                if (sceneList.length || recentTitles.length) {
+                    items.push({ itemID: MENU_RETURN_ID, itemName: "Return to list" });
                 }
                 return items.length ? { menuItems: items } : undefined;
             }
@@ -2326,7 +2326,9 @@ import * as store from "./store";
                 if (menuId != null) {
                     menuActiveAt = Date.now();
                     noteLifecycle("menu-item", { itemID: menuId });
-                    if (menuId === MENU_RECENT_ID) {
+                    if (menuId === MENU_RETURN_ID) {
+                        console.log("[Menu] return to list");
+                        if (sceneList.length) stop();
                         showRecentOnGlasses().catch(() => {});
                     } else if (menuId === MENU_PLAYPAUSE_ID) {
                         console.log(`[Menu] play/pause (was ${isPlaying ? "playing" : "paused"})`);
@@ -2335,10 +2337,6 @@ import * as store from "./store";
                         console.log("[Menu] play from start");
                         seekTo(0);
                         if (!isPlaying) play();
-                    } else if (menuId === MENU_STOP_ID) {
-                        console.log("[Menu] stop — back to the recent list");
-                        stop();
-                        showRecentOnGlasses().catch(() => {});
                     }
                     return;
                 }

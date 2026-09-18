@@ -385,6 +385,10 @@ export function createPlexAccount(saved = {}) {
                 return {
                     title: item.title,
                     durationMs: md.duration || null,
+                    // What the progress report has to name. The playback config
+                    // is about BYTES — a part id and a subtitle key — and says
+                    // nothing about which library item they came from.
+                    progressRef: { key: item.ref.key },
                     // The metadata fetch has the authoritative one; the listing's
                     // copy can be older.
                     resumeMs: md.viewOffset || item.resumeMs || 0,
@@ -395,6 +399,38 @@ export function createPlexAccount(saved = {}) {
             }
         }
         return null;
+    }
+
+    /**
+     * Tell the server where the wearer has got to.
+     *
+     * Plex's own clients use `/:/timeline`, and it is what moves an item in and
+     * out of Continue Watching. Off by default in the UI: this changes what
+     * every other device shows.
+     */
+    async function reportProgress(ref, positionMs, state = "playing", durationMs = 0) {
+        if (!ref?.key) return false;
+        try {
+            await withRoute(async (base) => {
+                const p = new URLSearchParams({
+                    ratingKey: String(ref.key),
+                    key: `/library/metadata/${ref.key}`,
+                    identifier: "com.plexapp.plugins.library",
+                    state,
+                    time: String(Math.max(0, Math.round(positionMs))),
+                    duration: String(Math.max(0, Math.round(durationMs || 0))),
+                });
+                const res = await timedFetch(`${base.replace(/\/$/, "")}/:/timeline?${p}`, {
+                    headers: { Accept: "application/json", "X-Plex-Token": serverToken },
+                });
+                if (!res.ok) throw new Error(`timeline -> HTTP ${res.status}`);
+                return true;
+            });
+            return true;
+        } catch (e) {
+            console.warn(`[plex] could not report progress: ${e.message}`);
+            return false;
+        }
     }
 
     /** The item-scoped half of the seam, ready for the engine. */
@@ -428,6 +464,6 @@ export function createPlexAccount(saved = {}) {
         get isAuthenticated() { return !!accountToken; },
         get hasServer() { return !!serverUrl; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, resolvePlayable, openSource, persist,
+        listRoots, listChildren, resolvePlayable, openSource, persist, reportProgress,
     };
 }

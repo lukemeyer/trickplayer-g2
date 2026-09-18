@@ -61,6 +61,32 @@ export function createJellyfinAccount(saved = {}) {
         return text ? JSON.parse(text) : null;
     }
 
+    /**
+     * Tell the server where the wearer has got to.
+     *
+     * `/Sessions/Playing/Progress` is what a real client posts while playing;
+     * position is in 100-nanosecond ticks. Off by default in the UI, because it
+     * changes what every other device shows.
+     */
+    async function reportProgress(ref, positionMs, state = "playing") {
+        if (!ref?.id) return false;
+        try {
+            await req("/Sessions/Playing/Progress", {
+                method: "POST",
+                body: {
+                    ItemId: ref.id,
+                    PositionTicks: Math.max(0, Math.round(positionMs)) * 10000,
+                    IsPaused: state !== "playing",
+                    PlayMethod: "DirectPlay",
+                },
+            });
+            return true;
+        } catch (e) {
+            console.warn(`[jellyfin] could not report progress: ${e.message}`);
+            return false;
+        }
+    }
+
     // --------------------------------------------------------------- auth
 
     /**
@@ -225,6 +251,7 @@ export function createJellyfinAccount(saved = {}) {
             title: item.title,
             durationMs: it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : null,
             resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
+            progressRef: { id: it.Id },
             badges: [`${width}px`, sub.IsExternal ? "SRT" : "Embedded"],
             config: {
                 itemId: it.Id,
@@ -266,6 +293,6 @@ export function createJellyfinAccount(saved = {}) {
         get isAuthenticated() { return !!token; },
         get hasServer() { return !!base; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, resolvePlayable, openSource, persist,
+        listRoots, listChildren, resolvePlayable, openSource, persist, reportProgress,
     };
 }

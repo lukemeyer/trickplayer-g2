@@ -636,3 +636,51 @@
   cursor: pointer;
 }
 .btn-link:active { color: var(--text, #e6e8eb); }
+
+/* --- SETTINGS OVERLAY ---------------------------------------------------
+   Settings belong to the app, not to whatever is on screen, so they come in
+   over the top of it and leave it where it was. */
+.icon-btn {
+  /* The app's buttons are full-width blocks; an icon is not one of those. */
+  width: auto;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.icon-btn:active { color: var(--text); }
+
+.status-bar .icon-btn { margin-right: 4px; }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(2, 6, 23, 0.72);
+  overflow-y: auto;
+  padding: 16px;
+}
+.overlay-card {
+  max-width: 680px;
+  margin: 0 auto;
+  background: var(--card-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 24px 26px 28px;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+}
+.overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.overlay-head h2 { margin: 0; }

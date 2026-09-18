@@ -44,6 +44,9 @@ const KEYS = [
     // The last five things played, with everything needed to start one again
     // from the glasses alone. ~200 bytes each.
     "trickplayer.recent",
+    // Both default OFF when absent.
+    "trickplayer.skipSilent",
+    "trickplayer.reportProgress",
     // `trickplayer.imageFormat` used to live here and is gone on purpose: it
     // remembered an encoding escalation made during a transient wedge, which
     // would have pinned a device to the four-second encoder for good. See

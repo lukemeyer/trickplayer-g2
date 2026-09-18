@@ -154,6 +154,9 @@ function rememberPlayed(match, positionMs = 0) {
     const entry = {
         provider, accountId: id, title: match.title,
         durationMs: match.durationMs ?? null, config: match.config,
+        // Which library item this is, as opposed to which bytes to fetch —
+        // needed to tell the server where we got to.
+        progressRef: match.progressRef ?? null,
         positionMs: Math.max(0, Math.round(positionMs) || 0),
     };
     const rest = loadRecent().filter((r) => !sameItem(r, entry));
@@ -199,9 +202,25 @@ function resumeAt(entry, serverMs = 0) {
  * that tends not to arrive — the app is closed, the glasses are taken off, the
  * WebView is discarded.
  */
+/**
+ * Tell the media server where we are, when asked to.
+ *
+ * Off by default: it moves items in and out of Continue Watching on every
+ * other device the user owns, which is not a side effect a trick-play viewer
+ * should have without being told to.
+ */
+function pushProgress(state) {
+    if (!reportProgress || !playable || !account?.reportProgress) return;
+    const ref = playable.progressRef;
+    if (!ref) return;
+    account.reportProgress(ref, engine.positionMs(), state, playable.durationMs || 0)
+        .catch(() => {});
+}
+
 setInterval(() => {
     if (!playable || !engine.playbackState().playing) return;
     rememberPlayed(playable, engine.positionMs());
+    pushProgress("playing");
 }, 15000);
 
 /** Play a remembered item without going through the browser. */
@@ -716,12 +735,34 @@ function applyOptionsToEngine() {
     renderConsequences(engine.setBandwidth($("opt-bandwidth").value));
 }
 
+// --- settings overlay ---
+//
+// One way in, from any screen, and it leaves the screen underneath alone.
+$("settings-open").onclick = () => setHidden("panel-settings", false);
+$("settings-close").onclick = () => setHidden("panel-settings", true);
+$("panel-settings").onclick = (e) => {
+    // Clicking the dark surround closes it; clicking the card does not.
+    if (e.target === $("panel-settings")) setHidden("panel-settings", true);
+};
+
 // --- options ---
 
+const SKIP_SILENT_KEY = "trickplayer.skipSilent";
+const REPORT_PROGRESS_KEY = "trickplayer.reportProgress";
+
 $("opt-skip-silent").onchange = (e) => {
+    store.setItem(SKIP_SILENT_KEY, e.target.checked ? "1" : "0");
     engine.setSkipSilent(e.target.checked);
     renderConsequences(engine.setBandwidth($("opt-bandwidth").value));
 };
+
+$("opt-report-progress").onchange = (e) => {
+    store.setItem(REPORT_PROGRESS_KEY, e.target.checked ? "1" : "0");
+    reportProgress = e.target.checked;
+};
+
+/** Whether to tell the media server where we have got to. Off unless asked. */
+let reportProgress = false;
 
 $("opt-bandwidth").oninput = (e) => renderConsequences(engine.setBandwidth(e.target.value));
 
@@ -802,7 +843,13 @@ export async function firstPlayable() {
 // =================================================================== BOOT
 
 engine.setUiHooks({
-    stopped: () => { releasePreview(); show("panel-item"); },
+    stopped: () => {
+        // The end of watching is the moment the server most wants.
+        if (playable) { rememberPlayed(playable, engine.positionMs()); pushProgress("stopped"); }
+        releasePreview();
+        show("panel-item");
+    },
+    playing: (isPlaying) => { if (!isPlaying) pushProgress("paused"); },
     // The glasses picked something from their own list. Nothing above this
     // line knows what a list index is; this does.
     playRecent: (index) => { playRecent(index).catch(() => {}); },
@@ -829,6 +876,14 @@ engine.setUiHooks({
     // The glasses need these before anything is on screen: they are what the
     // idle picker is made of.
     engine.setRecentTitles(loadRecent().map(recentLabel));
+
+    // Both default OFF: skipping silent scenes changes which scenes exist at
+    // all, and reporting progress changes what every other client shows.
+    const skipSilent = store.getItem(SKIP_SILENT_KEY) === "1";
+    $("opt-skip-silent").checked = skipSilent;
+    engine.setSkipSilent(skipSilent);
+    reportProgress = store.getItem(REPORT_PROGRESS_KEY) === "1";
+    $("opt-report-progress").checked = reportProgress;
 
     if (store.getItem("trickplayer.logging") === "1") {
         const { enableLogging } = await import("./logging");
