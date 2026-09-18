@@ -2,7 +2,7 @@
   "package_id": "com.lukemeyer.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.23",
+  "version": "0.9.24",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Watch an episode on your Even Realities G2 as trick-play frames and subtitles: the picture updates every few seconds while the dialogue keeps pace, so you follow the story without a screen in front of you. Connects to your own Plex server.",
@@ -19,6 +19,14 @@
     }
   ],
   "changelog": [
+    {
+      "version": "0.9.24",
+      "notes": [
+        "Report progress back to server now works. It was being refused by Plex every time, and the refusal was discarded, so the setting looked like it was working while nothing was written. If you had it switched on, your server was not being updated.",
+        "Coming back to a list on the glasses now refreshes it, so the item you have just watched shows where you got to.",
+        "The glasses list now offers Continue watching and Playlists even when the phone is still on the server picker."
+      ]
+    },
     {
       "version": "0.9.23",
       "notes": [
