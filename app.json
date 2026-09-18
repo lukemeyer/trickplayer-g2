@@ -23,12 +23,7 @@
     {
       "version": "0.9.25",
       "notes": [
-        "A rebuilt phone screen: a toolbar with your server, where you are, and the settings and debugging buttons. Choosing an episode now starts it rather than showing a separate page first.",
-        "The connection status is back, as the first thing in Settings. It also names what is actually connected instead of always saying G2, and says plainly when the app could not start on it.",
-        "An episode that cannot be loaded now says why on screen instead of leaving you with a player that never starts.",
-        "Debugging tools replace the old telemetry panel, and record nothing until you ask. Message log and capture are separate switches, both off by default, and both remembered next time you open the app. No logs are ever sent anywhere unless you copy and send them yourself.",
-        "You can read the app's own messages on the phone now, and copy them into a bug report. Serial numbers and other hardware identifiers are stripped out of them.",
-        "A capture stops on its own after 30 minutes, so one started and forgotten does not keep recording."
+        "Beta release."
       ]
     }
   ],
