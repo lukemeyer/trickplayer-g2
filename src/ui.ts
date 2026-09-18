@@ -162,7 +162,10 @@ function rememberPlayed(match, positionMs = 0) {
     const rest = loadRecent().filter((r) => !sameItem(r, entry));
     const all = [entry, ...rest].slice(0, RECENT_MAX);
     store.setItem(RECENT_KEY, JSON.stringify(all));
-    engine.setRecentTitles(all.map(recentLabel));
+    // Deliberately does NOT push rows at the glasses. This runs every fifteen
+    // seconds while watching, and the list they are looking at may be a
+    // playlist three levels down; the recents level is built from the store the
+    // next time it is opened, which is soon enough.
 }
 
 /**
@@ -249,6 +252,179 @@ async function playRecent(index) {
 }
 let playable = null;     // the resolved item on the item panel
 let previewUrls = [];
+
+// ======================================================= BROWSING ON THE GLASSES
+//
+// The phone's browser walks a library of arbitrary depth. The glasses cannot:
+// twenty rows fit and no more (F-054), scrolling is a touchpad, and there is no
+// keyboard. So this is not the same tree with a smaller font — it is three ways
+// in, chosen because each one is already short:
+//
+//   Recently played    what this app played, at most five
+//   Continue watching  what the SERVER says is part-watched, across every device
+//   Playlists          lists someone has already curated
+//
+// No libraries, no A-Z, no search. A library is thousands of items and twenty
+// rows cannot represent it honestly; the phone is right there for that.
+
+/** A level: the caption under the list, and rows that know what they do. */
+const glassesStack = [];  // deepest last — the breadcrumb, glasses-side
+
+/** Rows are `{ label, open }`. `open` returns a level to push, or nothing. */
+const BACK_ROW = "◀ Back";
+/** Twenty rows, less the one Back costs on every level below the root. */
+const GLASSES_ROWS = 20;
+
+function glassesLevel(caption, rows) { return { caption, rows }; }
+
+/** The three ways in. Recently played is omitted when there is nothing in it. */
+function glassesRootLevel() {
+    const rows = [];
+    if (loadRecent().length) {
+        rows.push({ label: "Recently played", open: recentLevel });
+    }
+    // Both providers answer these; `listRoots` puts them first for exactly this
+    // reason. Asked of the account rather than assumed, because a source that
+    // grows a third provider one day should not silently show empty rows.
+    const caps = account?.capabilities?.() ?? {};
+    if (caps.hasContinueWatching) {
+        rows.push({ label: "Continue watching", open: () => containerLevel(
+            { ref: { kind: account.provider === "jellyfin" ? "resume" : "onDeck" },
+                title: "Continue watching" }) });
+    }
+    if (caps.hasPlaylists) {
+        rows.push({ label: "Playlists", open: () => containerLevel(
+            { ref: { kind: "playlists" }, title: "Playlists" }) });
+    }
+    return glassesLevel(rows.length ? "Tap to choose" : "Sign in on the phone", rows);
+}
+
+/** The app's own five, which need no server round trip at all. */
+function recentLevel() {
+    return glassesLevel("Recently played", loadRecent().map((r, i) => ({
+        label: recentLabel(r),
+        open: () => { playRecent(i).catch(() => {}); },
+    })));
+}
+
+/**
+ * One level of the server's own tree, eligibility included.
+ *
+ * Containers and items arrive mixed, the same as on the phone, and the same
+ * loop handles both — depth is discovered, not assumed. The difference here is
+ * that the whole level is built BEFORE it is shown: on the phone the list fills
+ * in as answers arrive, but on the glasses every redraw is a page rebuild, and
+ * a rebuild empties the image container. So the wearer gets a caption that
+ * counts, and then the finished list.
+ */
+async function containerLevel(container) {
+    if (!account) return null;
+    engine.setGlassesCaption("Loading…").catch(() => {});
+    let children;
+    try {
+        children = await account.listChildren(container.ref);
+    } catch (e) {
+        return glassesLevel(`Could not load ${container.title}`, []);
+    }
+
+    const rows = [];
+    for (const c of children.filter((c) => c.kind === "container")) {
+        if (rows.length >= GLASSES_ROWS - 1) break;
+        rows.push({ label: c.title, open: () => containerLevel(c) });
+    }
+
+    const items = children.filter((c) => c.kind === "item");
+    let checked = 0;
+    for (const item of items) {
+        if (rows.length >= GLASSES_ROWS - 1) break;
+        engine.setGlassesCaption(`Checking ${++checked} of ${items.length}`).catch(() => {});
+        let match = null;
+        // The ONLY eligibility signal, and cached for the session, so walking
+        // back out of a playlist and into it again asks nothing (F-015).
+        try { match = await resolveCached(item); } catch (e) { continue; }
+        if (!match) continue;
+        rows.push({ label: itemLabel(match), open: () => { playMatch(match).catch(() => {}); } });
+    }
+
+    const caption = rows.length
+        ? container.title
+        : `Nothing here can be played`;
+    return glassesLevel(caption, rows);
+}
+
+/** A row for a resolved item: the title, and where it had got to. */
+function itemLabel(match) {
+    const [, accountId] = (sourceKey || ":").split(":");
+    const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
+    const at = resumeAt(seen, match.resumeMs || 0);
+    if (!at) return match.title;
+    const time = clock(at);
+    const room = 38 - time.length;
+    const title = match.title.length > room ? `${match.title.slice(0, room - 1)}…` : match.title;
+    return `${title} · ${time}`;
+}
+
+/** Start a resolved item chosen on the glasses — the phone follows along. */
+async function playMatch(match) {
+    playable = match;
+    show("panel-player");
+    await engine.prepareItem({
+        title: match.title, durationMs: match.durationMs,
+        source: account.openSource(match),
+    });
+    applyOptionsToEngine();
+    const [, accountId] = (sourceKey || ":").split(":");
+    const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
+    const from = resumeAt(seen, match.resumeMs || 0);
+    if (from) engine.seekTo(from);
+    engine.play();
+    rememberPlayed(match, from);
+}
+
+/** Put the level on top of the stack on the glasses. */
+function renderGlasses() {
+    const level = glassesStack[glassesStack.length - 1];
+    if (!level) return Promise.resolve(false);
+    const labels = level.rows.map((r) => r.label);
+    // Back is a row rather than a menu entry: the contextual menu is two
+    // gestures away and holds ten items at most, and "go up one" is the thing
+    // a wearer does most while browsing.
+    if (glassesStack.length > 1) labels.unshift(BACK_ROW);
+    engine.setGlassesList(labels, level.caption);
+    return engine.showGlassesList();
+}
+
+/** Start (or restart) glasses browsing at the top. */
+function showGlassesRoot() {
+    glassesStack.length = 0;
+    glassesStack.push(glassesRootLevel());
+    return renderGlasses();
+}
+
+/**
+ * A row was tapped.
+ *
+ * `open` may return a level to walk into, or nothing at all when it starts
+ * playing instead — the engine flips to the player page on its own the moment
+ * something loads, so this does not have to know which happened.
+ */
+async function pickGlassesRow(index) {
+    const level = glassesStack[glassesStack.length - 1];
+    if (!level) return;
+    const hasBack = glassesStack.length > 1;
+    if (hasBack && index === 0) {
+        glassesStack.pop();
+        await renderGlasses();
+        return;
+    }
+    const row = level.rows[hasBack ? index - 1 : index];
+    if (!row) return;
+    const next = await row.open();
+    if (next) {
+        glassesStack.push(next);
+        await renderGlasses();
+    }
+}
 
 // ================================================================= SOURCES
 
@@ -338,19 +514,19 @@ if (harness.has("logging") && harness.get("logging") !== "0") {
 // glasses UI that cannot be checked any other way.
 if (harness.has("demorecent")) {
     setTimeout(() => {
-        engine.setRecentTitles([
+        engine.setGlassesList([
             "The Expanse — S1E1", "Finding Dory", "Arrival",
             "Chernobyl — E3", "Paddington 2",
-        ]);
-        engine.showRecentOnGlasses();
+        ], "Recently played");
+        engine.showGlassesList();
         // Then the list REORDERS underneath the picker, the way it does when
         // something is played: the picker must redraw, and a tap must pick what
         // the wearer can actually see.
         setTimeout(() => {
-            engine.setRecentTitles([
+            engine.setGlassesList([
                 "Paddington 2", "The Expanse — S1E1", "Finding Dory",
                 "Arrival", "Chernobyl — E3",
-            ]);
+            ], "Recently played");
         }, 4000);
     }, 2000);
 }
@@ -535,6 +711,9 @@ async function afterAuth() {
 async function showBrowse() {
     show("panel-browse");
     $("browse-title").textContent = account.name;
+    // A source just opened, so the glasses' own top level changed: Continue
+    // watching and Playlists belong to THIS server and to no other.
+    showGlassesRoot().catch(() => {});
     // Always reachable, however many are saved.
     //
     // UI.md §1's rule is that the source step does not APPEAR when there is
@@ -868,7 +1047,10 @@ engine.setUiHooks({
     playing: (isPlaying) => { if (!isPlaying) pushProgress("paused"); },
     // The glasses picked something from their own list. Nothing above this
     // line knows what a list index is; this does.
-    playRecent: (index) => { playRecent(index).catch(() => {}); },
+    pickGlassesRow: (index) => pickGlassesRow(index).catch(() => {}),
+    // "Return to list": the level they left, not the top. Walking back into a
+    // playlist after every episode would be the app forgetting where you were.
+    returnToGlassesList: () => (glassesStack.length ? renderGlasses() : showGlassesRoot()),
 });
 
 (async function boot() {
@@ -889,9 +1071,9 @@ engine.setUiHooks({
     // crash is exactly when nobody is there to press the button a second time.
     // The flag is read from the store rather than from the recorder module, so
     // that a launch which is NOT logging never loads the recorder at all.
-    // The glasses need these before anything is on screen: they are what the
-    // idle picker is made of.
-    engine.setRecentTitles(loadRecent().map(recentLabel));
+    // The glasses need this before anything is on screen: the top level is
+    // what the wearer sees if they never touch the phone at all.
+    showGlassesRoot().catch(() => {});
 
     // Both default OFF: skipping silent scenes changes which scenes exist at
     // all, and reporting progress changes what every other client shows.

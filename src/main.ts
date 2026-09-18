@@ -21,8 +21,15 @@ import * as store from "./store";
                 status: (_text, _state) => {},
                 stopped: () => {},
                 playing: (_isPlaying) => {},
-                /** Start the nth remembered item — the glasses' own way in. */
-                playRecent: (_index) => {},
+                /**
+                 * The wearer picked the nth row of whatever list is showing —
+                 * the glasses' own way in. What that row means is the flow's
+                 * business; the label comes too, because an index alone is
+                 * wrong the moment the list changed under the picker.
+                 */
+                pickGlassesRow: (_index, _label) => {},
+                /** "Return to list" was chosen: put the level they left back up. */
+                returnToGlassesList: () => {},
             };
             export function setUiHooks(h) { Object.assign(ui, h); }
 
@@ -386,7 +393,7 @@ import * as store from "./store";
                         // The idle screen: the frame, and the picker if there is
                         // anything to pick. Failures here are cosmetic.
                         showIdleSkeleton().catch(() => {});
-                        if (recentTitles.length) showRecentOnGlasses().catch(() => {});
+                        if (listRows.length) showGlassesList().catch(() => {});
                     } else {
                         // 0 success, 1 invalid, 2 oversize, 3 outOfMemory.
                         throw new Error(
@@ -424,7 +431,7 @@ import * as store from "./store";
              */
             export function announceLoading(title) {
                 if (!bridgeInstance || !title) return;
-                if (showingRecent) applyPage("player").catch(() => {});
+                if (showingList) applyPage("player").catch(() => {});
                 ble.forgetText();
                 sendSubtitleToGlasses(`Loading ${title}`).catch(() => {});
             }
@@ -1199,10 +1206,19 @@ import * as store from "./store";
             const MENU_RETURN_ID = 1;
             const MENU_PLAYPAUSE_ID = 2;
             const MENU_RESTART_ID = 4;
-            const RECENT_CONTAINER_ID = 3;
+            const LIST_CONTAINER_ID = 3;
 
-            /** Titles of the last few played items, set by the flow (src/ui.ts). */
-            let recentTitles = [];
+            /**
+             * The rows of whichever level the wearer is on, set by the flow
+             * (src/ui.ts). This file does not know what a row IS — a library, a
+             * playlist, an episode — only that there are rows, and that picking
+             * one is news the flow wants.
+             */
+            let listRows = [];
+            /** The line under the list: where you are, or what is loading. */
+            let listCaption = "Tap to start";
+            /** Exactly twenty rows fit, and a twenty-first is refused (F-054). */
+            const LIST_MAX_ROWS = 20;
             let menuSignature = "";
             let lastMenuShape = "";
 
@@ -1217,15 +1233,24 @@ import * as store from "./store";
                 const shape = menuShape();
                 if (shape === lastMenuShape) return;
                 lastMenuShape = shape;
-                applyPage(showingRecent ? "recent" : "player").catch(() => {});
+                applyPage(showingList ? "list" : "player").catch(() => {});
             }
-            export function setRecentTitles(titles) {
-                recentTitles = (titles || []).slice(0, 5).map((t) => String(t || "").slice(0, 40));
+            /**
+             * Hand the glasses a level: the rows, and the caption under them.
+             *
+             * `caption` is where the wearer is — "Playlists", "Continue
+             * watching" — because twenty titles with no heading are the same
+             * twenty titles wherever they came from.
+             */
+            export function setGlassesList(rows, caption) {
+                listRows = (rows || []).slice(0, LIST_MAX_ROWS)
+                    .map((t) => String(t || "").slice(0, 40));
+                if (caption != null) listCaption = String(caption).slice(0, 40);
                 // Rebuild only when the MENU would actually change. Rebuilding
                 // unconditionally wiped the idle frame that had just been drawn:
                 // the flow calls this at boot, milliseconds after the picture
                 // went out, and a rebuild empties the image container.
-                const sig = recentTitles.join("\u0000");
+                const sig = `${listCaption}` + "\u0000" + listRows.join("\u0000");
                 if (sig === menuSignature) return;
                 menuSignature = sig;
                 if (!bridgeInstance) return;
@@ -1236,12 +1261,12 @@ import * as store from "./store";
                 // display blanking and redrawing between scenes, all session.
                 // The titles are still updated; the picker is built from them
                 // the next time it is shown.
-                if (showingRecent) applyPage("recent").catch(() => {});
+                if (showingList) applyPage("list").catch(() => {});
                 else ensureMenu();
             }
 
             /** Which page the glasses are on: the picker, or the player. */
-            let showingRecent = false;
+            let showingList = false;
             /** When the contextual menu last did something — see the FOREGROUND_EXIT guard. */
             let menuActiveAt = 0;
             let foregroundEnteredAt = 0;
@@ -1263,7 +1288,7 @@ import * as store from "./store";
                 }
                 // One way back: stopping and showing the list were two entries
                 // for what is, from the wearer's side, a single intention.
-                if (sceneList.length || recentTitles.length) {
+                if (sceneList.length || listRows.length) {
                     items.push({ itemID: MENU_RETURN_ID, itemName: "Return to list" });
                 }
                 return items.length ? { menuItems: items } : undefined;
@@ -1274,16 +1299,16 @@ import * as store from "./store";
                 return (menuObject()?.menuItems || []).map((m) => m.itemID).join(",");
             }
 
-            function recentListContainer() {
+            function browseListContainer() {
                 return {
                     xPosition: 72, yPosition: 24, width: 432, height: 240,
-                    borderWidth: 0, containerID: RECENT_CONTAINER_ID, containerName: "g2_recent",
+                    borderWidth: 0, containerID: LIST_CONTAINER_ID, containerName: "g2_list",
                     isEventCapture: 1,
                     itemContainer: {
-                        itemCount: recentTitles.length,
+                        itemCount: listRows.length,
                         itemWidth: 432,
                         isItemSelectBorderEn: 1,
-                        itemName: recentTitles,
+                        itemName: listRows,
                     },
                 };
             }
@@ -1296,10 +1321,10 @@ import * as store from "./store";
              */
             async function applyPage(which) {
                 if (!bridgeInstance || typeof bridgeInstance.rebuildPageContainer !== "function") return false;
-                const wantRecent = which === "recent" && recentTitles.length > 0;
-                const page = wantRecent
+                const wantList = which === "list" && listRows.length > 0;
+                const page = wantList
                     ? { containerTotalNum: 2,
-                        listObject: [recentListContainer()],
+                        listObject: [browseListContainer()],
                         // `isEventCapture: 0` is load-bearing: ONE container per
                         // page may capture events, and a page with two is
                         // refused outright — `rebuildPageContainer` returns
@@ -1308,7 +1333,7 @@ import * as store from "./store";
                         // this is cloned from captures events, so the copy must
                         // give that up to the list.
                         textObject: [{ ...glassesSubtitleContainer, yPosition: 264, height: 24,
-                            isEventCapture: 0, content: "Tap to start" }] }
+                            isEventCapture: 0, content: listCaption }] }
                     : { containerTotalNum: 2,
                         // Blank while playing. The container's default content is
                         // the idle invitation, and a rebuild puts it back on
@@ -1321,22 +1346,43 @@ import * as store from "./store";
                 const ok = (await bridgeInstance.rebuildPageContainer(page)) === true;
                 if (ok) {
                     lastMenuShape = menuShape();
-                    showingRecent = wantRecent;
+                    showingList = wantList;
                     ble.forgetText();
                     // A rebuild empties the image container, so the idle frame
                     // has to be put back — otherwise the picture area is simply
                     // blank until something plays.
-                    if (!wantRecent && !isPlaying) showIdleSkeleton().catch(() => {});
+                    if (!wantList && !isPlaying) showIdleSkeleton().catch(() => {});
                 }
-                noteLifecycle("page-shown", { which: wantRecent ? "recent" : "player", ok });
-                console.log(`[Page] ${wantRecent ? "recent list" : "player"}: ` +
-                    `${ok ? "shown" : "REFUSED by the host"} (${recentTitles.length} recent)`);
+                noteLifecycle("page-shown", { which: wantList ? "list" : "player", ok, caption: listCaption });
+                console.log(`[Page] ${wantList ? `list "${listCaption}"` : "player"}: ` +
+                    `${ok ? "shown" : "REFUSED by the host"} (${listRows.length} rows)`);
                 return ok;
             }
 
-            /** Show the recent-items picker on the glasses. */
-            export async function showRecentOnGlasses() {
-                return applyPage("recent");
+            /** Show the browsing list on the glasses. */
+            export async function showGlassesList() {
+                return applyPage("list");
+            }
+
+            /**
+             * Say what is happening without rebuilding the page.
+             *
+             * Loading a level is a round trip per item on some of them, and a
+             * rebuild to say so would throw away the list the wearer is
+             * reading. The caption is an ordinary text write to the same
+             * container the subtitles use.
+             */
+            export async function setGlassesCaption(text) {
+                listCaption = String(text || "").slice(0, 40);
+                if (!bridgeInstance || !showingList) return false;
+                const r = await ble.sendText(
+                    (content) => bridgeInstance.textContainerUpgrade({
+                        containerID: 1, containerName: "g2_subs",
+                        contentOffset: 0, contentLength: 0, content,
+                    }),
+                    listCaption,
+                );
+                return r.ok;
             }
 
             /** Back to the picture-and-subtitle page. */
@@ -2336,7 +2382,9 @@ import * as store from "./store";
                     if (menuId === MENU_RETURN_ID) {
                         console.log("[Menu] return to list");
                         if (sceneList.length) stop();
-                        showRecentOnGlasses().catch(() => {});
+                        // The flow decides WHICH list: the level the wearer was
+                        // on when they started this, not always the top.
+                        Promise.resolve(ui.returnToGlassesList()).catch(() => {});
                     } else if (menuId === MENU_PLAYPAUSE_ID) {
                         console.log(`[Menu] play/pause (was ${isPlaying ? "playing" : "paused"})`);
                         togglePlay();
@@ -2348,29 +2396,32 @@ import * as store from "./store";
                     return;
                 }
 
-                // A pick from the recent list on the glasses. The flow decides
-                // what that means; this file does not know what an item is.
+                // A pick from the list on the glasses. The flow decides what
+                // that means; this file does not know what a row is — it may be
+                // an item to play or a level to walk into, and only the flow
+                // can tell. So this reports the pick and changes nothing:
+                // `announceLoading` flips to the player when something actually
+                // starts loading, and a deeper level arrives as another
+                // `setGlassesList`.
                 // The glasses handle scrolling themselves and only tell us about a
                 // SELECTION, which arrives with no `eventType` at all — a filter
                 // on CLICK_EVENT matched nothing and the picker did nothing when
                 // tapped. Any list event on our container is a choice.
                 const listEvent = event.listEvent || null;
-                if (listEvent && listEvent.containerID === RECENT_CONTAINER_ID &&
+                if (listEvent && listEvent.containerID === LIST_CONTAINER_ID &&
                     (listEvent.eventType == null || listEvent.eventType === OsEventTypeList.CLICK_EVENT)) {
                     // Match on the LABEL the glasses actually had on screen; the
                     // index is only a fallback. The two disagree the moment the
                     // list is reordered underneath a picker still showing the
                     // old order.
                     const shown = listEvent.currentSelectItemName ?? null;
-                    const byName = shown == null ? -1 : recentTitles.indexOf(shown);
+                    const byName = shown == null ? -1 : listRows.indexOf(shown);
                     const index = byName >= 0 ? byName : (listEvent.currentSelectItemIndex ?? 0);
-                    console.log(`[Recent] picked "${shown ?? recentTitles[index] ?? index}"` +
+                    console.log(`[List] picked "${shown ?? listRows[index] ?? index}"` +
                         `${byName < 0 ? " (by position — the glasses sent no name)" : ""}`);
-                    noteLifecycle("recent-picked", { index, title: recentTitles[index] });
-                    showingRecent = false;
-                    applyPage("player")
-                        .then(() => ui.playRecent(index))
-                        .catch((e) => console.warn(`[Recent] could not start: ${e?.message || e}`));
+                    noteLifecycle("list-picked", { index, title: listRows[index] });
+                    Promise.resolve(ui.pickGlassesRow(index, listRows[index] ?? shown))
+                        .catch((e) => console.warn(`[List] could not open: ${e?.message || e}`));
                     return;
                 }
 
@@ -3029,7 +3080,7 @@ import * as store from "./store";
                 // The picker is a full-screen page; leaving it up meant the
                 // picture had nowhere to appear while subtitles showed
                 // underneath it.
-                if (showingRecent) applyPage("player").catch(() => {});
+                if (showingList) applyPage("player").catch(() => {});
                 backgroundedWhilePlaying = false;
                 playBtn.innerText = "Pause";
                 silentAudio.play().catch(() => {});
