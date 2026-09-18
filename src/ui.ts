@@ -326,7 +326,9 @@ for (const btn of document.querySelectorAll("[data-logging]")) {
 // phone on a desk: neither has a way to tap a button, and this path is now the
 // one every tester uses, so it has to be drivable from a harness.
 const harness = new URLSearchParams(location.search);
-if (harness.has("logging")) {
+// Presence is not the same as truth: `?logging=0` means OFF, and this used to
+// read it as "logging was mentioned, switch it on".
+if (harness.has("logging") && harness.get("logging") !== "0") {
     setTimeout(() => document.querySelector("[data-logging]")?.click(), 1500);
 }
 // `?play=1` starts the first playable item, so a harness can measure the real
@@ -351,6 +353,16 @@ if (harness.has("demorecent")) {
             ]);
         }, 4000);
     }, 2000);
+}
+
+// `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
+// The simulator has no pointer into the webview, so the first tap of sign-in
+// cannot be made by hand there.
+if (harness.get("addsource")) {
+    setTimeout(() => {
+        startAddSource();
+        document.querySelector(`[data-provider="${harness.get("addsource")}"]`)?.click();
+    }, 1800);
 }
 
 if (harness.has("play")) {
@@ -505,12 +517,16 @@ async function afterAuth() {
         return;
     }
     for (const srv of servers) {
-        row(list, srv.name, srv.owner ? `Shared by ${srv.owner}` : "", () => {
+        const choose = () => {
             account.use(srv);
             saveSource(account);
             stack = [];
             showBrowse();
-        });
+        };
+        row(list, srv.name, srv.owner ? `Shared by ${srv.owner}` : "", choose);
+        // `?server=<name>` picks one without a pointer, for the simulator.
+        const want = harness.get("server");
+        if (want && srv.name.toLowerCase().includes(want.toLowerCase())) setTimeout(choose, 400);
     }
 }
 
@@ -885,7 +901,11 @@ engine.setUiHooks({
     reportProgress = store.getItem(REPORT_PROGRESS_KEY) === "1";
     $("opt-report-progress").checked = reportProgress;
 
-    if (store.getItem("trickplayer.logging") === "1") {
+    // `?logging=0` turns the recorder off again — it is sticky by design, and
+    // until now only the panel's own button could undo it.
+    if (harness.get("logging") === "0") store.removeItem("trickplayer.logging");
+
+    if (store.getItem("trickplayer.logging") === "1" && harness.get("logging") !== "0") {
         const { enableLogging } = await import("./logging");
         await enableLogging(engine);
         for (const b of document.querySelectorAll("[data-logging]")) b.remove();
