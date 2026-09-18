@@ -421,11 +421,20 @@ export function createPlexAccount(saved = {}) {
                     duration: String(Math.max(0, Math.round(durationMs || 0))),
                 });
                 const res = await timedFetch(`${base.replace(/\/$/, "")}/:/timeline?${p}`, {
-                    headers: { Accept: "application/json", "X-Plex-Token": serverToken },
+                    headers: {
+                        Accept: "application/json",
+                        "X-Plex-Token": serverToken,
+                        // Load-bearing: without it the server answers the
+                        // timeline write HTTP 400 and the position never moves.
+                        // Measured both ways against a real server (F-055).
+                        "X-Plex-Client-Identifier": CLIENT_ID,
+                    },
                 });
                 if (!res.ok) throw new Error(`timeline -> HTTP ${res.status}`);
                 return true;
             });
+            console.log(`[plex] progress ${state} ${Math.round(positionMs / 1000)}s ` +
+                `-> ratingKey ${ref.key}: accepted`);
             return true;
         } catch (e) {
             console.warn(`[plex] could not report progress: ${e.message}`);

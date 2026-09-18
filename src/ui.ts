@@ -215,9 +215,15 @@ function resumeAt(entry, serverMs = 0) {
 function pushProgress(state) {
     if (!reportProgress || !playable || !account?.reportProgress) return;
     const ref = playable.progressRef;
-    if (!ref) return;
+    // Worth saying out loud. An item with no progress ref is one this app can
+    // play but cannot report on, and silence here reads exactly like a write
+    // that succeeded.
+    if (!ref) {
+        console.warn(`[progress] ${playable.title} has no progress ref — nothing to report`);
+        return;
+    }
     account.reportProgress(ref, engine.positionMs(), state, playable.durationMs || 0)
-        .catch(() => {});
+        .catch((e) => console.warn(`[progress] report failed: ${e?.message || e}`));
 }
 
 setInterval(() => {
@@ -275,7 +281,16 @@ const BACK_ROW = "◀ Back";
 /** Twenty rows, less the one Back costs on every level below the root. */
 const GLASSES_ROWS = 20;
 
-function glassesLevel(caption, rows) { return { caption, rows }; }
+/**
+ * A level carries how to build itself again.
+ *
+ * Coming back from an episode to the list it was started from is the commonest
+ * move there is, and the one thing that has certainly changed in between is the
+ * position of the item just watched. Replaying the rows as they were shows the
+ * time it had when you walked in, which is the one number the wearer is
+ * checking.
+ */
+function glassesLevel(caption, rows, rebuild) { return { caption, rows, rebuild }; }
 
 /** The three ways in. Recently played is omitted when there is nothing in it. */
 function glassesRootLevel() {
@@ -296,7 +311,8 @@ function glassesRootLevel() {
         rows.push({ label: "Playlists", open: () => containerLevel(
             { ref: { kind: "playlists" }, title: "Playlists" }) });
     }
-    return glassesLevel(rows.length ? "Tap to choose" : "Sign in on the phone", rows);
+    return glassesLevel(rows.length ? "Tap to choose" : "Sign in on the phone",
+        rows, glassesRootLevel);
 }
 
 /** The app's own five, which need no server round trip at all. */
@@ -304,7 +320,7 @@ function recentLevel() {
     return glassesLevel("Recently played", loadRecent().map((r, i) => ({
         label: recentLabel(r),
         open: () => { playRecent(i).catch(() => {}); },
-    })));
+    })), recentLevel);
 }
 
 /**
@@ -324,7 +340,8 @@ async function containerLevel(container) {
     try {
         children = await account.listChildren(container.ref);
     } catch (e) {
-        return glassesLevel(`Could not load ${container.title}`, []);
+        return glassesLevel(`Could not load ${container.title}`, [],
+            () => containerLevel(container));
     }
 
     const rows = [];
@@ -349,7 +366,7 @@ async function containerLevel(container) {
     const caption = rows.length
         ? container.title
         : `Nothing here can be played`;
-    return glassesLevel(caption, rows);
+    return glassesLevel(caption, rows, () => containerLevel(container));
 }
 
 /** A row for a resolved item: the title, and where it had got to. */
@@ -392,6 +409,20 @@ function renderGlasses() {
     if (glassesStack.length > 1) labels.unshift(BACK_ROW);
     engine.setGlassesList(labels, level.caption);
     return engine.showGlassesList();
+}
+
+/**
+ * Come back to the level we left, with its numbers current.
+ *
+ * Rebuilt rather than replayed: the item just watched has moved, and on
+ * Continue watching that movement is the whole content of the row.
+ */
+async function refreshGlassesLevel() {
+    const level = glassesStack[glassesStack.length - 1];
+    if (!level?.rebuild) return showGlassesRoot();
+    const fresh = await level.rebuild();
+    if (fresh) glassesStack[glassesStack.length - 1] = fresh;
+    return renderGlasses();
 }
 
 /** Start (or restart) glasses browsing at the top. */
@@ -1050,7 +1081,7 @@ engine.setUiHooks({
     pickGlassesRow: (index) => pickGlassesRow(index).catch(() => {}),
     // "Return to list": the level they left, not the top. Walking back into a
     // playlist after every episode would be the app forgetting where you were.
-    returnToGlassesList: () => (glassesStack.length ? renderGlasses() : showGlassesRoot()),
+    returnToGlassesList: () => refreshGlassesLevel().catch(() => {}),
 });
 
 (async function boot() {
@@ -1080,7 +1111,13 @@ engine.setUiHooks({
     const skipSilent = store.getItem(SKIP_SILENT_KEY) === "1";
     $("opt-skip-silent").checked = skipSilent;
     engine.setSkipSilent(skipSilent);
-    reportProgress = store.getItem(REPORT_PROGRESS_KEY) === "1";
+    // `?progress=1` turns reporting on for this launch. It is off by default
+    // and deliberately so — it writes to the user's media server — which makes
+    // it the one setting that cannot be exercised without a way to set it.
+    // Set HERE rather than on a timer: the restore below would otherwise race
+    // the flag and win, and the test would silently measure the default.
+    reportProgress = harness.get("progress") === "1"
+        || store.getItem(REPORT_PROGRESS_KEY) === "1";
     $("opt-report-progress").checked = reportProgress;
 
     // `?logging=0` turns the recorder off again — it is sticky by design, and
@@ -1098,13 +1135,27 @@ engine.setUiHooks({
     const saved = loadSaved();
     if (!saved.length) return startAddSource();
 
-    // Something to resume: show the list rather than dropping into a library,
-    // so one tap on the glasses (or the phone) starts where they left off.
-    if (loadRecent().length) return showSources();
-
     // The last-used source is the default, and browsing starts there.
     const last = store.getItem(LAST_KEY);
     const rec = saved.find((s) => `${s.provider}:${s.id}` === last) || saved[0];
+
+    // Something to resume: show the list rather than dropping into a library,
+    // so one tap on the glasses (or the phone) starts where they left off.
+    //
+    // The ACCOUNT is opened either way. Which phone panel is showing must not
+    // decide what the glasses can browse: stopping here with no account left
+    // the glasses top level holding Recently played alone, because Continue
+    // watching and Playlists belong to a server and there was not one open.
+    if (loadRecent().length) {
+        if (rec) {
+            account = accountFrom(rec);
+            if (sourceKey !== `${rec.provider}:${rec.id}`) eligibility.clear();
+            sourceKey = `${rec.provider}:${rec.id}`;
+            showGlassesRoot().catch(() => {});
+        }
+        return showSources();
+    }
+
     if (saved.length === 1 || rec) return openSource(rec);
     showSources();
 })();
