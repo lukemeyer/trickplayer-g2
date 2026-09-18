@@ -311,13 +311,38 @@ import * as store from "./store";
                 }
             }
 
+            /**
+             * What to call the thing on the other end of the link.
+             *
+             * The app used to say "G2" in its status line whatever was
+             * connected, which it had no way of knowing: this codebase is
+             * named after one device and assumed it was always that device.
+             * The bridge will say — `getDeviceInfo()` answers a model of g1,
+             * g2 or ring1 — so ask, and fall back to the honest "Device" when
+             * the answer does not arrive or is one we have no name for.
+             */
+            const DEVICE_NAMES = { g1: "G1", g2: "G2", ring1: "Ring 1" };
+            let deviceName = "Device";
+
+            async function readDeviceName() {
+                try {
+                    if (typeof bridgeInstance?.getDeviceInfo !== "function") return;
+                    const info = await bridgeInstance.getDeviceInfo();
+                    const model = String(info?.model ?? "").toLowerCase();
+                    if (DEVICE_NAMES[model]) deviceName = DEVICE_NAMES[model];
+                } catch (e) {
+                    // Not knowing the model is not a failure to connect; the
+                    // status just stays generic.
+                    console.warn(`[Bridge] could not read device info: ${e?.message || e}`);
+                }
+            }
+
             async function initEvenBridge() {
                 try {
-                    setStatus(
-                        "Searching for active G2 Webview Environment Hook...",
-                    );
+                    setStatus("Looking for your device…");
                     bridgeInstance = await waitForEvenAppBridge();
                     assertBridgeContract(bridgeInstance);
+                    await readDeviceName();
 
                     // Wire tap/double-tap/exit event routing now that the
                     // bridge instance actually exists.
@@ -389,7 +414,7 @@ import * as store from "./store";
 
                     if (result === 0) {
                         startupPageReady = true;
-                        setStatus("G2 Glass Engine Connected via BLE!", "active");
+                        setStatus(`${deviceName} connected`, "active");
                         // The idle screen: the frame, and the picker if there is
                         // anything to pick. Failures here are cosmetic.
                         showIdleSkeleton().catch(() => {});
@@ -409,10 +434,15 @@ import * as store from "./store";
                         `[Bridge] init failed after ${bridgeInstance ? "connecting" : "waiting"}: ${err?.message || err}`,
                         err,
                     );
+                    // Both of these are read by someone holding a phone, not
+                    // by whoever wrote the code: say what happened and what it
+                    // means for them, and point at the report, which is the
+                    // only place a phone can actually read the detail.
                     setStatus(
                         bridgeInstance
-                            ? "G2 bridge connected but wiring failed — see console"
-                            : "G2 App Bridge Offline (Browser Preview Loop Active)",
+                            ? `${deviceName} connected, but this app could not start on it — ` +
+                              `turn on logging to see why`
+                            : "No device connected — the app is running on this screen only",
                         "error",
                     );
                 }

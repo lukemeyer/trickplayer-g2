@@ -13,6 +13,11 @@
 // the old build carried are gone rather than ported: they were scaffolding for
 // getting the image path working, and the image path works.
 
+// FIRST, and deliberately: importing it installs it, so it is recording before
+// the engine below has a chance to say anything. The messages worth reading are
+// the ones from boot.
+import { setMessageLogging } from "./consolemirror";
+
 import * as engine from "./main";
 import { createPlexAccount } from "./plexaccount";
 import { createJellyfinAccount } from "./jellyfinaccount";
@@ -23,11 +28,157 @@ import * as store from "./store";
 const $ = (id) => document.getElementById(id);
 const PANELS = [
     "panel-sources", "panel-add-source", "panel-browse",
-    "panel-list", "panel-item", "panel-player",
+    "panel-list", "panel-player",
 ];
 
+let currentVisiblePanel = "panel-sources";
+
 function show(panel) {
+    currentVisiblePanel = panel;
     for (const p of PANELS) $(p).classList.toggle("hidden", p !== panel);
+    renderBreadcrumbs();
+    updateServerSelect();
+}
+
+function updateServerSelect() {
+    const sel = $("header-server-select");
+    if (!sel) return;
+    const saved = loadSaved();
+    sel.innerHTML = "";
+
+    if (!saved.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No server";
+        opt.selected = true;
+        opt.disabled = true;
+        sel.appendChild(opt);
+    } else {
+        if (!sourceKey || currentVisiblePanel === "panel-sources") {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "Choose server…";
+            opt.selected = currentVisiblePanel !== "panel-add-source";
+            opt.disabled = true;
+            sel.appendChild(opt);
+        }
+        for (const s of saved) {
+            const opt = document.createElement("option");
+            opt.value = `${s.provider}:${s.id}`;
+            opt.textContent = s.name || s.serverUrl;
+            if (sourceKey === `${s.provider}:${s.id}` && currentVisiblePanel !== "panel-add-source") {
+                opt.selected = true;
+            }
+            sel.appendChild(opt);
+        }
+    }
+
+    const addOpt = document.createElement("option");
+    addOpt.value = "__add__";
+    addOpt.textContent = "+ Add server…";
+    if (currentVisiblePanel === "panel-add-source") {
+        addOpt.selected = true;
+    }
+    sel.appendChild(addOpt);
+}
+
+const headerServerSelect = $("header-server-select");
+if (headerServerSelect) {
+    headerServerSelect.onchange = () => {
+        const val = headerServerSelect.value;
+        if (val === "__add__") {
+            startAddSource();
+        } else if (val) {
+            const saved = loadSaved();
+            const rec = saved.find((s) => `${s.provider}:${s.id}` === val);
+            if (rec) openSource(rec);
+        }
+    };
+}
+
+function renderBreadcrumbs() {
+    const nav = $("header-breadcrumbs");
+    if (!nav) return;
+    nav.innerHTML = "";
+
+    function addCrumb(text, onClick, isActive = false) {
+        const span = document.createElement("span");
+        span.className = `breadcrumb-item${isActive ? " active" : ""}`;
+        span.textContent = text;
+        if (!isActive && onClick) span.onclick = onClick;
+        nav.appendChild(span);
+    }
+
+    function addSep() {
+        const sep = document.createElement("span");
+        sep.className = "breadcrumb-sep";
+        sep.textContent = " / ";
+        nav.appendChild(sep);
+    }
+
+    // When on sources or adding a source
+    if (currentVisiblePanel === "panel-sources" || !account) {
+        addCrumb("Home", () => {
+            if (currentVisiblePanel === "panel-player") engine.stop();
+            releasePreview();
+            playable = null;
+            scanGeneration++;
+            showSources();
+        }, currentVisiblePanel === "panel-sources");
+        if (currentVisiblePanel === "panel-add-source") {
+            addSep();
+            addCrumb("Add server", null, true);
+        }
+        return;
+    }
+
+    // Home crumb
+    addCrumb("Home", () => {
+        if (currentVisiblePanel === "panel-player") engine.stop();
+        releasePreview();
+        playable = null;
+        scanGeneration++;
+        showSources();
+    }, false);
+
+    // If we have browse stack or are on browse panel
+    if (stack.length > 0 || currentVisiblePanel === "panel-browse" || currentVisiblePanel === "panel-list") {
+        addSep();
+        const onBrowse = currentVisiblePanel === "panel-browse";
+        addCrumb("Browse", () => {
+            if (currentVisiblePanel === "panel-player") engine.stop();
+            releasePreview();
+            playable = null;
+            scanGeneration++;
+            stack = [];
+            showBrowse();
+        }, onBrowse && stack.length === 0);
+
+        // Deep containers in stack (e.g. TV / Futurama / Season 1)
+        stack.forEach((c, i) => {
+            addSep();
+            const isTop = i === stack.length - 1 && currentVisiblePanel === "panel-list" && !playable;
+            addCrumb(c.title, () => {
+                if (currentVisiblePanel === "panel-player") engine.stop();
+                releasePreview();
+                playable = null;
+                scanGeneration++;
+                stack = stack.slice(0, i + 1);
+                renderList();
+            }, isTop);
+        });
+    }
+
+    // Item or Player level
+    if (playable && currentVisiblePanel === "panel-player") {
+        addSep();
+        const itemCrumb = (stack.length > 0 && playable.shortTitle) ? playable.shortTitle : playable.title;
+        addCrumb(itemCrumb, () => {
+            if (currentVisiblePanel === "panel-player") {
+                engine.stop();
+            }
+        }, true);
+    }
 }
 
 function setHidden(id, hidden) { $(id).classList.toggle("hidden", hidden); }
@@ -43,13 +194,45 @@ function clock(ms) {
     return h ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
 }
 
+/**
+ * How long an item runs, as h:mm.
+ *
+ * Not "12m": the badge it lands in is uppercased by the stylesheet, so that
+ * rendered as "12M" next to a media title and read as a file size.
+ */
+function fmtDuration(ms) {
+    if (!ms || ms <= 0) return "";
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return `${h}:${String(m).padStart(2, "0")}`;
+}
+
+function displayTitle(item, isLibrary = true) {
+    if (!isLibrary) return item.title;
+    if (item.shortTitle) return item.shortTitle;
+    if (item.episodeNumber && item.episodeName) {
+        return `${item.episodeNumber} — ${item.episodeName}`;
+    }
+    const m = (item.title || "").match(/^.+?\s+—\s+(S\d+E\d+.*)$/i);
+    if (m) return m[1];
+    return item.title;
+}
+
 function row(parent, title, subtitle, onClick, badges = []) {
     const div = document.createElement("div");
     div.className = "media-item";
     div.innerHTML =
-        `<span>${esc(title)}${subtitle ? `<br><small class="text-muted">${esc(subtitle)}</small>` : ""}</span>` +
+        `<div class="media-info">` +
+            `<div class="media-title">${esc(title)}</div>` +
+            (subtitle ? `<div class="media-subtitle">${esc(subtitle)}</div>` : "") +
+        `</div>` +
         (badges.length
-            ? `<span class="tags">${badges.map((b) => `<span class="tag-badge">${esc(b)}</span>`).join("")}</span>`
+            ? `<span class="tags">${badges.map((b) => {
+                const lower = String(b).toLowerCase();
+                const cls = lower === "plex" ? " tag-plex" : lower === "jellyfin" ? " tag-jellyfin" : "";
+                return `<span class="tag-badge${cls}">${esc(b)}</span>`;
+            }).join("")}</span>`
             : "");
     div.onclick = onClick;
     parent.appendChild(div);
@@ -246,10 +429,20 @@ async function playRecent(index) {
     }
     const match = { title: entry.title, durationMs: entry.durationMs, badges: [], config: entry.config };
     playable = match;
+    setPlayerError(null);
     show("panel-player");
-    await engine.prepareItem({
-        title: match.title, durationMs: match.durationMs, source: account.openSource(match),
-    });
+    try {
+        await engine.prepareItem({
+            title: match.title, durationMs: match.durationMs, source: account.openSource(match),
+        });
+    } catch (e) {
+        // This one is started from the GLASSES, so the phone may be in a
+        // pocket — but when it is looked at, it has to say what happened
+        // rather than show a player that never starts.
+        console.error(`Could not load this item: ${e.message}`);
+        setPlayerError(`Could not load ${match.title}: ${e.message}`);
+        return false;
+    }
     applyOptionsToEngine();
     const from = resumeAt(entry);
     if (from) engine.seekTo(from);
@@ -384,11 +577,18 @@ function itemLabel(match) {
 /** Start a resolved item chosen on the glasses — the phone follows along. */
 async function playMatch(match) {
     playable = match;
+    setPlayerError(null);
     show("panel-player");
-    await engine.prepareItem({
-        title: match.title, durationMs: match.durationMs,
-        source: account.openSource(match),
-    });
+    try {
+        await engine.prepareItem({
+            title: match.title, durationMs: match.durationMs,
+            source: account.openSource(match),
+        });
+    } catch (e) {
+        console.error(`Could not load this item: ${e.message}`);
+        setPlayerError(`Could not load ${match.title}: ${e.message}`);
+        return;
+    }
     applyOptionsToEngine();
     const [, accountId] = (sourceKey || ":").split(":");
     const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
@@ -461,33 +661,41 @@ async function pickGlassesRow(index) {
 
 function showSources() {
     const saved = loadSaved();
-    const list = $("source-list");
-    list.innerHTML = "";
-    // Recently played first: the whole point is not having to browse, and that
-    // is as true on the phone as on the glasses.
+
+    // Recently played in its own container
     const recent = loadRecent();
+    const recentSection = $("recent-section");
+    const recentList = $("recent-list");
     if (recent.length) {
-        const head = document.createElement("p");
-        head.className = "text-muted";
-        head.textContent = "Recently played";
-        list.appendChild(head);
-        recent.forEach((r, i) => row(
-            list, r.title, resumeAt(r) ? `Resume at ${clock(resumeAt(r))}` : null,
-            () => playRecent(i), [r.provider === "jellyfin" ? "Jellyfin" : "Plex"]));
-        const sep = document.createElement("p");
-        sep.className = "text-muted";
-        sep.textContent = "Servers";
-        list.appendChild(sep);
+        if (recentSection) recentSection.classList.remove("hidden");
+        if (recentList) {
+            recentList.innerHTML = "";
+            recent.forEach((r, i) => {
+                const badges = [];
+                if (r.durationMs) badges.push(fmtDuration(r.durationMs));
+                badges.push(r.provider === "jellyfin" ? "Jellyfin" : "Plex");
+                row(
+                    recentList,
+                    r.title,
+                    resumeAt(r) ? `Resume at ${clock(resumeAt(r))}` : null,
+                    () => playRecent(i),
+                    badges
+                );
+            });
+        }
+    } else {
+        if (recentSection) recentSection.classList.add("hidden");
+        if (recentList) recentList.innerHTML = "";
     }
+
     // Listed by SERVER name, not provider name — users think in servers, and
     // the provider is a badge (UI.md §1).
+    const list = $("source-list");
+    list.innerHTML = "";
     for (const rec of saved) {
         row(list, rec.name || rec.serverUrl, rec.serverUrl,
             () => openSource(rec), [rec.provider === "jellyfin" ? "Jellyfin" : "Plex"]);
     }
-    // Reached deliberately now, not only on the way in, so there has to be a
-    // way out that is not "pick a server again".
-    setHidden("sources-back", !account);
     show("panel-sources");
 }
 
@@ -500,43 +708,32 @@ async function openSource(rec) {
     await showBrowse();
 }
 
-// Turn the recorder on, HERE, without going anywhere.
-//
-// This used to be `location.href = "telemetry.html"`, and on the glasses that
-// is not a navigation — it is the end of the app. The G2 prompts "End this
-// feature", the startup containers go with it, and every image write after that
-// is refused instantly while text carries on. A beta caught it exactly:
-// 0 images sent, 20 failed, every write timing 0ms.
-//
-// So the recorder comes to the app instead. Loaded on demand, so a wearer who
-// never taps it does not carry the code.
-for (const btn of document.querySelectorAll("[data-logging]")) {
-    btn.onclick = async () => {
-        btn.disabled = true;
-        btn.textContent = "Starting the recorder…";
-        try {
-            const { enableLogging } = await import("./logging");
-            await enableLogging(engine);
-            // Both of them — the offer appears on the server list and on the
-            // add-a-server step, and once the recorder is on neither is an
-            // offer any more.
-            for (const b of document.querySelectorAll("[data-logging]")) b.remove();
-        } catch (e) {
-            btn.disabled = false;
-            btn.textContent = "Connect with logging";
-            console.error(`[logging] could not start: ${e.message}`);
-        }
-    };
+// The debugging tools. Opening the panel records NOTHING — it offers two
+// switches and does as it is told. Loaded on demand, so a launch where nobody
+// taps it never carries the code.
+async function openDebugTools() {
+    const btn = $("logging-open");
+    if (btn) btn.disabled = true;
+    try {
+        const { openDebugPanel } = await import("./logging");
+        openDebugPanel(engine);
+    } catch (e) {
+        console.error(`[debug] could not open the panel: ${e.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
-// `?logging=1` turns the recorder on at boot. For the simulator and for a
-// phone on a desk: neither has a way to tap a button, and this path is now the
-// one every tester uses, so it has to be drivable from a harness.
+const loggingBtn = $("logging-open");
+if (loggingBtn) loggingBtn.onclick = openDebugTools;
+
+// `?logging=1` opens the panel at boot. For the simulator and for a phone on a
+// desk: neither has a way to tap a button.
 const harness = new URLSearchParams(location.search);
 // Presence is not the same as truth: `?logging=0` means OFF, and this used to
 // read it as "logging was mentioned, switch it on".
 if (harness.has("logging") && harness.get("logging") !== "0") {
-    setTimeout(() => document.querySelector("[data-logging]")?.click(), 1500);
+    setTimeout(() => openDebugTools(), 1500);
 }
 // `?play=1` starts the first playable item, so a harness can measure the real
 // pipeline rather than an idle page.
@@ -562,6 +759,13 @@ if (harness.has("demorecent")) {
     }, 2000);
 }
 
+// `?settings=1` opens the settings dialog. The simulator has no pointer into
+// the webview, so the cog cannot be tapped there — and the bridge status now
+// lives behind it, which is precisely what a simulator run wants to check.
+if (harness.get("settings") === "1") {
+    setTimeout(() => openSettings(), 2000);
+}
+
 // `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
 // The simulator has no pointer into the webview, so the first tap of sign-in
 // cannot be made by hand there.
@@ -577,7 +781,6 @@ if (harness.has("play")) {
 }
 
 $("add-source-btn").onclick = () => startAddSource();
-$("sources-back").onclick = () => { if (account) showBrowse(); };
 $("add-source-cancel").onclick = () => {
     stopPolling();
     loadSaved().length ? showSources() : startAddSource();
@@ -824,6 +1027,14 @@ async function renderList() {
     // four seconds of blank screen is a bad app and four seconds of a list
     // filling in is a working one, and the user picks something long before the
     // scan ends.
+    const isNonLibrary = here?.ref?.kind === "playlist" ||
+                         here?.ref?.kind === "playlists" ||
+                         here?.ref?.kind === "onDeck" ||
+                         here?.ref?.kind === "resume" ||
+                         here?.title === "Continue watching" ||
+                         here?.title === "Playlists";
+    const isLibrary = !isNonLibrary;
+
     let found = 0;
     for (let i = 0; i < items.length; i++) {
         if (myGeneration !== scanGeneration) return;
@@ -840,7 +1051,9 @@ async function renderList() {
         }
         if (!match) continue;
         found++;
-        row(list, match.title, "", () => openItem(match), match.badges);
+        const titleToShow = displayTitle(match, isLibrary);
+        const badges = match.badges?.length ? match.badges : (match.durationMs ? [fmtDuration(match.durationMs)] : []);
+        row(list, titleToShow, "", () => openItem(match), badges);
     }
 
     if (myGeneration !== scanGeneration) return;
@@ -852,22 +1065,31 @@ async function renderList() {
         : "Nothing here can be played yet — an item needs a trick-play index and subtitles.";
 }
 
-// ==================================================================== ITEM
+// ==================================================================== PLAYER
 
-const PREVIEW_SCENES = 3;
-const PREVIEW_AUTO_LIMIT = 250 * 1024;
+const PREVIEW_SCENES = 1;
+
+/**
+ * Say why an item did not load, on the screen the wearer is looking at.
+ *
+ * Passing nothing clears it. Every path that starts an item clears it first,
+ * so a failure from the previous one cannot sit under a working player.
+ */
+function setPlayerError(message) {
+    const el = $("player-error");
+    if (!el) return;
+    el.textContent = message || "";
+    setHidden("player-error", !message);
+}
 
 async function openItem(match) {
     playable = match;
     releasePreview();
-    show("panel-item");
-    $("item-title").textContent = match.title;
-    $("preview-strip").innerHTML = "";
-    $("preview-note").textContent = "Reading index…";
-    setHidden("preview-load", true);
+    setPlayerError(null);
+    show("panel-player");
 
     try {
-        const stats = await engine.prepareItem({
+        await engine.prepareItem({
             title: match.title,
             durationMs: match.durationMs,
             source: account.openSource(match),
@@ -875,62 +1097,47 @@ async function openItem(match) {
         applyOptionsToEngine();
 
         // Carry on where this one stopped, however it was opened.
-        const [provider, accountId] = (sourceKey || ":").split(":");
+        const [, accountId] = (sourceKey || ":").split(":");
         const seen = loadRecent().find((r) => sameItem(r, { accountId, config: match.config }));
         const from = resumeAt(seen, match.resumeMs || 0);
-        if (from) {
-            engine.seekTo(from);
-            $("item-title").textContent = `${match.title} — resuming at ${clock(from)}`;
-        }
-        void provider;
-
-        // Gate on the ESTIMATE, not a fixed rule: a Plex 3-scene preview is
-        // ~45 KB and a Jellyfin one is a whole ~865 KB tile sheet — after which
-        // the rest of the film is free (F-038).
-        const cost = engine.previewCostBytes(PREVIEW_SCENES);
-        if (cost === null || cost <= PREVIEW_AUTO_LIMIT) {
-            await loadPreview(cost);
-        } else {
-            $("preview-note").textContent = `Preview — about ${mb(cost)}`;
-            setHidden("preview-load", false);
-        }
+        if (from) engine.seekTo(from);
+        engine.play();
+        rememberPlayed(match, from);
     } catch (e) {
-        $("preview-note").textContent = `Could not load this item: ${e.message}`;
+        console.error(`Could not load this item: ${e.message}`);
+        setPlayerError(`Could not load ${match.title}: ${e.message}`);
     }
 }
 
-$("preview-load").onclick = () => loadPreview(engine.previewCostBytes(PREVIEW_SCENES));
+let lastPreviewScene = null;
+let loadingPreview = false;
 
 async function loadPreview(cost) {
-    setHidden("preview-load", true);
-    $("preview-note").textContent = "Loading preview…";
+    if (loadingPreview) return;
+    loadingPreview = true;
     try {
         const scenes = await engine.previewScenes(PREVIEW_SCENES);
-        releasePreview();
-        previewUrls = scenes.map((s) => s.url);
-        const strip = $("preview-strip");
-        strip.innerHTML = "";
-        for (const s of scenes) {
-            const fig = document.createElement("figure");
-            fig.className = "preview-scene";
-            fig.innerHTML =
-                `<img src="${s.url}" alt="" />` +
-                `<figcaption>${esc(s.text).replace(/\n/g, "<br>")}</figcaption>`;
-            strip.appendChild(fig);
+        for (const u of previewUrls) URL.revokeObjectURL(u);
+        previewUrls = [];
+        if (scenes && scenes.length) {
+            const s = scenes[0];
+            previewUrls = [s.url];
+            lastPreviewScene = s;
+            updateSettingsPreview();
         }
-        // Say what it bought. On a batch source that is the whole film, which
-        // is worth knowing before deciding whether to be careful again.
-        $("preview-note").textContent = cost
-            ? `${mb(cost)} loaded${engine.previewCostBytes(1000) === cost ? " — covers the whole item" : ""}`
-            : "";
     } catch (e) {
-        $("preview-note").textContent = `Preview failed: ${e.message}`;
+        console.warn(`Preview failed: ${e.message}`);
+    } finally {
+        loadingPreview = false;
     }
 }
 
 function releasePreview() {
     for (const u of previewUrls) URL.revokeObjectURL(u);
     previewUrls = [];
+    lastPreviewScene = null;
+    setHidden("settings-preview-wrap", true);
+    setHidden("settings-preview-empty", false);
 }
 
 /**
@@ -961,14 +1168,56 @@ function applyOptionsToEngine() {
     renderConsequences(engine.setBandwidth($("opt-bandwidth").value));
 }
 
-// --- settings overlay ---
-//
-// One way in, from any screen, and it leaves the screen underneath alone.
-$("settings-open").onclick = () => setHidden("panel-settings", false);
-$("settings-close").onclick = () => setHidden("panel-settings", true);
+// --- settings dialog (native <dialog>) ---
+
+function updateSettingsPreview() {
+    const wrap = $("settings-preview-wrap");
+    const empty = $("settings-preview-empty");
+    const img = $("settings-preview-img");
+    const sub = $("settings-preview-sub");
+    if (!wrap || !empty) return;
+
+    const isItemSelected = currentVisiblePanel === "panel-player" && playable;
+    if (!isItemSelected) {
+        setHidden("settings-preview-wrap", true);
+        setHidden("settings-preview-empty", false);
+        return;
+    }
+
+    if (lastPreviewScene) {
+        if (img) img.src = lastPreviewScene.url;
+        if (sub) sub.innerHTML = esc(lastPreviewScene.text).replace(/\n/g, "<br>");
+        setHidden("settings-preview-wrap", false);
+        setHidden("settings-preview-empty", true);
+    } else if (!previewUrls.length) {
+        loadPreview(null).catch(() => {});
+    }
+}
+
+function openSettings() {
+    updateSettingsPreview();
+    const dialog = $("panel-settings");
+    if (dialog && typeof dialog.showModal === "function") {
+        if (!dialog.open) dialog.showModal();
+    } else {
+        setHidden("panel-settings", false);
+    }
+}
+
+function closeSettings() {
+    const dialog = $("panel-settings");
+    if (dialog && typeof dialog.close === "function") {
+        if (dialog.open) dialog.close();
+    } else {
+        setHidden("panel-settings", true);
+    }
+}
+
+$("settings-open").onclick = openSettings;
+$("settings-close").onclick = closeSettings;
 $("panel-settings").onclick = (e) => {
-    // Clicking the dark surround closes it; clicking the card does not.
-    if (e.target === $("panel-settings")) setHidden("panel-settings", true);
+    // Clicking backdrop of native dialog closes it
+    if (e.target === $("panel-settings")) closeSettings();
 };
 
 // --- options ---
@@ -1018,7 +1267,10 @@ $("picture-reset").onclick = () => {
     $("opt-contrast").value = 0;
     $("opt-brightness").value = 0;
     $("opt-gamma").value = 100;
-    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1 });
+    for (const b of document.querySelectorAll("[data-texture]")) {
+        b.classList.toggle("active", b.dataset.texture === "floyd-steinberg");
+    }
+    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1, texture: "floyd-steinberg" });
     repaintPreview();
 };
 
@@ -1027,17 +1279,10 @@ $("picture-reset").onclick = () => {
 let repaintTimer = null;
 function repaintPreview() {
     engine.pictureIsLive();
-    if (!previewUrls.length) return;
+    if (!playable && !previewUrls.length) return;
     clearTimeout(repaintTimer);
     repaintTimer = setTimeout(() => loadPreview(null), 150);
 }
-
-$("item-back").onclick = () => { engine.stop(); releasePreview(); renderList(); };
-$("item-play").onclick = () => {
-    show("panel-player");
-    rememberPlayed(playable, engine.positionMs());
-    engine.play();
-};
 
 // ================================================================== PLAYER
 
@@ -1059,7 +1304,6 @@ export async function firstPlayable() {
             const p = await resolveCached(item).catch(() => null);
             if (!p) continue;
             await openItem(p);
-            $("item-play").click();
             return p;
         }
     }
@@ -1073,7 +1317,12 @@ engine.setUiHooks({
         // The end of watching is the moment the server most wants.
         if (playable) { rememberPlayed(playable, engine.positionMs()); pushProgress("stopped"); }
         releasePreview();
-        show("panel-item");
+        playable = null;
+        if (stack.length) {
+            renderList();
+        } else {
+            showSources();
+        }
     },
     playing: (isPlaying) => { if (!isPlaying) pushProgress("paused"); },
     // The glasses picked something from their own list. Nothing above this
@@ -1120,14 +1369,20 @@ engine.setUiHooks({
         || store.getItem(REPORT_PROGRESS_KEY) === "1";
     $("opt-report-progress").checked = reportProgress;
 
-    // `?logging=0` turns the recorder off again — it is sticky by design, and
-    // until now only the panel's own button could undo it.
-    if (harness.get("logging") === "0") store.removeItem("trickplayer.logging");
-
-    if (store.getItem("trickplayer.logging") === "1" && harness.get("logging") !== "0") {
-        const { enableLogging } = await import("./logging");
-        await enableLogging(engine);
-        for (const b of document.querySelectorAll("[data-logging]")) b.remove();
+    // The debugging switches, both off unless someone turned them on and both
+    // sticky across launches — that is the point of them, since the session
+    // worth having is the one that spans a crash.
+    //
+    // This is also the moment the console mirror learns whether it is wanted.
+    // It has been buffering since import, because the messages worth reading
+    // are the ones from boot and the store cannot be read that early; if the
+    // answer is no, that buffer is dropped and the real console handed back.
+    const wantMessages = store.getItem("trickplayer.logMessages") === "1";
+    const wantReport = store.getItem("trickplayer.reportSession") === "1";
+    if (!wantMessages) setMessageLogging(false);
+    if (wantMessages || wantReport) {
+        const { restoreFromPreferences } = await import("./logging");
+        await restoreFromPreferences(engine);
     }
 
     if (resumePendingAuth()) return;

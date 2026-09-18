@@ -1,686 +1,1180 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap");
-
-            :root {
-                --primary: #e5a00d;
-                --primary-hover: #ffb822;
-                --primary-glow: rgba(229, 160, 13, 0.15);
-                --bg-gradient: radial-gradient(
-                    circle at top,
-                    #1a1c23 0%,
-                    #0d0e12 100%
-                );
-                --card-bg: rgba(26, 28, 36, 0.65);
-                --card-border: rgba(255, 255, 255, 0.08);
-                --text: #e2e8f0;
-                --text-muted: #94a3b8;
-                --danger: #ef4444;
-                --danger-hover: #f87171;
-                --success: #10b981;
-            }
-
-            * {
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-            }
-
-            body {
-                font-family: "Inter", sans-serif;
-                background: var(--bg-gradient);
-                color: var(--text);
-                min-height: 100vh;
-                padding: 40px 20px 80px 20px;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: flex-start;
-                overflow-x: hidden;
-            }
-
-            /* --- HEADER --- */
-            .header {
-                text-align: center;
-                margin-bottom: 35px;
-            }
-
-            .header h1 {
-                font-family: "Outfit", sans-serif;
-                font-weight: 800;
-                font-size: 2.25rem;
-                color: #fff;
-                letter-spacing: -0.03em;
-                margin-bottom: 8px;
-                background: linear-gradient(
-                    135deg,
-                    #fff 40%,
-                    var(--primary) 100%
-                );
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-
-            .header p {
-                font-size: 0.95rem;
-                color: var(--text-muted);
-            }
-
-            /* --- GLASS PANEL --- */
-            .section {
-                background: var(--card-bg);
-                backdrop-filter: blur(16px);
-                -webkit-backdrop-filter: blur(16px);
-                border: 1px solid var(--card-border);
-                padding: 30px;
-                border-radius: 16px;
-                width: 100%;
-                max-width: 600px;
-                margin-bottom: 24px;
-                box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
-                position: relative;
-                overflow: hidden;
-            }
-
-            .section::before {
-                content: "";
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 4px;
-                background: linear-gradient(
-                    90deg,
-                    transparent,
-                    var(--primary),
-                    transparent
-                );
-            }
-
-            h2,
-            h3 {
-                font-family: "Outfit", sans-serif;
-                font-weight: 700;
-                color: #fff;
-                margin-bottom: 18px;
-                letter-spacing: -0.02em;
-            }
-
-            h2 {
-                font-size: 1.4rem;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-
-            h2::before {
-                content: "";
-                display: inline-block;
-                width: 4px;
-                height: 20px;
-                background: var(--primary);
-                border-radius: 2px;
-            }
-
-            .hidden {
-                display: none !important;
-                opacity: 0;
-                pointer-events: none;
-            }
-
-            /* --- INPUT GROUPS --- */
-            .input-group {
-                margin-bottom: 20px;
-            }
-
-            label {
-                display: block;
-                margin-bottom: 8px;
-                font-size: 0.8rem;
-                font-weight: 600;
-                color: var(--text-muted);
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            input,
-            select {
-                width: 100%;
-                padding: 12px 16px;
-                background: rgba(10, 11, 15, 0.8);
-                border: 1px solid var(--card-border);
-                color: #fff;
-                font-size: 0.95rem;
-                border-radius: 10px;
-                outline: none;
-            }
-
-            input:focus,
-            select:focus {
-                border-color: var(--primary);
-                box-shadow: 0 0 0 3px var(--primary-glow);
-            }
-
-            /* --- BUTTONS --- */
-            button {
-                width: 100%;
-                padding: 14px;
-                background: linear-gradient(
-                    135deg,
-                    var(--primary) 0%,
-                    #cc7b19 100%
-                );
-                color: #0d0e12;
-                border: none;
-                font-family: "Outfit", sans-serif;
-                font-weight: 700;
-                font-size: 0.95rem;
-                border-radius: 10px;
-                cursor: pointer;
-                box-shadow: 0 4px 14px rgba(229, 160, 13, 0.25);
-                transform: translateY(0);
-                margin-bottom: 12px;
-            }
-
-            button:hover {
-                background: linear-gradient(
-                    135deg,
-                    var(--primary-hover) 0%,
-                    var(--primary) 100%
-                );
-                transform: translateY(-1px);
-                box-shadow: 0 6px 20px rgba(229, 160, 13, 0.35);
-            }
-
-            button:active {
-                transform: translateY(1px);
-            }
-
-            button:disabled {
-                background: #27272a;
-                color: #71717a;
-                box-shadow: none;
-                cursor: not-allowed;
-                transform: none;
-            }
-
-            .btn-danger {
-                background: linear-gradient(
-                    135deg,
-                    var(--danger) 0%,
-                    #b91c1c 100%
-                );
-                color: #fff;
-                box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);
-                margin-top: 8px;
-            }
-
-            .btn-danger:hover {
-                background: linear-gradient(
-                    135deg,
-                    var(--danger-hover) 0%,
-                    var(--danger) 100%
-                );
-                box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
-            }
-
-            .btn-secondary {
-                background: rgba(255, 255, 255, 0.05);
-                color: var(--text);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                box-shadow: none;
-                margin-top: 8px;
-            }
-
-            .btn-secondary:hover {
-                background: rgba(255, 255, 255, 0.1);
-                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-            }
-
-            /* --- MEDIA LISTS --- */
-            #results-list {
-                max-height: 280px;
-                overflow-y: auto;
-                border: 1px solid var(--card-border);
-                background: rgba(10, 11, 15, 0.8);
-                border-radius: 10px;
-                margin-bottom: 20px;
-            }
-
-            /* Custom scrollbar styling */
-            #results-list::-webkit-scrollbar {
-                width: 6px;
-            }
-            #results-list::-webkit-scrollbar-track {
-                background: transparent;
-            }
-            #results-list::-webkit-scrollbar-thumb {
-                background: rgba(255, 255, 255, 0.15);
-                border-radius: 3px;
-            }
-            #results-list::-webkit-scrollbar-thumb:hover {
-                background: rgba(255, 255, 255, 0.3);
-            }
-
-            .media-item {
-                padding: 16px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-                cursor: pointer;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-
-            .media-item:hover {
-                background: rgba(255, 255, 255, 0.04);
-                padding-left: 20px;
-            }
-
-            .media-item:last-child {
-                border-bottom: none;
-            }
-
-            .tags {
-                display: flex;
-                gap: 6px;
-            }
-
-            .tag-badge {
-                background: rgba(229, 160, 13, 0.1);
-                color: var(--primary);
-                padding: 3px 8px;
-                border-radius: 6px;
-                font-size: 0.7rem;
-                font-weight: 700;
-                border: 1px solid rgba(229, 160, 13, 0.2);
-                text-transform: uppercase;
-            }
-
-            /* --- BIF/SUBTITLE LOAD PROGRESS --- */
-            .load-progress-container {
-                margin-top: 15px;
-            }
-
-            .load-progress-container.hidden {
-                display: none;
-            }
-
-            .load-progress-label {
-                font-size: 0.8rem;
-                color: var(--text-muted);
-                margin-bottom: 6px;
-                text-align: center;
-            }
-
-            .load-progress-track {
-                position: relative;
-                width: 100%;
-                height: 8px;
-                background: rgba(255, 255, 255, 0.08);
-                border-radius: 4px;
-                overflow: hidden;
-            }
-
-            .load-progress-fill {
-                position: absolute;
-                top: 0;
-                left: 0;
-                height: 100%;
-                width: 0%;
-                background: var(--primary);
-                border-radius: 4px;
-                transition: width 0.2s ease;
-            }
-
-            .load-progress-container.indeterminate .load-progress-fill {
-                width: 35%;
-                transition: none;
-                animation: load-progress-indeterminate 1.1s ease-in-out infinite;
-            }
-
-            @keyframes load-progress-indeterminate {
-                0% {
-                    left: -35%;
-                }
-                100% {
-                    left: 100%;
-                }
-            }
-
-            /* --- HTML VIDEO PREVIEW / LOCAL MONITOR --- */
-            #player-container {
-                position: relative;
-                width: 100%;
-                background: #000;
-                border: 1px solid var(--card-border);
-                border-radius: 12px;
-                overflow: hidden;
-                margin-top: 15px;
-                box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8);
-            }
-
-            #seek-image {
-                width: 100%;
-                height: auto;
-                display: block;
-                aspect-ratio: 16/9;
-                background: #050505;
-                object-fit: contain;
-            }
-
-            #subtitle-overlay {
-                position: absolute;
-                bottom: 24px;
-                left: 20px;
-                right: 20px;
-                text-align: center;
-                font-size: 1.25rem;
-                font-weight: 600;
-                color: #fff;
-                text-shadow:
-                    0 2px 8px rgba(0, 0, 0, 0.95),
-                    0 1px 3px rgba(0, 0, 0, 0.9);
-                pointer-events: none;
-                min-height: 1.6em;
-                line-height: 1.4;
-            }
-
-            #controls {
-                margin-top: 20px;
-                width: 100%;
-            }
-
-            .control-row {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-top: 14px;
-            }
-
-            /* Custom range slider styling */
-            input[type="range"] {
-                -webkit-appearance: none;
-                width: 100%;
-                height: 6px;
-                background: rgba(255, 255, 255, 0.1);
-                border-radius: 3px;
-                outline: none;
-                padding: 0;
-                margin: 0;
-                cursor: pointer;
-            }
-
-            input[type="range"]::-webkit-slider-thumb {
-                -webkit-appearance: none;
-                width: 16px;
-                height: 16px;
-                border-radius: 50%;
-                background: var(--primary);
-                box-shadow: 0 0 10px rgba(229, 160, 13, 0.5);
-                cursor: pointer;
-                transition: transform 0.1s;
-            }
-
-            input[type="range"]::-webkit-slider-thumb:hover {
-                transform: scale(1.2);
-            }
-
-            #time-display {
-                font-family: "JetBrains Mono", monospace;
-                font-size: 0.85rem;
-                color: var(--text-muted);
-                letter-spacing: 0.05em;
-            }
-
-            /* --- HARDWARE / STATUS BAR --- */
-            .status-bar {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 14px 20px !important;
-                border-left: 4px solid var(--primary);
-            }
-
-            .status-indicator {
-                width: 10px;
-                height: 10px;
-                border-radius: 50%;
-                background: var(--primary);
-                box-shadow: 0 0 8px var(--primary);
-                position: relative;
-            }
-
-            .status-indicator.active {
-                background: var(--success);
-                box-shadow: 0 0 8px var(--success);
-                animation: pulse 2s infinite;
-            }
-
-            .status-indicator.error {
-                background: var(--danger);
-                box-shadow: 0 0 8px var(--danger);
-            }
-
-            @keyframes pulse {
-                0% {
-                    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-                }
-                70% {
-                    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
-                }
-                100% {
-                    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-                }
-            }
-
-            #even-status {
-                font-size: 0.85rem;
-                font-weight: 550;
-                color: var(--text);
-            }
-
-            /* --- PIN EXCHANGE AREA --- */
-            .pin-container {
-                background: rgba(10, 11, 15, 0.9);
-                border: 1px dashed var(--primary);
-                border-radius: 12px;
-                padding: 20px;
-                margin-top: 20px;
-                text-align: center;
-            }
-
-            .pin-display {
-                font-size: 2.75rem;
-                letter-spacing: 8px;
-                font-weight: 800;
-                text-align: center;
-                color: var(--primary);
-                margin: 15px 0;
-                font-family: "JetBrains Mono", monospace;
-                text-shadow: 0 0 15px rgba(229, 160, 13, 0.35);
-                width: 100%;
-                max-width: 100%;
-                box-sizing: border-box;
-                overflow-x: auto;
-                white-space: nowrap;
-                -webkit-overflow-scrolling: touch;
-            }
-
-            /* --- COLLAPSIBLE DETAILS STYLING --- */
-            details {
-                transition: all 0.25s ease;
-                overflow: hidden;
-            }
-            details summary {
-                list-style: none;
-            }
-            details summary::-webkit-details-marker {
-                display: none;
-            }
-            details summary {
-                cursor: pointer;
-                padding: 10px 0;
-            }
-
-            /* --- SHARED TEXT --- */
-            .text-muted {
-                color: var(--text-muted);
-                font-size: 0.8rem;
-                margin: 6px 0;
-            }
-
-            /* --- PREVIEW STRIP (UI.md 3) ---
-               Scenes as the GLASSES will render them: grey, quantised,
-               dithered, at the real 256x128. A colour thumbnail would answer a
-               question nobody is asking. */
-            #preview-strip {
-                display: flex;
-                gap: 10px;
-                overflow-x: auto;
-                margin: 12px 0;
-            }
-
-            .preview-scene {
-                margin: 0;
-                flex: 0 0 auto;
-                width: 256px;
-            }
-
-            .preview-scene img {
-                width: 256px;
-                height: 128px;
-                display: block;
-                background: #050505;
-                border: 1px solid var(--card-border);
-                border-radius: 8px;
-                image-rendering: pixelated;
-            }
-
-            .preview-scene figcaption {
-                margin-top: 6px;
-                font-size: 0.75rem;
-                line-height: 1.35;
-                color: var(--text-muted);
-                min-height: 2.7em;
-            }
-
-            /* A segmented control made of buttons: named choices, side by
-               side, because the user is picking one of three and not sliding
-               along a scale (UI.md 4.1). */
-            .segmented {
-                display: flex;
-                gap: 6px;
-            }
-
-            .segmented .btn-secondary {
-                width: auto;
-                margin-top: 0;
-                padding: 8px 14px;
-                font-size: 0.8rem;
-            }
-
-            /* The preview strip scrolls sideways; its scrollbar should not be
-               the loudest thing on the panel. */
-            #preview-strip::-webkit-scrollbar {
-                height: 6px;
-            }
-            #preview-strip::-webkit-scrollbar-track {
-                background: transparent;
-            }
-            #preview-strip::-webkit-scrollbar-thumb {
-                background: rgba(255, 255, 255, 0.15);
-                border-radius: 3px;
-            }
-
-            /* The selected texture. */
-            .btn-secondary.active {
-                border-color: var(--primary);
-                color: var(--primary);
-                background: rgba(229, 160, 13, 0.1);
-            }
-
-            /* --- TELEMETRY PAGE ---
-               A report is read, copied and pasted into an issue; it is not a
-               dashboard. Monospace so the columns line up, selectable so it
-               can leave the device at all. */
-            .tlm-out {
-                margin-top: 16px;
-                padding: 12px;
-                background: rgba(0, 0, 0, 0.5);
-                border: 1px solid var(--card-border);
-                border-radius: 8px;
-                font-family: ui-monospace, Menlo, Consolas, monospace;
-                font-size: 0.72rem;
-                line-height: 1.45;
-                color: var(--text);
-                white-space: pre;
-                overflow-x: auto;
-                user-select: text;
-                -webkit-user-select: text;
-            }
-
-/* A way out of the flow rather than a step in it — the logging build, and
-   anything else that is offered but never the thing to tap next. Deliberately
-   quieter than .btn-secondary so it does not compete with "Add a server". */
-.btn-link {
+/* ==========================================================================
+   TRICKPLAYER G2 - Standardized Stylesheet
+   Adopted from trickplayer-homepage tokens with G2 Micro-OLED green accent
+   ========================================================================== */
+
+:root {
+  /* Surfaces & Backgrounds */
+  --bg-main: #090d16;
+  --bg-card: #121826;
+  --bg-card-hover: #172033;
+  --bg-surface: #1b253b;
+  --bg-surface-glass: rgba(23, 32, 51, 0.75);
+  --bg-input: #0b0f19;
+
+  /* Typography Colors */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Borders */
+  --border-subtle: #1e293b;
+  --border-focus: #00e676;
+
+  /* Brand & Platform Accents */
+  --accent-g2: #00e676;               /* Micro-OLED green phosphor */
+  --accent-g2-glow: rgba(0, 230, 118, 0.25);
+  --accent-pebble: #f59e0b;           /* Color e-paper warm amber */
+  --accent-wearos: #38bdf8;           /* Modern circular OLED cyan */
+
+  /* Providers */
+  --provider-plex: #e5a00d;
+  --provider-jellyfin: #aa5cc3;
+
+  /* Semantic Highlights */
+  --color-primary: var(--accent-g2);
+  --color-primary-text: #05140b;
+  --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+
+  /* System Fonts - Zero External Network Latency */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* Sizing & Radii */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-full: 9999px;
+
+  /* Elevation */
+  --shadow-card: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+
+  /* Form defaults */
+  accent-color: var(--accent-g2);
+  color-scheme: dark;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Scoped, performant transitions (No universal * transitions) */
+button, input, select, .media-item, .breadcrumb-item {
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  min-height: 100%;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow-x: hidden;
+  padding: 0;
+  margin: 0;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Modern native scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.hidden {
+  display: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* --- APP HEADER & COMPANION BAR ----------------------------------------- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: 100%;
+  background: rgba(9, 13, 22, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 10px 16px;
+}
+
+.header-server {
+  flex: 0 0 auto;
+  max-width: 160px;
+}
+
+#header-server-select {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#header-server-select:focus {
+  border-color: var(--border-focus);
+}
+
+.header-breadcrumbs {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  scrollbar-width: none;
+}
+.header-breadcrumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.breadcrumb-item {
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+}
+.breadcrumb-item:hover {
+  color: var(--text-primary);
+}
+.breadcrumb-item.active {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+}
+.breadcrumb-sep {
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* --- PANELS / CARDS ---------------------------------------------------- */
+.section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  padding: 24px;
+  border-radius: var(--radius-md);
+  width: calc(100% - 32px);
+  max-width: 640px;
+  margin: 18px auto 24px auto;
+  box-shadow: var(--shadow-card);
+  position: relative;
+  overflow: hidden;
+}
+
+.section::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent-g2), transparent);
+}
+
+h2, h3 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 1.35rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+h2::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 18px;
+  background: var(--accent-g2);
+  border-radius: 2px;
+}
+
+h3 {
+  font-size: 1.08rem;
+  color: var(--text-secondary);
+  margin-top: 28px;
+  margin-bottom: 14px;
+}
+
+/* --- FORM CONTROLS ----------------------------------------------------- */
+.input-group {
+  margin-bottom: 24px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="password"],
+select {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-g2-glow);
+}
+
+/* ---------------------------------------------------------------- control rows
+ *
+ * Controls that sit on one row are the same height as each other. Two things
+ * were stopping that, and both are global rather than anything to do with the
+ * one row that showed it up:
+ *
+ *   1. `button` carries `margin-bottom: 16px` for stacked layouts, and
+ *      `align-items: stretch` stretches the MARGIN box — so a stretched button
+ *      came out 16px shorter than its neighbour and sat at the top of the row.
+ *   2. `button` has `border: none` while `select` and `input` have a 1px
+ *      border, so identical padding still leaves a 2px difference.
+ *
+ * So a row zeroes the vertical margins of its own controls and stretches them,
+ * and a lone control still has a floor to stand on. Anything putting controls
+ * side by side uses `.form-row` and inherits this, rather than nudging padding
+ * until one particular pair happens to line up.
+ */
+:root {
+  --control-height: 42px;
+  /* One width for every slider, so the tracks line up with each other down
+     the panel rather than each one being capped in its own rule. */
+  --range-width: 220px;
+}
+
+.form-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.form-row > button,
+.form-row > select,
+.form-row > input,
+.form-row > label,
+.control-row > button,
+.control-row > select {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.form-row > button,
+.form-row > select,
+.form-row > input {
+  align-self: stretch;
+}
+
+/* The floor, for a control NOT sharing a row with a taller one. It is a
+   touch-target minimum for controls in the body of the app. */
+button,
+select,
+input[type="text"],
+input[type="url"],
+input[type="password"] {
+  min-height: var(--control-height);
+}
+
+/* The exceptions, and they are deliberate ones: the toolbar is a dense strip
+   of chips, not a form, and giving its icons and server picker a 42px floor
+   made the whole header a third taller. */
+.icon-btn,
+.header-server select {
+  min-height: 0;
+}
+
+.control-row {
+  display: flex;
+  justify-content: space-between;
+  /* Deliberately centred rather than stretched: this row pairs a LABEL with
+     one control, so there is no second control to match — and stretching
+     would distort a checkbox or a range track. */
+  align-items: center;
+  gap: 16px;
+  margin-top: 24px;
+  margin-bottom: 6px;
+}
+
+.control-row label {
+  margin-bottom: 0;
+  text-transform: none;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  letter-spacing: normal;
+}
+
+.control-row input[type="range"] {
+  flex: 1;
+  max-width: var(--range-width);
+}
+
+.control-row.range-labels,
+.control-row:has(span.text-muted) {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+/* A slider and the words describing its two ends, as one control.
+   The field takes the width the bare track used to, and the labels sit inside
+   it — so "Fewer images" starts exactly where the track starts, whatever the
+   panel is doing around it. */
+.range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: var(--range-width);
+}
+
+.range-field input[type="range"] {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  /* `flex: 1` from the control-row rule reaches in here as a DESCENDANT, and
+     this field stacks vertically — so it grew the track's HEIGHT instead of
+     its width and the slider came out three times thicker than every other
+     one. The width is set outright; nothing here should grow. */
+  flex: 0 0 auto;
+}
+
+.range-ends {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* Smaller than body muted text: these two have to share the width of the
+   track and would otherwise wrap. */
+.range-ends .text-muted {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: var(--accent-g2);
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--border-subtle);
+  border-radius: 3px;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-g2);
+  box-shadow: 0 0 10px var(--accent-g2-glow);
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-g2);
+  box-shadow: 0 0 10px var(--accent-g2-glow);
+  cursor: pointer;
+  border: none;
+}
+
+/* --- BUTTONS ----------------------------------------------------------- */
+button {
+  width: 100%;
+  padding: 13px 18px;
+  border: none;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.92rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+button:disabled {
+  background: var(--border-subtle);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  font-weight: 700;
+  box-shadow: 0 3px 12px var(--accent-g2-glow);
+}
+.btn-primary:hover:not(:disabled) {
+  background: #1aff8c;
+  box-shadow: 0 4px 18px var(--accent-g2-glow);
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-secondary {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  box-shadow: none;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  border-color: var(--border-focus);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+}
+
+.btn-link, .btn-ghost {
   display: block;
   width: 100%;
-  margin-top: 14px;
-  padding: 10px 0;
+  padding: 8px 0;
   border: 0;
   background: none;
-  color: var(--text-muted, #8a8f98);
-  font: inherit;
-  font-size: 0.9em;
+  color: var(--text-muted);
+  font-size: 0.88rem;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
 }
-.btn-link:active { color: var(--text, #e6e8eb); }
+.btn-link:hover, .btn-ghost:hover {
+  color: var(--text-primary);
+}
 
-/* --- SETTINGS OVERLAY ---------------------------------------------------
-   Settings belong to the app, not to whatever is on screen, so they come in
-   over the top of it and leave it where it was. */
 .icon-btn {
-  /* The app's buttons are full-width blocks; an icon is not one of those. */
   width: auto;
   flex: 0 0 auto;
   min-width: 0;
   margin: 0;
   border: 0;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 1.15rem;
   line-height: 1;
-  padding: 6px 8px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.icon-btn:active { color: var(--text); }
+.icon-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
 
-.status-bar .icon-btn { margin-right: 4px; }
+/* --- SEGMENTED CONTROL ------------------------------------------------- */
+.segmented {
+  display: flex;
+  gap: 6px;
+}
+.segmented .btn-secondary {
+  width: auto;
+  margin-bottom: 0;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+}
+.segmented .btn-secondary.active {
+  background: rgba(0, 230, 118, 0.15);
+  border-color: var(--accent-g2);
+  color: var(--accent-g2);
+  font-weight: 700;
+}
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: rgba(2, 6, 23, 0.72);
+/* --- MEDIA LISTS ------------------------------------------------------- */
+#results-list,
+#source-list,
+#recent-list,
+#root-list,
+#server-list {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-bottom: 24px;
   overflow-y: auto;
-  padding: 16px;
 }
-.overlay-card {
-  max-width: 680px;
-  margin: 0 auto;
-  background: var(--card-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
-  padding: 24px 26px 28px;
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+
+/* Clamping removed; flexes to mobile viewport */
+#results-list {
+  max-height: 52vh;
+  min-height: 140px;
 }
-.overlay-head {
+
+.media-item {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+.media-item:hover {
+  background: var(--bg-card-hover);
+  padding-left: 18px;
+}
+.media-item:last-child {
+  border-bottom: none;
+}
+
+.media-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.media-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.media-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.tags {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* The bridge status, at the top of the settings dialog. The dot carries the
+   state and the text carries the detail, so a glance is enough and a read
+   says why. */
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.status-indicator {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.status-indicator.active {
+  background: var(--accent-g2);
+  box-shadow: 0 0 0 3px var(--accent-g2-glow);
+}
+
+.status-indicator.error {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+
+/* Why an item did not load, where the player would have been. */
+.player-error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--color-danger);
+  font-size: 0.9rem;
+}
+
+.tag-badge {
+  background: rgba(0, 230, 118, 0.1);
+  color: var(--accent-g2);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border: 1px solid rgba(0, 230, 118, 0.25);
+  text-transform: uppercase;
+}
+
+.tag-plex {
+  background: rgba(229, 160, 13, 0.12);
+  color: var(--provider-plex);
+  border-color: rgba(229, 160, 13, 0.3);
+}
+
+.tag-jellyfin {
+  background: rgba(170, 92, 195, 0.12);
+  color: var(--provider-jellyfin);
+  border-color: rgba(170, 92, 195, 0.3);
+}
+
+/* --- LOAD PROGRESS ----------------------------------------------------- */
+.load-progress-container {
+  margin-top: 20px;
+  margin-bottom: 24px;
+}
+.load-progress-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-align: center;
+}
+.load-progress-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.load-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--accent-g2);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+.load-progress-container.indeterminate .load-progress-fill {
+  width: 35%;
+  transition: none;
+  animation: load-progress-indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes load-progress-indeterminate {
+  0% { left: -35%; }
+  100% { left: 100%; }
+}
+
+/* --- LOCAL MONITOR / PLAYER -------------------------------------------- */
+#player-container {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 16px;
+  margin-bottom: 24px;
+}
+
+#seek-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  aspect-ratio: 16/9;
+  background: #000;
+  object-fit: contain;
+}
+
+#subtitle-overlay {
+  position: absolute;
+  bottom: 20px;
+  left: 16px;
+  right: 16px;
+  text-align: center;
+  font-size: clamp(1rem, 3.5vw, 1.25rem);
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+  min-height: 1.6em;
+  line-height: 1.35;
+}
+
+#controls {
+  margin-top: 24px;
+  margin-bottom: 24px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+#controls #play-btn {
+  margin-bottom: 0;
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.timeline-row input[type="range"] {
+  flex: 1;
+}
+
+#time-display {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: right;
+}
+
+#close-player-btn {
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+/* --- PIN DISPLAY ------------------------------------------------------- */
+.pin-container {
+  background: var(--bg-input);
+  border: 1px dashed var(--accent-g2);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  margin: 24px 0;
+  text-align: center;
+}
+
+.pin-display {
+  font-size: 2.5rem;
+  letter-spacing: 8px;
+  font-weight: 800;
+  text-align: center;
+  color: var(--accent-g2);
+  margin: 12px 0;
+  font-family: var(--font-mono);
+  text-shadow: 0 0 12px var(--accent-g2-glow);
+  width: 100%;
+}
+
+/* --- SINGLE PREVIEW FIGURES (Item View & Settings Dialog) --------------- */
+.single-preview-figure {
+  width: 100%;
+  max-width: 320px;
+  margin: 16px auto 24px auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.single-preview-figure img {
+  width: 256px;
+  height: 128px;
+  display: block;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.single-preview-figure figcaption {
+  margin-top: 10px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  text-align: center;
+  min-height: 2.5em;
+}
+
+#preview-area {
+  margin: 20px 0 28px 0;
+}
+
+#preview-note {
+  margin: 12px 0 16px 0;
+}
+
+.settings-preview-area {
+  margin: 12px 0 16px 0;
+  padding: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* Legacy preview strip backward compatibility fallback */
+#preview-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+.preview-scene {
+  margin: 0;
+  flex: 0 0 auto;
+  width: 256px;
+}
+.preview-scene img {
+  width: 256px;
+  height: 128px;
+  display: block;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  image-rendering: pixelated;
+}
+.preview-scene figcaption {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  min-height: 2.5em;
+}
+
+/* --- SETTINGS DIALOG (Native <dialog>) ----------------------------------- */
+dialog.settings-dialog {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 0;
+  max-width: 620px;
+  width: calc(100% - 32px);
+  margin: auto;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  max-height: 90vh;
+}
+
+dialog.settings-dialog::backdrop {
+  background: rgba(4, 7, 13, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.dialog-card {
+  padding: 24px;
+  overflow-y: auto;
+  max-height: 90vh;
+}
+
+.dialog-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 24px;
 }
-.overlay-head h2 { margin: 0; }
+
+.dialog-head h2 {
+  margin-bottom: 0;
+}
+
+.dialog-card h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 32px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dialog-card h3:first-of-type {
+  margin-top: 8px;
+}
+
+.dialog-card .control-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-top: 24px;
+  margin-bottom: 6px;
+}
+
+.dialog-card .control-row input[type="range"] {
+  flex: 1;
+  max-width: var(--range-width);
+}
+
+.dialog-card .control-row.range-labels,
+.dialog-card .control-row:has(span.text-muted) {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+/* The cap belongs to the FIELD now, not to the bare track inside it — and
+   `.dialog-card .control-row input[type="range"]` above outranks
+   `.range-field input[type="range"]`, so it has to be said again here. */
+.dialog-card .range-field input[type="range"] {
+  max-width: none;
+  flex: 0 0 auto;
+}
+
+.dialog-card p.text-muted {
+  margin-top: 6px;
+  margin-bottom: 20px;
+  line-height: 1.5;
+  font-size: 0.84rem;
+}
+
+.dialog-card p.text-muted:empty {
+  margin: 0;
+}
+
+.dialog-card .segmented {
+  gap: 8px;
+}
+
+.dialog-card .segmented .btn-secondary {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+}
+
+.dialog-card #picture-reset {
+  margin-top: 28px;
+  margin-bottom: 12px;
+}
+
+#settings-preview-wrap {
+  margin: 16px 0 24px 0;
+}
+
+#settings-preview-empty {
+  margin: 12px 0 24px 0;
+  padding: 14px;
+  background: var(--bg-input);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+/* --- SHARED TEXT --- */
+.text-muted {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin: 6px 0;
+}
+
+/* --- TELEMETRY TERMINAL OUTPUT --- */
+.tlm-out {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* The mirrored console. Bounded and scrolled rather than growing the dialog
+   to the length of the session, and wrapped — a phone cannot scroll sideways
+   through a stack trace comfortably. */
+/* A row of controls. Buttons here are as wide as their label and no wider:
+   a full-width button reads as "the thing to do next", and a panel of six of
+   them stacked reads as six of those. */
+.tlm-row {
+  margin-bottom: 20px;
+}
+
+.btn-inline {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font-size: 0.85rem;
+}
+
+/* Pushed to the far end of its row. */
+.tlm-end {
+  margin-left: auto;
+}
+
+/* The picker takes the room; its button does not. `stretch` on the row makes
+   the two the same height, which padding alone never quite managed. */
+.tlm-testrow > select {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  margin: 0;
+}
+
+.tlm-divider {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: 28px 0 20px;
+}
+
+/* The live numbers, as cards: label above value, wrapping into as many
+   columns as the width allows. Six rows of label-and-value pushed everything
+   else off the screen on a phone. */
+.tlm-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tlm-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.tlm-stat-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tlm-stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  /* Grid rows stretch every card to the tallest, so a label that wraps onto
+     two lines ("Failed images") would leave its number sitting higher than
+     its neighbours. Pushed to the bottom, they all line up. */
+  margin-top: auto;
+}
+
+/* A card has room for one word; the sentence goes to the message log. */
+.tlm-ok    { color: var(--color-success); }
+.tlm-warn  { color: var(--color-warning); }
+.tlm-bad   { color: var(--color-danger); }
+
+/* Said once, quietly, under whichever switch was just turned on. */
+.tlm-relaunch {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 0.8rem;
+}
+
+/* Only takes up space when it has something to say. */
+.tlm-status:empty {
+  display: none;
+}
+
+/* One rhythm for the whole panel: a heading, its explanation close under it,
+   then a clear gap before the controls. `.text-muted`'s symmetric 6px margins
+   made the explanation float midway between the heading above it and the
+   buttons below, belonging to neither. */
+#tlm-panel .text-muted {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+#tlm-panel h3 {
+  margin-top: 32px;
+  margin-bottom: 8px;
+}
+
+.tlm-console {
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}

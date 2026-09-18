@@ -345,11 +345,25 @@ export function createPlexAccount(saved = {}) {
     }
 
     function toItem(md) {
+        const isEp = md.type === "episode";
+        const epLabel = isEp && md.parentIndex !== undefined && md.index !== undefined
+            ? `S${pad(md.parentIndex)}E${pad(md.index)}`
+            : "";
+        const shortTitle = isEp
+            ? (epLabel ? `${epLabel} — ${md.title}` : md.title)
+            : md.title;
+        const fullTitle = isEp && md.grandparentTitle
+            ? `${md.grandparentTitle} — ${shortTitle}`
+            : md.title;
+
         return {
             ref: { kind: "item", key: md.ratingKey },
-            title: md.type === "episode"
-                ? `${md.grandparentTitle || ""} — S${pad(md.parentIndex)}E${pad(md.index)} — ${md.title}`
-                : md.title,
+            title: fullTitle,
+            shortTitle,
+            seriesTitle: md.grandparentTitle || "",
+            episodeNumber: epLabel,
+            episodeName: md.title,
+            durationMs: md.duration || null,
             kind: "item",
             // Where the SERVER thinks this was left off. Plex sends it with every
             // listing — it is what "Continue watching" is built from — and it was
@@ -384,7 +398,11 @@ export function createPlexAccount(saved = {}) {
                 if (!sub) continue;
                 return {
                     title: item.title,
-                    durationMs: md.duration || null,
+                    shortTitle: item.shortTitle || item.title,
+                    seriesTitle: item.seriesTitle || "",
+                    episodeNumber: item.episodeNumber || "",
+                    episodeName: item.episodeName || "",
+                    durationMs: md.duration || item.durationMs || null,
                     // What the progress report has to name. The playback config
                     // is about BYTES — a part id and a subtitle key — and says
                     // nothing about which library item they came from.
@@ -392,8 +410,10 @@ export function createPlexAccount(saved = {}) {
                     // The metadata fetch has the authoritative one; the listing's
                     // copy can be older.
                     resumeMs: md.viewOffset || item.resumeMs || 0,
-                    badges: [media.videoResolution ? `${media.videoResolution}p` : null, "SRT"]
-                        .filter(Boolean),
+                    // Duration is FORMATTED by the flow, not here: three
+                    // copies of one formatter have to agree for ever, and the
+                    // shape of a badge is a presentation question anyway.
+                    badges: [],
                     config: { timelineRef: part.id, subtitleRef: sub.key },
                 };
             }

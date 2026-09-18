@@ -13,20 +13,57 @@
          The sources panel is SKIPPED entirely when there is exactly one
          source; it is not a screen you dismiss. -->
 
-    <div class="status-bar">
-      <!-- Settings are not a property of the thing you are about to watch, so
-           they do not live on its screen. One way in, from anywhere. -->
-      <button class="icon-btn" id="settings-open" aria-label="Settings" title="Settings">⚙</button>
-      <span class="status-indicator" id="status-indicator"></span>
-      <span id="even-status">Starting…</span>
-    </div>
+    <header class="app-header" id="app-header">
+      <div class="header-inner">
+        <div class="header-server">
+          <select id="header-server-select" aria-label="Select server" title="Connected Server">
+            <option value="" disabled selected>No server</option>
+          </select>
+        </div>
+        <nav class="header-breadcrumbs" id="header-breadcrumbs" aria-label="Breadcrumb navigation">
+          <span class="breadcrumb-item active" data-level="root">Home</span>
+        </nav>
+        <div class="header-actions">
+          <button class="icon-btn" id="logging-open" aria-label="Link telemetry & recorder" title="Link telemetry & recorder">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="8" height="14" x="8" y="6" rx="4"></rect>
+              <path d="m19 7-3 2"></path>
+              <path d="m5 7 3 2"></path>
+              <path d="m19 19-3-2"></path>
+              <path d="m5 19 3-2"></path>
+              <path d="M20 13h-4"></path>
+              <path d="M4 13h4"></path>
+              <path d="m10 4 1 2"></path>
+              <path d="m14 4-1 2"></path>
+            </svg>
+          </button>
+          <button class="icon-btn" id="settings-open" aria-label="Settings" title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
 
     <!-- =========================== SETTINGS ============================ -->
-    <div class="overlay hidden" id="panel-settings">
-      <div class="overlay-card">
-        <div class="overlay-head">
+    <dialog class="settings-dialog" id="panel-settings">
+      <div class="dialog-card">
+        <div class="dialog-head">
           <h2>Settings</h2>
           <button class="icon-btn" id="settings-close" aria-label="Close settings" title="Close">✕</button>
+        </div>
+
+        <!-- First, because it answers the question the rest of this dialog
+             takes for granted: are the glasses actually there? It used to sit
+             in the header, and rebuilding the header left the two failure
+             messages — bridge offline, and bridge connected but wiring failed
+             — with nowhere on screen to go. -->
+        <h3>Status</h3>
+        <div class="status-row">
+          <span class="status-indicator" id="status-indicator"></span>
+          <span id="even-status">Starting…</span>
         </div>
 
         <h3>Playback</h3>
@@ -46,17 +83,32 @@
           every other device shows.
         </p>
 
+        <!-- The end labels belong to the TRACK, not to the row. They used to
+             be a second full-width control-row, so "Fewer images" sat against
+             the far left of the panel while the slider it describes started
+             two thirds of the way across. -->
         <div class="control-row">
           <label for="opt-bandwidth">Bandwidth</label>
-          <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
-        </div>
-        <div class="control-row">
-          <span class="text-muted">Fewer images</span>
-          <span class="text-muted">Every scene</span>
+          <div class="range-field">
+            <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
+            <div class="range-ends">
+              <span class="text-muted">Fewer images</span>
+              <span class="text-muted">Every scene</span>
+            </div>
+          </div>
         </div>
         <p class="text-muted" id="bandwidth-note"></p>
 
         <h3>Picture</h3>
+        <!-- Single live preview inside settings if item is selected -->
+        <div id="settings-preview-wrap" class="settings-preview-area hidden">
+          <figure class="single-preview-figure">
+            <img id="settings-preview-img" alt="Picture preview" />
+            <figcaption id="settings-preview-sub" class="text-muted"></figcaption>
+          </figure>
+        </div>
+        <p class="text-muted" id="settings-preview-empty">Select an episode to preview picture adjustments.</p>
+
         <div class="control-row">
           <label for="opt-contrast">Contrast</label>
           <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
@@ -79,15 +131,18 @@
         </div>
         <button class="btn-secondary" id="picture-reset">Reset picture</button>
       </div>
-    </div>
+    </dialog>
 
-    <!-- ============================ SOURCES ============================ -->
+    <!-- ============================ HOME (SOURCES & RECENT) ========= -->
     <div class="section hidden" id="panel-sources">
-      <h2>Your servers</h2>
+      <h2>Home</h2>
+      <div id="recent-section" class="hidden">
+        <h3>Recently played</h3>
+        <div id="recent-list"></div>
+      </div>
+      <h3>Your servers</h3>
       <div id="source-list"></div>
-      <button class="btn-secondary" id="add-source-btn">Add a server</button>
-      <button class="btn-secondary hidden" id="sources-back">Back</button>
-      <button class="btn-link" data-logging>Connect with logging</button>
+      <button class="btn-primary" id="add-source-btn">Add a server</button>
     </div>
 
     <!-- ========================== ADD SOURCE =========================== -->
@@ -98,11 +153,6 @@
         <p class="text-muted">Which kind of server?</p>
         <button class="btn-secondary" data-provider="plex">Plex</button>
         <button class="btn-secondary" data-provider="jellyfin">Jellyfin</button>
-        <!-- The same app with the link recorder attached. Here because a
-             tester who hits something has no other way in: the recorder is a
-             separate page, and a packaged app has no address bar to type it
-             into. -->
-        <button class="btn-link" data-logging>Connect with logging</button>
       </div>
 
       <!-- Jellyfin only: the address IS the identity, so it comes before
@@ -110,9 +160,9 @@
       <div id="add-step-address" class="hidden">
         <div class="input-group">
           <label for="jf-address">Server address</label>
-          <input id="jf-address" type="url" placeholder="http://192.168.1.10:8096" />
+          <input id="jf-address" type="url" placeholder="http://192.168.1.10:8096" inputmode="url" spellcheck="false" autocapitalize="none" />
         </div>
-        <button class="btn-secondary" id="jf-address-next">Continue</button>
+        <button class="btn-primary" id="jf-address-next">Continue</button>
       </div>
 
       <!-- Plex only: the account service lists servers, and there may be
@@ -137,7 +187,7 @@
     <div class="section hidden" id="panel-browse">
       <h2 id="browse-title">Browse</h2>
       <div id="root-list"></div>
-      <button class="btn-secondary hidden" id="browse-back">Servers</button>
+      <button class="btn-secondary hidden" id="browse-back">Home</button>
     </div>
 
     <!-- ============================= LIST ============================== -->
@@ -146,22 +196,6 @@
       <p class="text-muted" id="list-status"></p>
       <div id="results-list"></div>
       <button class="btn-secondary" id="list-back">Back</button>
-    </div>
-
-    <!-- ============================= ITEM ============================== -->
-    <div class="section hidden" id="panel-item">
-      <h2 id="item-title">…</h2>
-
-      <!-- Preview: loads automatically when it is cheap, and asks first when
-           it is not. The provider supplies the estimate. -->
-      <div id="preview-area">
-        <div id="preview-strip"></div>
-        <p class="text-muted" id="preview-note"></p>
-        <button class="btn-secondary hidden" id="preview-load">Preview</button>
-      </div>
-
-      <button class="btn-secondary" id="item-play">Play on glasses</button>
-      <button class="btn-secondary" id="item-back">Back</button>
     </div>
 
     <!-- ============================ PLAYER ============================= -->
@@ -173,6 +207,12 @@
         <div class="load-progress-track"><div class="load-progress-fill" id="load-progress-fill"></div></div>
       </div>
 
+      <!-- An item that cannot be loaded used to say so in the preview note,
+           and that note went with the item panel. Without this the failure
+           was a console line and a player that simply never started, which
+           looks exactly like one that is still loading. -->
+      <p class="player-error hidden" id="player-error"></p>
+
       <div id="player-container">
         <img id="seek-image" alt="" />
         <div id="subtitle-overlay"></div>
@@ -180,8 +220,10 @@
 
       <div id="controls">
         <button class="btn-secondary" id="play-btn">Play</button>
-        <input type="range" id="timeline" min="0" max="0" value="0" />
-        <span id="time-display">0:00</span>
+        <div class="timeline-row">
+          <input type="range" id="timeline" min="0" max="0" value="0" />
+          <span id="time-display">0:00</span>
+        </div>
       </div>
 
       <button class="btn-danger" id="close-player-btn">Stop</button>

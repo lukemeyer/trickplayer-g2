@@ -207,13 +207,29 @@ export function createJellyfinAccount(saved = {}) {
     });
 
     function toItem(it) {
-        const title = it.Type === "Episode"
-            ? `${it.SeriesName || ""} — S${pad(it.ParentIndexNumber)}E${pad(it.IndexNumber)} — ${it.Name}`
+        const isEp = it.Type === "Episode";
+        const epLabel = isEp && it.ParentIndexNumber !== undefined && it.IndexNumber !== undefined
+            ? `S${pad(it.ParentIndexNumber)}E${pad(it.IndexNumber)}`
+            : "";
+        const shortTitle = isEp
+            ? (epLabel ? `${epLabel} — ${it.Name}` : it.Name)
             : it.Name;
+        const fullTitle = isEp && it.SeriesName
+            ? `${it.SeriesName} — ${shortTitle}`
+            : it.Name;
+        const durationMs = it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : null;
+
         // The whole item rides along: the listing already asked for the fields
         // eligibility needs, so resolvePlayable can answer without a request.
         return {
-            ref: { kind: "item", id: it.Id, raw: it }, title, kind: "item",
+            ref: { kind: "item", id: it.Id, raw: it },
+            title: fullTitle,
+            shortTitle,
+            seriesTitle: it.SeriesName || "",
+            episodeNumber: epLabel,
+            episodeName: it.Name,
+            durationMs,
+            kind: "item",
             // Ticks are 100-nanosecond units; milliseconds is what everything
             // above this line speaks.
             resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
@@ -246,13 +262,21 @@ export function createJellyfinAccount(saved = {}) {
         // the same either way, so there is nothing to trade (F-038).
         const [mediaSourceId, byWidth] = Object.entries(tp)[0];
         const width = Math.max(...Object.keys(byWidth).map(Number));
+        const durationMs = it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : (item.durationMs || null);
 
         return {
             title: item.title,
-            durationMs: it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : null,
+            shortTitle: item.shortTitle || item.title,
+            seriesTitle: item.seriesTitle || "",
+            episodeNumber: item.episodeNumber || "",
+            episodeName: item.episodeName || "",
+            durationMs,
             resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
             progressRef: { id: it.Id },
-            badges: [`${width}px`, sub.IsExternal ? "SRT" : "Embedded"],
+            // Duration is FORMATTED by the flow, not here: three
+            // copies of one formatter have to agree for ever, and the
+            // shape of a badge is a presentation question anyway.
+            badges: [],
             config: {
                 itemId: it.Id,
                 mediaSourceId,
