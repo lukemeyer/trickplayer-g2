@@ -815,6 +815,13 @@ import * as store from "./store";
              * touching the network, so quoting it costs nothing.
              */
             function sceneStats() {
+                // Applying a setting before anything is loaded is normal now that
+                // settings are global: the flow restores them at boot, with no
+                // source and no item. That used to throw here.
+                if (!source || !bifs.length) {
+                    return { scenes: 0, withSubtitles: 0, unfiltered: 0, hasCues: false,
+                        deviceBytes: 0, durationMs: 0 };
+                }
                 const count = (skip) => buildSceneList(bifs, subtitles, durationMs, {
                     hasFrameSizeHints: source.capabilities().hasFrameSizeHints,
                     skipSilent: skip,
