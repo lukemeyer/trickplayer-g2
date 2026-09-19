@@ -5,3 +5,15 @@ extract.cjs
 make_assets.cjs
 old_index.html
 .DS_Store
+
+# Dither/LZ4 experiments.
+#
+# 82 MB of BIFs and extracted frames from Jurassic Park, Prometheus and
+# Futurama — stills from commercial media, in a public repo, which is exactly
+# what F-030 exists to prevent. Ignored wholesale rather than file by file so
+# that a `git add -A` cannot reach any of it.
+#
+# The write-ups are the part worth keeping, and they belong in the knowledge
+# repo as a finding rather than here as tracked files. Force-add deliberately
+# (`git add -f`) if a script ever needs to be shared.
+dither-lz4-experiments/
