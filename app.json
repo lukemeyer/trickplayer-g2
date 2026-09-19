@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.25",
+  "version": "0.9.26",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,9 +21,11 @@
   ],
   "changelog": [
     {
-      "version": "0.9.25",
+      "version": "0.9.26",
       "notes": [
-        "Beta release."
+        "Pictures reach the glasses about twice as fast. The way each frame is shaded changed after timing five encodings over Bluetooth on real hardware — the one that was default turned out to be the slowest of them.",
+        "The picture may look slightly different because of it. Settings now has Texture and Grey levels, both switchable while something is playing, so you can pick what suits you.",
+        "When the link slows, the picture degrades more gracefully: it changes shading before it starts throwing away grey levels, and only reduces size as a last resort."
       ]
     }
   ],
