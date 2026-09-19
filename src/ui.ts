@@ -1252,6 +1252,26 @@ $("opt-gamma").oninput = (e) => {
     repaintPreview();
 };
 
+// What each texture costs on the wire, measured on hardware with the same
+// frame sent five ways. Shown because the whole point of exposing these is a
+// judgement about whether the cheaper one looks acceptable, and that judgement
+// needs the price next to it.
+const TEXTURE_NOTES = {
+    "bayer2x2": "Fine — 1117ms a frame measured. The default: a two-pixel pattern repeats at byte granularity, which the host's compressor can pack.",
+    "floyd-steinberg": "Smooth — 2697ms a frame measured, the slowest here. Scatters error so no two bytes repeat.",
+    "bayer": "Coarse — a four-pixel pattern. More visible texture than Fine, and slower.",
+    "atkinson": "Crisp — holds edges, spreads only three quarters of the error.",
+    "threshold": "Flat — no dithering at all. Bands, but nothing to compress around.",
+};
+
+const LEVEL_NOTES = {
+    "auto": "Follows the bandwidth ladder, which drops levels when the link slows.",
+    "16": "Every level the display has.",
+    "perceptual12": "Twelve, thinned in the midtones — 820ms a frame measured, the cheapest of these.",
+    "perceptual8": "Eight, weighted to the shadows — 915ms measured.",
+    "4": "Four, evenly spaced. What the old second rung used: 1333ms, and slower than 16 levels with a Fine texture.",
+};
+
 for (const btn of document.querySelectorAll("[data-texture]")) {
     btn.onclick = () => {
         for (const b of document.querySelectorAll("[data-texture]")) b.classList.remove("active");
@@ -1259,6 +1279,17 @@ for (const btn of document.querySelectorAll("[data-texture]")) {
         // Named by effect, not algorithm: nobody chooses between
         // "Floyd–Steinberg" and "Atkinson" from the names (UI.md §4.2).
         engine.setPicture({ texture: btn.dataset.texture });
+        $("texture-note").textContent = TEXTURE_NOTES[btn.dataset.texture] || "";
+        repaintPreview();
+    };
+}
+
+for (const btn of document.querySelectorAll("[data-levels]")) {
+    btn.onclick = () => {
+        for (const b of document.querySelectorAll("[data-levels]")) b.classList.remove("active");
+        btn.classList.add("active");
+        engine.setLevels(btn.dataset.levels);
+        $("levels-note").textContent = LEVEL_NOTES[btn.dataset.levels] || "";
         repaintPreview();
     };
 }
@@ -1268,9 +1299,15 @@ $("picture-reset").onclick = () => {
     $("opt-brightness").value = 0;
     $("opt-gamma").value = 100;
     for (const b of document.querySelectorAll("[data-texture]")) {
-        b.classList.toggle("active", b.dataset.texture === "floyd-steinberg");
+        b.classList.toggle("active", b.dataset.texture === "bayer2x2");
     }
-    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1, texture: "floyd-steinberg" });
+    for (const b of document.querySelectorAll("[data-levels]")) {
+        b.classList.toggle("active", b.dataset.levels === "auto");
+    }
+    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1, texture: "bayer2x2" });
+    engine.setLevels("auto");
+    $("texture-note").textContent = TEXTURE_NOTES["bayer2x2"];
+    $("levels-note").textContent = "";
     repaintPreview();
 };
 

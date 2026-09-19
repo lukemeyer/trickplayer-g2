@@ -21,16 +21,37 @@
 //
 // Pure, so it can be tested without glasses (tools/quality-check.mjs).
 
-/** Measured with zlib on a detailed scene; the host's compressor is a different one, so ratios, not bytes. */
+/**
+ * The rungs, timed on hardware rather than modelled.
+ *
+ * These used to reduce SHADES first — 16 down to 4 — on the reasoning that
+ * fewer levels is less to send. Measured on a G2 over BLE, the same frame
+ * five ways, that turned out to be the wrong first move:
+ *
+ *   Floyd-Steinberg, 16 shades   2697 ms   <- the old default
+ *   Floyd-Steinberg,  4 shades   1333 ms   <- the old second rung
+ *   Bayer 2x2,       16 shades   1117 ms
+ *   Bayer 2x2, perceptual 12      820 ms
+ *
+ * The old second rung threw away twelve grey levels and was STILL slower than
+ * keeping all sixteen with an ordered dither. Two pixels share a byte in the
+ * packed plane, so a 2x2 pattern repeats at byte granularity and the host's
+ * compressor eats it; error diffusion scatters bytes and gives it nothing.
+ * So the dither comes first, the palette second, and resolution last.
+ *
+ * `palette` is a set of native levels rather than a count, because the eye
+ * separates dark tones far better than bright ones and evenly spaced levels
+ * spend them where they are least useful (see PALETTES in pixels.ts).
+ */
 export const PICTURE_LADDER = [
-    { name: "full", shades: 16, block: 1 },          // 100%
-    { name: "lighter", shades: 4, block: 1 },        // ~43% — shapes stay sharp, tone is dithered
-    { name: "lightest", shades: 4, block: 2 },       // ~15% — half resolution as well
-    // ~5%. Added after a locked session where even "lightest" took 4.7s and
-    // landed only 47% of the time. It is crude — a 64x32 picture — and it is
-    // also a test: if frames this small are still slow, picture size is not
-    // what limits a locked link, and shrinking further is pointless.
-    { name: "minimal", shades: 4, block: 4 },
+    { name: "full", shades: 16, block: 1 },                       // 1117 ms measured
+    { name: "lighter", palette: "perceptual12", block: 1 },       //  820 ms measured
+    { name: "lightest", palette: "perceptual12", block: 2 },      // half resolution as well
+    // Added after a locked session where even "lightest" took 4.7s and landed
+    // only 47% of the time. It is crude — a 64x32 picture — and it is also a
+    // test: if frames this small are still slow, picture size is not what
+    // limits a locked link, and shrinking further is pointless.
+    { name: "minimal", palette: "perceptual12", block: 4 },
 ];
 
 export function createQualityController({

@@ -113,14 +113,35 @@
           <label for="opt-contrast">Contrast</label>
           <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
         </div>
+        <!-- Fine is the default now: on hardware it is 59% faster on the wire
+             than Smooth at the same sixteen grey levels. What it LOOKS like on
+             a green micro-OLED is the open question, which is why all of these
+             are switchable while something is playing. -->
         <div class="control-row">
           <label>Texture</label>
           <span class="segmented">
-            <button class="btn-secondary active" data-texture="floyd-steinberg">Smooth</button>
+            <button class="btn-secondary active" data-texture="bayer2x2">Fine</button>
+            <button class="btn-secondary" data-texture="floyd-steinberg">Smooth</button>
+            <button class="btn-secondary" data-texture="bayer">Coarse</button>
             <button class="btn-secondary" data-texture="atkinson">Crisp</button>
             <button class="btn-secondary" data-texture="threshold">Flat</button>
           </span>
         </div>
+        <p class="text-muted" id="texture-note"></p>
+
+        <!-- Auto follows the bandwidth ladder. The rest pin it, so two
+             encodings can be compared without the ladder moving underneath. -->
+        <div class="control-row">
+          <label>Grey levels</label>
+          <span class="segmented">
+            <button class="btn-secondary active" data-levels="auto">Auto</button>
+            <button class="btn-secondary" data-levels="16">16</button>
+            <button class="btn-secondary" data-levels="perceptual12">P12</button>
+            <button class="btn-secondary" data-levels="perceptual8">P8</button>
+            <button class="btn-secondary" data-levels="4">4</button>
+          </span>
+        </div>
+        <p class="text-muted" id="levels-note"></p>
         <div class="control-row">
           <label for="opt-brightness">Brightness</label>
           <input type="range" id="opt-brightness" min="-100" max="100" step="1" value="0" />
