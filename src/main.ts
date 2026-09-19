@@ -6,7 +6,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
-import { toGlassesLevels, expandBlocks } from "./pixels";
+import { toGlassesLevels, expandBlocks, PALETTES } from "./pixels";
 import { createQualityController } from "./quality";
 import { encodeGreyPng } from "./png";
 import * as store from "./store";
@@ -120,7 +120,29 @@ import * as store from "./store";
             let brightnessValue = 0;
             let contrastValue = 0;
             let gammaValue = 1.0;
-            let ditherAlgorithm = "floyd-steinberg";
+            // Bayer 2x2, because it is 59% faster on the wire than
+            // Floyd-Steinberg at the same sixteen shades — measured on hardware,
+            // same frame, five encodings (see PICTURE_LADDER). Two pixels share
+            // a byte in the packed plane, so a two-pixel pattern repeats at byte
+            // granularity and the host's compressor can match it.
+            let ditherAlgorithm = "bayer2x2";
+
+            /**
+             * A manual levels choice from the settings panel, or null to follow
+             * the ladder.
+             *
+             * Exists so a wearer can judge encodings against real material.
+             * Numbers say Bayer 2x2 and the perceptual palettes are far cheaper;
+             * nothing so far says what they LOOK like on a green micro-OLED,
+             * and no metric is going to answer that.
+             */
+            let levelsOverride = null;
+
+            /** A palette by name, or whatever was passed, or undefined. */
+            function resolvePalette(p) {
+                if (!p) return undefined;
+                return typeof p === "string" ? PALETTES[p] : p;
+            }
 
             // --- EVEN HARDWARE STATE WRAPPERS ---
             let bridgeInstance = null;
@@ -754,7 +776,12 @@ import * as store from "./store";
                             contrast: contrastValue,
                             gamma: gammaValue,
                             dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
-                            shades: rung.shades,
+                            // A rung asks for either a level COUNT or a named
+                            // palette; a manual override from the settings panel
+                            // beats both, so a wearer can judge one encoding
+                            // against another on real material.
+                            shades: levelsOverride?.shades ?? rung.shades,
+                            palette: resolvePalette(levelsOverride?.palette ?? rung.palette),
                         });
                         return expandBlocks(small, sw, sh, rung.block);
                     });
@@ -2822,6 +2849,158 @@ import * as store from "./store";
              * So send the SAME picture encoded each way and see. A minute, on
              * the hardware, and the ladder in IMAGE_FORMATS stops being a guess.
              */
+            /**
+             * Which dither the LINK likes, measured rather than modelled.
+             *
+             * The whole dither/compression investigation has been run against
+             * LZ4 standing in for the host's own compressor, which announces
+             * `compressMode: 2` and is otherwise unidentified. Every KB and
+             * every millisecond in it therefore rests on a proxy nobody has
+             * checked. This checks it.
+             *
+             * The trick is that the app cannot see the wire payload at all —
+             * the host compresses after `updateImageRawData` takes the bytes.
+             * But it can see how long the write took, and time tracks wire
+             * bytes at about 105 ms/KB (F-049). So the DURATION is the readout:
+             * the PNG handed over is the same size every time (stored deflate
+             * blocks, so 16 KB whatever the picture), and any difference in how
+             * long it takes is the host's compressor responding to the dither.
+             *
+             * Same frame, same tone controls, five encodings. If the ordering
+             * matches the LZ4 predictions, the research transfers and can be
+             * acted on. If it does not, it was measuring the wrong thing and
+             * better to know before shipping a ladder built on it.
+             *
+             * `adb logcat` gives the exact wire bytes for anyone who wants
+             * them; the markers below bracket each variant so they can be
+             * attributed. The panel's own answer needs no cable.
+             */
+            export async function probeDithers({ perVariant = 5 } = {}) {
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+
+                // The LIST page carries no image container, so with the picker
+                // showing every write answers `sendFailed` and the probe reports
+                // a link problem that is really a page problem. Put the player
+                // up and insist it took.
+                //
+                // Asked of the PAGE rather than of `startupPageReady`, which
+                // was the first guard here and was wrong: a session can rebuild
+                // pages perfectly well while that flag is false, and it then
+                // refused to run on glasses that were plainly working.
+                if (!(await applyPage("player"))) {
+                    throw new Error(
+                        "the glasses refused the player page, so there is nowhere to send a picture — " +
+                        "play something once, or relaunch the app, then run this again",
+                    );
+                }
+
+                // A REAL frame when there is one: compressibility is a property
+                // of the picture, and a synthetic gradient is not the thing the
+                // ladder will be choosing rungs for. Falls back to the probe
+                // pattern so the test is still runnable with nothing loaded.
+                const { canvas, ctx } = prepSurface(w, h);
+                let source = "synthetic";
+                if (bifs.length) {
+                    try {
+                        const mid = sceneList.length
+                            ? sceneList[sceneList.length >> 1].frameIndex
+                            : bifs.length >> 1;
+                        const { blob } = await getFrameAssets(mid);
+                        const bitmap = await decodeFrame(blob);
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(bitmap, 0, 0, w, h);
+                        source = `frame ${mid}`;
+                    } catch (e) {
+                        console.warn(`[Dither] could not read a real frame: ${e?.message || e}`);
+                    }
+                }
+                if (source === "synthetic") {
+                    const g = ctx.createLinearGradient(0, 0, w, h);
+                    g.addColorStop(0, "#101820"); g.addColorStop(0.5, "#c8d0d8"); g.addColorStop(1, "#201810");
+                    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+                    for (let i = 0; i < 40; i++) {
+                        ctx.fillStyle = `rgba(${(i * 37) % 256},${(i * 91) % 256},${(i * 53) % 256},0.5)`;
+                        ctx.fillRect((i * 71) % w, (i * 43) % h, 8 + (i % 17), 6 + (i % 13));
+                    }
+                }
+                const rgba = ctx.getImageData(0, 0, w, h).data;
+
+                // The two shipping rungs first, so everything else is read
+                // against what the wearer gets today rather than against each
+                // other.
+                const variants = [
+                    { name: "ship full (FS 16)", dither: "floyd-steinberg", shades: 16 },
+                    { name: "ship lighter (FS 4)", dither: "floyd-steinberg", shades: 4 },
+                    { name: "bayer2x2 16", dither: "bayer2x2", shades: 16 },
+                    { name: "perceptual12 bayer2x2", dither: "bayer2x2", palette: PALETTES.perceptual12 },
+                    { name: "perceptual8 bayer2x2", dither: "bayer2x2", palette: PALETTES.perceptual8 },
+                ];
+
+                const tone = {
+                    brightness: brightnessValue, contrast: contrastValue, gamma: gammaValue,
+                };
+                const results = [];
+                for (const v of variants) {
+                    const levels = toGlassesLevels(rgba, w, h, { ...tone, dither: v.dither, shades: v.shades, palette: v.palette });
+                    const bytes = encodeGreyPng(levels, w, h, 4);
+                    // Bracket the variant in the log, so a logcat capture can
+                    // attribute each BLE write to the encoding that caused it.
+                    console.log(`[Dither] === ${v.name} === ${perVariant} sends, ${(bytes.byteLength / 1024).toFixed(1)}KB handed over`);
+                    noteLifecycle("dither-probe-variant", { name: v.name, bytes: bytes.byteLength });
+
+                    let ok = 0, lastReason = "";
+                    const times = [];
+                    for (let n = 0; n < perVariant; n++) {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        const meta = { bytes: bytes.byteLength, probe: true, dither: v.name };
+                        const r = await ble.sendImage(async (p) => {
+                            const res = await bridgeInstance.updateImageRawData(p);
+                            meta.result = res;
+                            lastReason = res;
+                            return res === "success";
+                        }, payload, meta);
+                        if (r.ok) { ok++; times.push(r.duration); }
+                        // Name it on the glasses too: a variant the hardware
+                        // accepts but draws as mush would otherwise pass.
+                        await ble.sendText(
+                            (content) => bridgeInstance.textContainerUpgrade({
+                                containerID: 1, containerName: "g2_subs",
+                                contentOffset: 0, contentLength: 0, content,
+                            }),
+                            `${v.name} #${n + 1}`,
+                        );
+                    }
+                    times.sort((a, b) => a - b);
+                    const median = times.length ? times[times.length >> 1] : 0;
+                    results.push({
+                        name: v.name,
+                        pngKb: +(bytes.byteLength / 1024).toFixed(1),
+                        ok, of: perVariant,
+                        medianMs: Math.round(median),
+                        // What that duration implies the host compressed to,
+                        // at F-049's measured 105 ms/KB. An ESTIMATE, and the
+                        // only one available without a cable.
+                        wireKb: median ? +((median / 105)).toFixed(1) : 0,
+                        reason: ok === perVariant ? "" : lastReason,
+                    });
+                    console.log(`[Dither] ${v.name}: ${ok}/${perVariant} accepted, median ${Math.round(median)}ms` +
+                        `${median ? ` (~${(median / 105).toFixed(1)}KB on the wire)` : ""}`);
+                }
+
+                const base = results[0];
+                for (const r of results) {
+                    r.vsShipping = base.medianMs ? Math.round(r.medianMs - base.medianMs) : 0;
+                }
+                noteLifecycle("dither-probe", { source, results });
+                console.log(`[Dither] source: ${source}. Handed-over PNG is the same size for every ` +
+                    `variant, so every difference above is the host's compressor.`);
+                return { source, results };
+            }
+
             export async function probeFormats({ perFormat = 3 } = {}) {
                 if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
                 const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
@@ -3047,6 +3226,21 @@ import * as store from "./store";
                 bandwidthStride = [3, 2, 1][Math.max(0, Math.min(2, Number(level)))] ?? 1;
                 rebuildScenes();
                 return sceneStats();
+            }
+
+            /**
+             * Pin the grey levels, or hand them back to the ladder.
+             *
+             * `"auto"` follows the rung. Anything else is a fixed choice that
+             * outranks it, which is what makes an A/B on real playback possible
+             * — the ladder would otherwise move underneath the comparison.
+             */
+            export function setLevels(choice) {
+                if (!choice || choice === "auto") levelsOverride = null;
+                else if (choice in PALETTES) levelsOverride = { palette: choice };
+                else levelsOverride = { shades: Number(choice) || 16 };
+                noteLifecycle("levels-choice", { choice });
+                return levelsOverride;
             }
 
             export function setPicture(p) {

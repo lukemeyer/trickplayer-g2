@@ -249,6 +249,29 @@ const TESTS = [
         },
     },
     {
+        id: "dithers",
+        label: "Which dither the link likes (~1 min)",
+        // Twenty-five image writes, and the DURATIONS are the whole
+        // measurement. Behind playback they would queue, and what got measured
+        // would be the wait rather than the encoding.
+        needsPaused: "Pause playback first — this sends 25 frames of its own and times every one.",
+        busy: "Sending the same frame five ways…",
+        async run(engine) {
+            recorder.mark("dither-probe-start");
+            const { source, results } = await engine.probeDithers();
+            recorder.mark("dither-probe-end");
+            const base = results[0]?.medianMs || 0;
+            const parts = results.map((r) => {
+                if (!r.ok) return `${r.name}: FAILED (${r.reason || "no reason"})`;
+                const delta = base && r.medianMs !== base
+                    ? ` ${r.medianMs < base ? "−" : "+"}${Math.abs(r.medianMs - base)}ms` : "";
+                return `${r.name} ${r.medianMs}ms ≈${r.wireKb}KB${delta}`;
+            });
+            return `${source} · ${parts.join("  ·  ")} · the handed-over PNG is the ` +
+                `same size every time, so the differences are the host's compressor.`;
+        },
+    },
+    {
         id: "prep",
         // Deliberately usable with nothing connected. The prepare tail was the
         // largest unexplained number in a hardware session, and needing a

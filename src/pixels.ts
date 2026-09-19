@@ -23,6 +23,69 @@ const BAYER_4X4 = [
     [15, 7, 13, 5],
 ];
 
+/**
+ * The 2x2 matrix, which matters for a reason that is not about how it looks.
+ *
+ * Two pixels share one byte in the 4-bit packed plane, so a pattern with a
+ * two-pixel horizontal period repeats at BYTE granularity — the same byte over
+ * and over across a smooth region. Error diffusion scatters values and leaves
+ * the host's compressor almost nothing to match. The wire payload is what the
+ * link spends its time on (F-049), so this is a transport choice before it is
+ * a picture one.
+ */
+const BAYER_2X2 = [
+    [0, 2],
+    [3, 1],
+];
+
+/**
+ * Level sets that are not evenly spaced.
+ *
+ * The display's 16 levels are linear in signal and vision is not: the eye
+ * separates two dark tones far better than two bright ones. Dropping to four
+ * EVENLY spaced levels therefore spends them where they are least useful and
+ * throws away the shadow detail a night scene is made of. The same count,
+ * distributed unevenly, keeps the shadows and gives up highlight steps nobody
+ * can see.
+ *
+ * Offered, not chosen. Nothing selects these until they have been measured on
+ * hardware — which is what `probeDithers` is for.
+ */
+export const PALETTES = {
+    /** Eight levels, weighted towards the shadows. */
+    perceptual8: [0, 1, 3, 5, 7, 9, 12, 15],
+    /** Twelve, thinning midtones where neighbouring steps are hardest to tell apart. */
+    perceptual12: [0, 1, 2, 3, 5, 7, 9, 11, 12, 13, 14, 15],
+};
+
+/** Nearest palette value — what the error-diffusion dithers quantise to. */
+function nearestInPalette(palVals, v) {
+    let best = palVals[0];
+    let bestDist = Math.abs(v - best);
+    for (let i = 1; i < palVals.length; i++) {
+        const d = Math.abs(v - palVals[i]);
+        if (d < bestDist) { bestDist = d; best = palVals[i]; }
+    }
+    return best;
+}
+
+/**
+ * Which of two bracketing palette values an ordered threshold picks.
+ *
+ * The threshold is a position BETWEEN neighbouring levels, so with an uneven
+ * palette one threshold spans a wide interval in the highlights and a narrow
+ * one in the shadows. That is the point of an uneven palette, not a side
+ * effect of it.
+ */
+function orderedInPalette(palVals, v, threshold) {
+    let i = 0;
+    while (i < palVals.length - 1 && v > palVals[i + 1]) i++;
+    const lo = palVals[i];
+    const hi = i + 1 < palVals.length ? palVals[i + 1] : lo;
+    const span = (hi - lo) || 1;
+    return (v - lo) / span > threshold ? hi : lo;
+}
+
 /** The display has 16 grey levels; 255/15 = 17 per step. */
 const STEP = 17;
 const LEVELS = 15;
@@ -54,11 +117,16 @@ function quantisePlane(data, w, h, opts = {}) {
     const shades = opts.shades ?? 16;
     const step = 255 / (shades - 1);
     const top = shades - 1;
-    const quant = (v) => {
-        let k = Math.round(v / step);
-        k = k < 0 ? 0 : k > top ? top : k;
-        return k * step;
-    };
+    // An explicit palette overrides the even spacing. Absent — which is every
+    // shipping path — nothing below behaves differently from before.
+    const palVals = opts.palette ? opts.palette.map((k) => k * STEP) : null;
+    const quant = palVals
+        ? (v) => nearestInPalette(palVals, v)
+        : (v) => {
+            let k = Math.round(v / step);
+            k = k < 0 ? 0 : k > top ? top : k;
+            return k * step;
+        };
 
     const n = w * h;
     const gray = new Float32Array(n);
@@ -111,14 +179,22 @@ function quantisePlane(data, w, h, opts = {}) {
                 if (y + 2 < h) gray[idx + 2 * w] += err;
             }
         }
-    } else if (dither === "bayer") {
+    } else if (dither === "bayer" || dither === "bayer2x2") {
+        const two = dither === "bayer2x2";
+        const matrix = two ? BAYER_2X2 : BAYER_4X4;
+        const mask = two ? 1 : 3;
+        const scale = two ? 4 : 16;
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
                 const idx = y * w + x;
                 const oldVal = gray[idx];
+                const threshold = (matrix[y & mask][x & mask] + 0.5) / scale;
+                if (palVals) {
+                    gray[idx] = orderedInPalette(palVals, oldVal, threshold);
+                    continue;
+                }
                 const level = Math.floor(oldVal / step);
                 const remainder = (oldVal % step) / step;
-                const threshold = (BAYER_4X4[y & 3][x & 3] + 0.5) / 16;
                 gray[idx] = Math.min(255, Math.min(top, remainder > threshold ? level + 1 : level) * step);
             }
         }
