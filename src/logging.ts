@@ -272,6 +272,29 @@ const TESTS = [
         },
     },
     {
+        id: "compare",
+        label: "Compare dithers by eye (~5 min)",
+        // Eighteen image sends and a person answering between each. Behind
+        // playback the pictures would queue and the wearer would be judging
+        // whatever arrived last.
+        needsPaused: "Pause playback first — this puts its own pictures up and waits for you between each.",
+        busy: "Choosing frames…",
+        async run(engine) {
+            recorder.mark("picture-comparison-start");
+            const { answers, tally } = await engine.runPictureComparison({
+                onProgress: (text) => setHint(text),
+            });
+            recorder.mark("picture-comparison-end");
+            if (!answers.length) return "No comparisons recorded.";
+            // Revealed only now: the wearer judged them blind, and seeing the
+            // names mid-run is exactly how a preference becomes an expectation.
+            const lines = Object.entries(tally).map(([group, rows]) =>
+                `${group} — ` + rows.map((r) =>
+                    `${r.id}: ${r.wins}W ${r.losses}L${r.draws ? ` ${r.draws}=` : ""}`).join(", "));
+            return `${answers.length} comparisons. ${lines.join("  ·  ")}`;
+        },
+    },
+    {
         id: "prep",
         // Deliberately usable with nothing connected. The prepare tail was the
         // largest unexplained number in a hardware session, and needing a

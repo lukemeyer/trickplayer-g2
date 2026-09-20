@@ -2354,6 +2354,36 @@ import * as store from "./store";
                     return;
                 }
             
+                // The picture comparison owns the touchpad while it runs.
+                //
+                // Swipes arrive on whichever container captures events — the
+                // subtitle line on this page — as SCROLL_TOP/SCROLL_BOTTOM,
+                // measured. A CLICK is eventType 0, and proto3 omits a
+                // zero-valued field, so a click reaches us as an event with no
+                // type at all; that absence IS the tap. Same shape the list
+                // path was already forced into (F-053).
+                if (comparisonInput) {
+                    const t = textType ?? sysType;
+                    if (t === OsEventTypeList.SCROLL_TOP_EVENT) {
+                        comparisonInput.index = Math.max(0, comparisonInput.index - 1);
+                        showChoiceLine(comparisonInput.index);
+                        return;
+                    }
+                    if (t === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+                        comparisonInput.index = Math.min(COMPARE_CHOICES.length - 1, comparisonInput.index + 1);
+                        showChoiceLine(comparisonInput.index);
+                        return;
+                    }
+                    if (t == null || t === OsEventTypeList.CLICK_EVENT) {
+                        const { resolve, index } = comparisonInput;
+                        comparisonInput = null;
+                        resolve(COMPARE_CHOICES[index]);
+                        return;
+                    }
+                    // Anything else — foreground changes, exits — falls through
+                    // to the handlers below, which still need to see them.
+                }
+
                 // Pause / Play toggle on single tap
                 if (sysType === OsEventTypeList.CLICK_EVENT) {
                     // MARKED, because an unmarked one cost a session. Playback
@@ -2875,6 +2905,274 @@ import * as store from "./store";
              * them; the markers below bracket each variant so they can be
              * attributed. The panel's own answer needs no cable.
              */
+            // ------------------------------------------------- picture comparison
+            //
+            // Which dither LOOKS best, asked of the only instrument that can
+            // answer: a person wearing the glasses.
+            //
+            // Every number so far says the ordered dithers are far cheaper on
+            // the wire. Nothing says what they look like on a green micro-OLED
+            // at 256x128, and PSNR cannot be asked — a metric that compares
+            // pixel to pixel against the original punishes dithering for doing
+            // the exact thing dithering is for.
+            //
+            // Two design decisions carry this:
+            //
+            // SPLIT FRAME. The display shows one image at a time and a send
+            // costs a second or more, so "look at A, remember it, look at B"
+            // would be asking the eye to hold fine texture across a gap far
+            // longer than visual memory lasts. Instead the SAME crop is
+            // rendered twice, side by side, in one image. Nothing is
+            // remembered; the difference is either visible or it is not.
+            //
+            // ANSWERED ON THE GLASSES. Looking down at a phone re-adapts the
+            // eye to a screen orders of magnitude brighter, and shadow detail
+            // is the first casualty — which is precisely what the thinned
+            // palettes are on trial for. Swipe to move, tap to confirm,
+            // measured as arriving on the event-capturing container.
+
+            /** Where the wearer is in the three-way choice, or null when not asking. */
+            let comparisonInput = null;
+
+            const COMPARE_CHOICES = ["left", "same", "right"];
+
+            /** Redraw the choice line. Text is ~80ms against ~1000ms for an image. */
+            async function showChoiceLine(index) {
+                const line = COMPARE_CHOICES
+                    .map((c, i) => (i === index ? `[ ${c.toUpperCase()} ]` : `  ${c}  `))
+                    .join("");
+                await ble.sendText(
+                    (content) => bridgeInstance.textContainerUpgrade({
+                        containerID: 1, containerName: "g2_subs",
+                        contentOffset: 0, contentLength: 0, content,
+                    }),
+                    line,
+                ).catch(() => {});
+            }
+
+            /** Ask, and resolve with "left" | "same" | "right". */
+            function askChoice() {
+                return new Promise((resolve) => {
+                    comparisonInput = { index: 1, resolve };
+                    showChoiceLine(1);
+                });
+            }
+
+            /**
+             * Mean luminance of a decoded frame, for choosing a spread of
+             * material rather than three shots of the same wall.
+             */
+            async function frameBrightness(frameIndex) {
+                const { blob } = await getFrameAssets(frameIndex);
+                const bitmap = await decodeFrame(blob);
+                const { canvas, ctx } = prepSurface(GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT);
+                ctx.clearRect(0, 0, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT);
+                ctx.drawImage(bitmap, 0, 0, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT);
+                const d = ctx.getImageData(0, 0, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT).data;
+                let sum = 0;
+                for (let i = 0; i < d.length; i += 4) {
+                    sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                }
+                void canvas;
+                return sum / (d.length / 4);
+            }
+
+            /**
+             * A dark one, a middling one and a bright one.
+             *
+             * Stratified rather than random: three random frames from one film
+             * are very often three similar shots, and the shadows are where a
+             * thinned palette will break if it breaks at all.
+             */
+            async function pickComparisonFrames(count) {
+                const pool = sceneList.length
+                    ? sceneList.map((s) => s.frameIndex)
+                    : bifs.map((_, i) => i);
+                if (!pool.length) throw new Error("nothing loaded — open an item first");
+                const step = Math.max(1, Math.floor(pool.length / 9));
+                const sampled = [];
+                for (let i = 0; i < pool.length && sampled.length < 9; i += step) {
+                    sampled.push({ frameIndex: pool[i], mean: await frameBrightness(pool[i]) });
+                }
+                sampled.sort((a, b) => a.mean - b.mean);
+                if (sampled.length <= count) return sampled.map((s) => s.frameIndex);
+                // Evenly across the brightness order: darkest, middling,
+                // brightest for three. One frame takes the middle rather than
+                // dividing by zero, which is what asking for one used to do.
+                const picks = [];
+                for (let k = 0; k < count; k++) {
+                    const at = count === 1
+                        ? (sampled.length - 1) >> 1
+                        : Math.round((k * (sampled.length - 1)) / (count - 1));
+                    picks.push(sampled[at]);
+                }
+                return picks.map((s) => s.frameIndex);
+            }
+
+            /**
+             * One image, one crop, two dithers.
+             *
+             * The crop is taken from the middle of the prepared frame so both
+             * halves carry identical pixels — the only difference between them
+             * is the encoding, which is the entire point. A two-pixel gutter
+             * keeps the two dither patterns from running into one another and
+             * hiding the seam.
+             */
+            function renderSplit(rgba, w, h, optsA, optsB) {
+                const half = (w >> 1) - 1;          // 127 px each side, 2 px gutter
+                const cropX = (w - half) >> 1;
+                const crop = new Uint8ClampedArray(half * h * 4);
+                for (let y = 0; y < h; y++) {
+                    const src = (y * w + cropX) * 4;
+                    crop.set(rgba.subarray(src, src + half * 4), y * half * 4);
+                }
+                const tone = { brightness: brightnessValue, contrast: contrastValue, gamma: gammaValue };
+                // Candidates name their palette; the quantiser wants the levels.
+                const side = (o) => ({ ...tone, ...o, palette: resolvePalette(o.palette) });
+                const a = toGlassesLevels(crop, half, h, side(optsA));
+                const b = toGlassesLevels(crop, half, h, side(optsB));
+                const out = new Uint8Array(w * h);
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < half; x++) {
+                        out[y * w + x] = a[y * half + x];
+                        out[y * w + x + half + 2] = b[y * half + x];
+                    }
+                }
+                return out;
+            }
+
+            /** The candidates, grouped so nothing is compared across ladder rungs. */
+            const COMPARISON_GROUPS = [
+                {
+                    name: "full detail",
+                    candidates: [
+                        { id: "Fine (Bayer 2x2)", dither: "bayer2x2", shades: 16 },
+                        { id: "Smooth (Floyd-Steinberg)", dither: "floyd-steinberg", shades: 16 },
+                        { id: "Coarse (Bayer 4x4)", dither: "bayer", shades: 16 },
+                    ],
+                },
+                {
+                    name: "reduced levels",
+                    candidates: [
+                        { id: "Perceptual 12", dither: "bayer2x2", palette: "perceptual12" },
+                        { id: "Perceptual 8", dither: "bayer2x2", palette: "perceptual8" },
+                        { id: "Four, even", dither: "bayer2x2", shades: 4 },
+                    ],
+                },
+            ];
+
+            const COMPARISON_KEY = "trickplayer.comparison";
+
+            /**
+             * Run the whole thing.
+             *
+             * Answers are written away as each one is given, not at the end. A
+             * double-tap is a system gesture that ends the app and cannot be
+             * intercepted, so a stray one mid-run would otherwise take every
+             * judgement with it.
+             */
+            export async function runPictureComparison({ frames = 3, onProgress = () => {} } = {}) {
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+
+                // This owns the screen for several minutes: it puts its own
+                // pictures up and waits for an answer between each. A running
+                // scene pipeline would overwrite both the comparison and the
+                // choice line within a second or two — which is exactly what
+                // it did the first time this ran.
+                if (isPlaying || scenePipelineRunning) {
+                    noteLifecycle("playback-stopped", { by: "picture comparison" });
+                    isPlaying = false;
+                    stopScenePipeline();
+                    try { silentAudio.pause(); } catch (e) {}
+                }
+
+                if (!(await applyPage("player"))) {
+                    throw new Error("the glasses refused the player page — play something once, then retry");
+                }
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+
+                onProgress("Choosing frames…");
+                const chosen = await pickComparisonFrames(frames);
+
+                // Every pairing, shuffled, so neither the order nor the side
+                // carries information about which candidate is which.
+                const trials = [];
+                for (const frameIndex of chosen) {
+                    for (const group of COMPARISON_GROUPS) {
+                        const c = group.candidates;
+                        for (let i = 0; i < c.length; i++) {
+                            for (let j = i + 1; j < c.length; j++) {
+                                const flip = Math.random() < 0.5;
+                                trials.push({
+                                    frameIndex, group: group.name,
+                                    left: flip ? c[j] : c[i],
+                                    right: flip ? c[i] : c[j],
+                                });
+                            }
+                        }
+                    }
+                }
+                for (let i = trials.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [trials[i], trials[j]] = [trials[j], trials[i]];
+                }
+
+                const answers = [];
+                const save = () => store.writeBulk(COMPARISON_KEY,
+                    JSON.stringify({ at: Date.now(), answers })).catch(() => {});
+
+                for (let n = 0; n < trials.length; n++) {
+                    const t = trials[n];
+                    onProgress(`Comparison ${n + 1} of ${trials.length} — answer on the glasses.`);
+                    const { blob } = await getFrameAssets(t.frameIndex);
+                    const bitmap = await decodeFrame(blob);
+                    const { ctx } = prepSurface(w, h);
+                    ctx.clearRect(0, 0, w, h);
+                    ctx.drawImage(bitmap, 0, 0, w, h);
+                    const rgba = ctx.getImageData(0, 0, w, h).data;
+                    const levels = renderSplit(rgba, w, h, t.left, t.right);
+                    const bytes = encodeGreyPng(levels, w, h, 4);
+                    const payload =
+                        typeof ImageRawDataUpdate !== "undefined"
+                            ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                            : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                    await ble.sendImage(async (p) =>
+                        (await bridgeInstance.updateImageRawData(p)) === "success",
+                        payload, { bytes: bytes.byteLength, probe: true, comparison: true });
+
+                    const choice = await askChoice();
+                    const winner = choice === "same" ? null
+                        : choice === "left" ? t.left.id : t.right.id;
+                    const loser = choice === "same" ? null
+                        : choice === "left" ? t.right.id : t.left.id;
+                    answers.push({
+                        frameIndex: t.frameIndex, group: t.group,
+                        left: t.left.id, right: t.right.id, choice, winner, loser,
+                    });
+                    save();
+                    console.log(`[Compare] ${t.group}: ${t.left.id} vs ${t.right.id} -> ${choice}`);
+                }
+
+                comparisonInput = null;
+                noteLifecycle("picture-comparison", { frames: chosen, trials: answers.length });
+                return { frames: chosen, answers, tally: tallyComparison(answers) };
+            }
+
+            /** Wins, losses and draws per candidate, per group. */
+            export function tallyComparison(answers) {
+                const byGroup = {};
+                for (const a of answers) {
+                    const g = (byGroup[a.group] ??= {});
+                    for (const id of [a.left, a.right]) g[id] ??= { id, wins: 0, losses: 0, draws: 0 };
+                    if (a.choice === "same") { g[a.left].draws++; g[a.right].draws++; }
+                    else { g[a.winner].wins++; g[a.loser].losses++; }
+                }
+                return Object.fromEntries(Object.entries(byGroup).map(([name, cands]) => [
+                    name,
+                    Object.values(cands).sort((x, y) => (y.wins - y.losses) - (x.wins - x.losses)),
+                ]));
+            }
+
             export async function probeDithers({ perVariant = 5 } = {}) {
                 if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
                 const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;

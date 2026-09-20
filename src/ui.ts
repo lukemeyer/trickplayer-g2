@@ -766,6 +766,24 @@ if (harness.get("settings") === "1") {
     setTimeout(() => openSettings(), 2000);
 }
 
+// `?compare=1` starts the picture comparison once something is playing. The
+// simulator has no pointer into the webview, and this is the one tool whose
+// whole loop — send, swipe, tap — has to be driven from outside.
+if (harness.get("compare") === "1") {
+    setTimeout(async () => {
+        const { runPictureComparison } = engine;
+        try {
+            const r = await runPictureComparison({
+                frames: Number(harness.get("frames")) || 2,
+                onProgress: (t) => console.log(`[Compare] ${t}`),
+            });
+            console.log(`[Compare] done: ${JSON.stringify(r.tally)}`);
+        } catch (e) {
+            console.error(`[Compare] failed: ${e?.message || e}`);
+        }
+    }, Number(harness.get("comparedelay")) || 6000);
+}
+
 // `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
 // The simulator has no pointer into the webview, so the first tap of sign-in
 // cannot be made by hand there.
