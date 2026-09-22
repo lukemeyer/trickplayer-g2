@@ -2372,14 +2372,15 @@ import * as store from "./store";
                         return;
                     }
                     if (t === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-                        comparisonInput.index = Math.min(COMPARE_CHOICES.length - 1, comparisonInput.index + 1);
+                        comparisonInput.index =
+                            Math.min(comparisonInput.choices.length - 1, comparisonInput.index + 1);
                         showChoiceLine(comparisonInput.index);
                         return;
                     }
                     if (t == null || t === OsEventTypeList.CLICK_EVENT) {
-                        const { resolve, index } = comparisonInput;
+                        const { resolve, index, choices } = comparisonInput;
                         comparisonInput = null;
-                        resolve(COMPARE_CHOICES[index]);
+                        resolve(choices[index]);
                         return;
                     }
                     // Anything else — foreground changes, exits — falls through
@@ -2917,7 +2918,7 @@ import * as store from "./store";
 
             /** Redraw the choice line. Text is ~80ms against ~1000ms for an image. */
             async function showChoiceLine(index) {
-                const line = COMPARE_CHOICES
+                const line = (comparisonInput?.choices ?? COMPARE_CHOICES)
                     .map((c, i) => (i === index ? `[ ${c.toUpperCase()} ]` : `  ${c}  `))
                     .join("");
                 await ble.sendText(
@@ -2929,11 +2930,17 @@ import * as store from "./store";
                 ).catch(() => {});
             }
 
-            /** Ask, and resolve with "left" | "same" | "right". */
-            function askChoice() {
+            /**
+             * Ask, and resolve with the chosen entry.
+             *
+             * `choices` is a parameter rather than a constant because the same
+             * input path serves the ladder walk below, where there is one
+             * option and a tap simply means "next".
+             */
+            function askChoice(choices = COMPARE_CHOICES, start = 1) {
                 return new Promise((resolve) => {
-                    comparisonInput = { index: 1, resolve };
-                    showChoiceLine(1);
+                    comparisonInput = { index: Math.min(start, choices.length - 1), choices, resolve };
+                    showChoiceLine(comparisonInput.index);
                 });
             }
 
@@ -3038,6 +3045,23 @@ import * as store from "./store";
                         { id: "Four, even", dither: "bayer2x2", shades: 4 },
                     ],
                 },
+                // The two groups above never meet, which was deliberate — and
+                // it left the one comparison the ladder's shape actually rests
+                // on unasked. `full` and `lighter` differ by exactly one
+                // display step on the 23% of pixels that land on a level
+                // perceptual 12 drops, and by nothing anywhere else; measured
+                // over 28 frames the largest difference anywhere is 1, and
+                // after a 4x4 blur it averages 0.06 of a step. If that is
+                // invisible then `full` costs 297ms a frame (1117 against 820,
+                // measured) to show nobody anything, and the top of the ladder
+                // should just be `lighter`.
+                {
+                    name: "is the top rung worth it",
+                    candidates: [
+                        { id: "Full (16 even)", dither: "bayer2x2", shades: 16 },
+                        { id: "Lighter (perceptual 12)", dither: "bayer2x2", palette: "perceptual12" },
+                    ],
+                },
             ];
 
             const COMPARISON_KEY = "trickplayer.comparison";
@@ -3135,6 +3159,92 @@ import * as store from "./store";
                 comparisonInput = null;
                 noteLifecycle("picture-comparison", { frames: chosen, trials: answers.length });
                 return { frames: chosen, answers, tally: tallyComparison(answers) };
+            }
+
+            /**
+             * Walk the picture ladder on screen, a tap per rung.
+             *
+             * The comparison above answers "can you tell these apart"; this one
+             * answers the plainer question of what each rung actually looks
+             * like, which is what decides whether a rung is worth keeping at
+             * all. Same frame all the way down, so the only thing changing is
+             * the encoding.
+             *
+             * Not blind, and not meant to be: the rung's name and its real
+             * source size go on the text line, because here you want to know
+             * which one you are looking at.
+             */
+            export async function showLadder({ frames = 3, rungs = null, onProgress = () => {} } = {}) {
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+
+                if (isPlaying || scenePipelineRunning) {
+                    noteLifecycle("playback-stopped", { by: "ladder walk" });
+                    isPlaying = false;
+                    stopScenePipeline();
+                    try { silentAudio.pause(); } catch (e) {}
+                }
+                if (!(await applyPage("player"))) {
+                    throw new Error("the glasses refused the player page — play something once, then retry");
+                }
+
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+                onProgress("Choosing frames…");
+                const chosen = await pickComparisonFrames(frames);
+                const shown = [];
+                // A subset, for looking hard at two rungs across many frames
+                // rather than all four across few. Unknown names would silently
+                // walk nothing, so they are an error.
+                const walk = rungs
+                    ? rungs.map((n) => {
+                        const r = PICTURE_LADDER.find((x) => x.name === n);
+                        if (!r) throw new Error(`no such rung: ${n}`);
+                        return r;
+                    })
+                    : PICTURE_LADDER;
+
+                for (let f = 0; f < chosen.length; f++) {
+                    const frameIndex = chosen[f];
+                    const { blob } = await getFrameAssets(frameIndex);
+                    const bitmap = await decodeFrame(blob);
+
+                    for (const rung of walk) {
+                        const bx = rung.blockX ?? rung.block ?? 1;
+                        const by = rung.blockY ?? rung.block ?? 1;
+                        const sw = w / bx, sh = h / by;
+                        const { ctx } = prepSurface(w, h);
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(bitmap, 0, 0, sw, sh);
+                        const d = ctx.getImageData(0, 0, sw, sh);
+                        const small = toGlassesLevels(d.data, sw, sh, {
+                            brightness: brightnessValue,
+                            contrast: contrastValue,
+                            gamma: gammaValue,
+                            ceiling: ceilingValue,
+                            dither: "bayer2x2",
+                            shades: rung.shades,
+                            palette: resolvePalette(rung.palette),
+                        });
+                        const levels = expandBlocks(small, sw, sh, bx, by);
+                        const bytes = encodeGreyPng(levels, w, h, 4);
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        await ble.sendImage(async (p) =>
+                            (await bridgeInstance.updateImageRawData(p)) === "success",
+                            payload, { bytes: bytes.byteLength, probe: true, ladder: true });
+
+                        const label = `${rung.name} ${sw}x${sh}`;
+                        shown.push({ frameIndex, rung: rung.name, source: `${sw}x${sh}` });
+                        onProgress(`Frame ${f + 1}/${chosen.length} — ${label}. Tap for the next rung.`);
+                        console.log(`[Ladder] frame ${frameIndex} ${label}`);
+                        await askChoice([label], 0);
+                    }
+                }
+
+                comparisonInput = null;
+                noteLifecycle("ladder-walk", { frames: chosen, rungs: walk.map((r) => r.name) });
+                return { frames: chosen, shown };
             }
 
             /** Wins, losses and draws per candidate, per group. */

@@ -273,10 +273,16 @@ const TESTS = [
     },
     {
         id: "compare",
-        label: "Compare dithers by eye (~5 min)",
-        // Eighteen image sends and a person answering between each. Behind
-        // playback the pictures would queue and the wearer would be judging
-        // whatever arrived last.
+        label: "Compare picture settings by eye (~6 min)",
+        // Twenty-one image sends and a person answering between each: seven
+        // pairings per frame, three frames. Behind playback the pictures would
+        // queue and the wearer would be judging whatever arrived last.
+        //
+        // Run whole rather than one group at a time. The groups interleave, and
+        // that is what gave the second hardware run its control: nine
+        // full-detail pairs produced no decision while nine reduced-level pairs
+        // in the same session produced five, which is how "no difference" was
+        // told apart from "not looking carefully" (F-057).
         needsPaused: "Pause playback first — this puts its own pictures up and waits for you between each.",
         busy: "Choosing frames…",
         async run(engine) {
@@ -292,6 +298,24 @@ const TESTS = [
                 `${group} — ` + rows.map((r) =>
                     `${r.id}: ${r.wins}W ${r.losses}L${r.draws ? ` ${r.draws}=` : ""}`).join(", "));
             return `${answers.length} comparisons. ${lines.join("  ·  ")}`;
+        },
+    },
+    {
+        id: "ladder",
+        label: "See each picture-quality rung (~2 min)",
+        // Twelve image sends with a person looking at each one. Behind playback
+        // the pictures would queue and you would be judging whatever arrived
+        // last, same as the comparison above.
+        needsPaused: "Pause playback first — this puts its own pictures up and waits for you between each.",
+        busy: "Choosing frames…",
+        async run(engine) {
+            recorder.mark("ladder-walk-start");
+            const { frames, shown } = await engine.showLadder({
+                onProgress: (text) => setHint(text),
+            });
+            recorder.mark("ladder-walk-end");
+            return `${shown.length} pictures over ${frames.length} frames — ` +
+                [...new Set(shown.map((s) => `${s.rung} ${s.source}`))].join(", ");
         },
     },
     {

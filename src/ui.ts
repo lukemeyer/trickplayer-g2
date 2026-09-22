@@ -784,6 +784,25 @@ if (harness.get("compare") === "1") {
     }, Number(harness.get("comparedelay")) || 6000);
 }
 
+// `?ladder=1` walks the picture ladder once something is playing — same reason
+// as the comparison above, plus one of its own: the rungs differ only in how
+// the picture was encoded, so the only way to judge them is to see them on the
+// glasses, and the only way to capture that is from outside.
+if (harness.get("ladder") === "1") {
+    setTimeout(async () => {
+        try {
+            const r = await engine.showLadder({
+                frames: Number(harness.get("frames")) || 3,
+                rungs: harness.get("rungs") ? harness.get("rungs").split(",") : null,
+                onProgress: (t) => console.log(`[Ladder] ${t}`),
+            });
+            console.log(`[Ladder] done: ${JSON.stringify(r.shown)}`);
+        } catch (e) {
+            console.error(`[Ladder] failed: ${e?.message || e}`);
+        }
+    }, Number(harness.get("ladderdelay")) || 6000);
+}
+
 // `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
 // The simulator has no pointer into the webview, so the first tap of sign-in
 // cannot be made by hand there.
