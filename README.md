@@ -4,12 +4,13 @@
 
 Trickplayer takes the preview thumbnails and subtitle track your Plex or Jellyfin server already generates and streams them to your glasses. You get the picture of what's happening and the dialogue as it's spoken, on a display you can see through, from a server you own.
 
-<p align="center">
-  <img src="store_assets/glasses_scene_1.png" alt="A trick-play frame on the glasses with two lines of subtitle beneath it" width="420">
-  <img src="store_assets/glasses_scene_2.png" alt="A second scene on the glasses display" width="420">
-</p>
+| Screenshots | |
+|---|---|
+| ![A trick-play frame on the glasses with two lines of subtitle beneath it](store_assets/glasses_scene_1.png) | ![A second scene on the glasses display](store_assets/glasses_scene_2.png) |
 
-▶ **[Watch a short clip](store_assets/tears_of_steel_g2_clip.mp4)** of it running.
+| Video (simulator) |
+| :---: |
+| <video width="572" height="284" src="https://github.com/user-attachments/assets/55b9374e-d3db-4d82-8c0c-5b47f2c63f0e"></video> |
 
 > Screenshots and clip show *Tears of Steel* — (CC) Blender Foundation, [mango.blender.org](https://mango.blender.org), used under CC BY 3.0.
 
@@ -164,8 +165,6 @@ Anything with thumbnails and subtitles — films, episodes, whatever is in a pla
 ---
 
 ## For developers
-
-This is the **first** of three implementations of the idea. The two watch faces — [`trickplayer-pebble`](https://github.com/lukemeyer/trickplayer-pebble) (Pebble Time 2) and [`trickplayer-wearos`](https://github.com/lukemeyer/trickplayer-wearos) (Wear OS) — are ports of what was worked out here. Shared rules and measurements live in [`trickplayer-knowledge`](https://github.com/lukemeyer/trickplayer-knowledge); see [KNOWLEDGE.md](KNOWLEDGE.md) for how this repo relates to them.
 
 ### Run it
 
