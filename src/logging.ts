@@ -520,23 +520,68 @@ function renderConsole() {
     if (wasAtBottom) el.scrollTop = el.scrollHeight;
 }
 
-async function copy(text, label) {
+/** Select an element's contents. Returns false if it could not be done. */
+function selectContents(el) {
     try {
-        await navigator.clipboard.writeText(text);
-        setHint(`${label} copied to the clipboard.`);
-    } catch (e) {
-        // No clipboard permission, or no clipboard at all. Select it instead so
-        // it can be copied by hand — a report nobody can get off the device is
-        // not a report.
-        const out = $("tlm-out");
-        out.textContent = text;
-        setHidden("tlm-out", false);
         const r = document.createRange();
-        r.selectNodeContents(out);
-        getSelection().removeAllRanges();
-        getSelection().addRange(r);
-        setHint(`Clipboard unavailable — ${label} is selected, copy it by hand.`);
+        r.selectNodeContents(el);
+        const sel = getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return true;
+    } catch (e) {
+        return false;
     }
+}
+
+/**
+ * Copy, on a device that may have no clipboard API at all.
+ *
+ * `navigator.clipboard` exists only in a SECURE CONTEXT, and a phone loading
+ * the dev build over `http://<lan-ip>` is not one. Measured rather than
+ * assumed: on that origin the object is `undefined` — not present and
+ * refusing, absent. So the fallback here is not an exotic branch, it is the
+ * ordinary path whenever the app is not on https or localhost, and it has to
+ * work on its own.
+ *
+ * `targetId` is where the text goes if it has to be copied by hand, and it is
+ * a parameter because getting it wrong is silent. Everything used to land in
+ * `tlm-out`, which lives inside the capture section — hidden unless a capture
+ * is RUNNING. Copying messages with only logging switched on therefore wrote
+ * into a hidden element and selected a range nothing was rendering, so the
+ * button did nothing whatsoever. Messages belong in the message box.
+ *
+ * `execCommand` is deprecated and is also the only thing that reaches the
+ * clipboard without a secure context. It needs the user gesture that called
+ * us, so nothing may be awaited before it — which is why the clipboard branch
+ * is skipped outright rather than awaited and caught.
+ */
+async function copy(text, label, targetId = "tlm-out") {
+    const el = $(targetId);
+    if (el) {
+        el.textContent = text;
+        setHidden(targetId, false);
+    }
+
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            setHint(`${label} copied to the clipboard.`);
+            return;
+        } catch (e) {
+            // Present but refused — permission, or focus. Selection still works.
+        }
+    }
+
+    if (el && selectContents(el)) {
+        let copied = false;
+        try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
+        setHint(copied
+            ? `${label} copied to the clipboard.`
+            : `Clipboard unavailable — ${label} is selected, copy it by hand.`);
+        return;
+    }
+    setHint(`Clipboard unavailable, and ${label} could not be shown to copy by hand.`);
 }
 
 function generateReport() {
@@ -779,7 +824,8 @@ function mountPanel(engine) {
         copy(JSON.stringify(recorder.session(device())), "Raw session JSON");
     // The point of the mirror: a tester can get the messages OFF the phone
     // and into a bug report without attaching it to a laptop.
-    $("tlm-copy-console").onclick = () => copy(consoleText(), "Messages");
+    // Into the MESSAGE box, which is on screen whenever this button is.
+    $("tlm-copy-console").onclick = () => copy(consoleText(), "Messages", "tlm-console");
 
     $("tlm-reset").onclick = () => {
         // EVERYTHING this panel has accumulated, both halves of it — the stored
