@@ -200,7 +200,7 @@ export function analyse(session) {
     }
 
     // 2c. BY PICTURE LEVEL. The ladder drops to lighter pictures when sends
-    //     slow or fail (F-050); this is how to tell whether that worked —
+    //     slow or fail (F-056); this is how to tell whether that worked —
     //     delivered at the lighter level, and how fast.
     out.byQuality = null;
     {
@@ -208,7 +208,7 @@ export function analyse(session) {
         if (withQ.some((e) => e.quality !== "full")) {
             // Every rung, or the section renders its header with no rows — which
             // is exactly what a session stuck on the newest rung looked like.
-            const order = ["full", "lighter", "lightest", "minimal"];
+            const order = ["full", "lighter", "lightest"];
             out.byQuality = order.map((q) => {
                 const list = withQ.filter((e) => e.quality === q);
                 return { quality: q, n: list.length,
@@ -1172,7 +1172,7 @@ export function formatReport(session, a = analyse(session)) {
     }
     if (a.byQuality) {
         L.push("");
-        L.push("by picture level   (lighter/lightest are sent when the link slows — F-050)");
+        L.push("by picture level   (lighter/lightest are sent when the link slows — F-056)");
         for (const q of a.byQuality) {
             L.push(`  ${q.quality.padEnd(9)} n=${String(q.n).padStart(4)}  ` +
                 `ok ${q.okPct == null ? "  —" : q.okPct.toFixed(0).padStart(3) + "%"}  ` +

@@ -487,7 +487,7 @@ def("a silence while playing names what the engine was stuck behind", async () =
 });
 
 def("lighter pictures are reported by level, and whether they kept coming", async () => {
-    // F-050: full frames time out locked, the ladder drops, lighter ones land.
+    // F-056: full frames time out locked, the ladder drops, lighter ones land.
     let clock = 1_700_000_000_000;
     const rec = createRecorder({ now: () => clock });
     const img = (quality, ok, ms) => {

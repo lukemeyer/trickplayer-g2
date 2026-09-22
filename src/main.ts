@@ -7,7 +7,7 @@ import {
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
 import { toGlassesLevels, expandBlocks, PALETTES } from "./pixels";
-import { createQualityController } from "./quality";
+import { createQualityController, PICTURE_LADDER } from "./quality";
 import { encodeGreyPng } from "./png";
 import * as store from "./store";
 
@@ -737,7 +737,7 @@ import * as store from "./store";
             }
 
             /**
-             * How much picture to send, moved by how sends are going (F-050).
+             * How much picture to send, moved by how sends are going (F-056).
              * With the phone locked the link slows and full frames time out;
              * see src/quality.ts for the measurements and the rules.
              */
@@ -767,7 +767,9 @@ import * as store from "./store";
                 try {
                     const { canvas, ctx } = prepSurface(targetWidth, targetHeight);
                     const levels = await timed("pixels", meta, () => {
-                        const sw = targetWidth / rung.block, sh = targetHeight / rung.block;
+                        const bx = rung.blockX ?? rung.block ?? 1;
+                        const by = rung.blockY ?? rung.block ?? 1;
+                        const sw = targetWidth / bx, sh = targetHeight / by;
                         ctx.clearRect(0, 0, targetWidth, targetHeight);
                         ctx.drawImage(bitmap, 0, 0, sw, sh);
                         const d = ctx.getImageData(0, 0, sw, sh);
@@ -783,7 +785,7 @@ import * as store from "./store";
                             shades: levelsOverride?.shades ?? rung.shades,
                             palette: resolvePalette(levelsOverride?.palette ?? rung.palette),
                         });
-                        return expandBlocks(small, sw, sh, rung.block);
+                        return expandBlocks(small, sw, sh, bx, by);
                     });
                     // Our own encoder for the first two rungs: synchronous,
                     // about a tenth of a millisecond, against the four seconds

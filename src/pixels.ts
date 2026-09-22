@@ -112,7 +112,7 @@ function quantisePlane(data, w, h, opts = {}) {
     // How many grey levels to quantise to. 16 is everything the display can
     // show; fewer makes a frame far more compressible, and the host compresses
     // what it sends — which, with the phone locked and the link slowed, is the
-    // difference between a picture landing and timing out (F-050). The levels
+    // difference between a picture landing and timing out (F-056). The levels
     // chosen are always a subset of the display's 16, evenly spaced.
     const shades = opts.shades ?? 16;
     const step = 255 / (shades - 1);
@@ -248,19 +248,32 @@ export function toGlassesGrey(data, w, h, opts = {}) {
 }
 
 /**
- * Repeat each pixel of a small level plane into a `block` x `block` square.
+ * Repeat each pixel of a small level plane into a `bx` x `by` rectangle.
  *
  * The cheapest large reduction in what a frame costs to send: a picture drawn
- * at half resolution and doubled has runs the host's compressor collapses, and
- * it still fills the same 256x128 container, so nothing about the page changes.
+ * at lower resolution and repeated has runs the host's compressor collapses,
+ * and it still fills the same 256x128 container, so nothing about the page
+ * changes.
+ *
+ * **The two axes are not the same lever, and they were measured apart.** A
+ * vertical repeat makes consecutive PNG scanlines byte-identical, which is a
+ * whole-row match for any LZ77-family compressor. A horizontal repeat makes
+ * each packed byte a doubled nibble, which only shortens the alphabet. Over 28
+ * real frames the vertical half is worth more than the horizontal one:
+ *
+ *     1x1  5.05 KB      1x2  2.84 KB  (rows)      2x2  1.91 KB
+ *                       2x1  3.22 KB  (columns)
+ *
+ * So halving vertically alone gets most of the way to a 2x2 block while
+ * keeping every horizontal pixel, which is why the ladder is anisotropic.
  */
-export function expandBlocks(small, sw, sh, block) {
-    if (block === 1) return small;
-    const w = sw * block, h = sh * block;
+export function expandBlocks(small, sw, sh, bx, by = bx) {
+    if (bx === 1 && by === 1) return small;
+    const w = sw * bx, h = sh * by;
     const out = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) {
-        const row = ((y / block) | 0) * sw;
-        for (let x = 0; x < w; x++) out[y * w + x] = small[row + ((x / block) | 0)];
+        const row = ((y / by) | 0) * sw;
+        for (let x = 0; x < w; x++) out[y * w + x] = small[row + ((x / bx) | 0)];
     }
     return out;
 }

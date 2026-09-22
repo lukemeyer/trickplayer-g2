@@ -1,6 +1,6 @@
 // @ts-nocheck
 //
-// How much picture to send, decided by how the link is behaving (F-050).
+// How much picture to send, decided by how the link is behaving (F-056).
 //
 // With the phone locked the Bluetooth link slows, and the glasses host gives
 // up on a picture transfer after roughly eight seconds. Measured with a locked
@@ -42,16 +42,54 @@
  * `palette` is a set of native levels rather than a count, because the eye
  * separates dark tones far better than bright ones and evenly spaced levels
  * spend them where they are least useful (see PALETTES in pixels.ts).
+ *
+ * `blockX`/`blockY` are separate for the same reason the palette is not a
+ * count: the two axes are different mechanisms and cost different amounts.
+ * See expandBlocks in pixels.ts.
  */
 export const PICTURE_LADDER = [
-    { name: "full", shades: 16, block: 1 },                       // 1117 ms measured
-    { name: "lighter", palette: "perceptual12", block: 1 },       //  820 ms measured
-    { name: "lightest", palette: "perceptual12", block: 2 },      // half resolution as well
-    // Added after a locked session where even "lightest" took 4.7s and landed
-    // only 47% of the time. It is crude — a 64x32 picture — and it is also a
-    // test: if frames this small are still slow, picture size is not what
-    // limits a locked link, and shrinking further is pointless.
-    { name: "minimal", palette: "perceptual12", block: 4 },
+    // TONE IS NO LONGER A RUNG. The ladder used to open with all sixteen even
+    // levels and step down to perceptual 12, on the assumption that tone depth
+    // was worth paying for. Judged blind on the glasses, three times, nobody
+    // could tell them apart — and the same person in the same session decided
+    // 8 of 9 comparisons between reduced-level candidates, so the test was
+    // discriminating and simply found nothing here to discriminate.
+    //
+    // The difference is bounded by construction: perceptual 12 drops levels 4,
+    // 6, 8 and 10, so a pixel either keeps its level exactly or moves by one
+    // step, never more. Over 28 frames that is 23% of pixels, and after the
+    // blur the eye applies to a dither it averages 0.06 of a step.
+    //
+    // Dropping the rung is worth 297ms a frame (1117 against 820, measured) on
+    // EVERY frame while the link is healthy — which on this device is frame
+    // rate, not load time. Sixteen levels is still offered by hand in settings
+    // for anyone who wants it; it is just not what the ladder climbs to.
+    //
+    // So dither and palette are settled constants, and what remains varies
+    // only by resolution.
+    { name: "full", palette: "perceptual12", blockX: 1, blockY: 1 },      // 820 ms measured
+    // Vertical only: 256x64 repeated down. Resolution is two levers, not one,
+    // and they are worth different amounts. Over 28 real frames, deflated as
+    // the host sees them:
+    //
+    //     1x1  5.05 KB       1x2  2.84 KB       2x2  1.91 KB
+    //                        2x1  3.22 KB
+    //
+    // Repeating rows makes whole PNG scanlines byte-identical, which is a
+    // single long match; repeating columns only doubles nibbles inside a byte.
+    // So 1x2 captures most of a 2x2 block's saving while keeping every
+    // horizontal pixel, and it still clears the locked-link cliff (F-056) with
+    // room to spare — an estimated 5.9 KB against the 8 KB where transfers
+    // start to slow.
+    { name: "lighter", palette: "perceptual12", blockX: 1, blockY: 2 },
+    // The floor was a 4x4 block — a 64x32 picture — from a locked session where
+    // the rung above took 4.7s and landed 47% of the time. That rung was
+    // Floyd-Steinberg at four even shades, which the same measurement puts at
+    // ~9.1 KB: over the cliff, so something drastic was the only way under it.
+    // The rung above is now ~2.8 KB, so this one no longer has to be. 2x4 is
+    // within half a kilobyte of 4x4 and keeps twice the horizontal resolution,
+    // which makes 4x4 dominated.
+    { name: "lightest", palette: "perceptual12", blockX: 2, blockY: 4 },
 ];
 
 export function createQualityController({

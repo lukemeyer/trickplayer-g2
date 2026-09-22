@@ -1,5 +1,5 @@
 // Does the picture ladder step down when the phone locks and back up when it
-// unlocks — without flapping? (F-050)
+// unlocks — without flapping? (F-056)
 //
 //   node tools/quality-check.mjs
 //
@@ -16,16 +16,16 @@ for (const f of ["quality", "pixels"]) {
         fs.readFileSync(path.join(ROOT, "src", `${f}.ts`), "utf8"),
         { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText);
 }
-const { createQualityController } = await import(pathToFileURL(path.join(TMP, "quality.mjs")).href);
-const { toGlassesLevels, expandBlocks } = await import(pathToFileURL(path.join(TMP, "pixels.mjs")).href);
+const { createQualityController, PICTURE_LADDER } = await import(pathToFileURL(path.join(TMP, "quality.mjs")).href);
+const { toGlassesLevels, expandBlocks, PALETTES } = await import(pathToFileURL(path.join(TMP, "pixels.mjs")).href);
 
 /**
  * A link: how long a frame at each rung takes, or null for "times out".
  * Locked numbers are shaped on the measured sweep — full frames time out,
  * ~40% frames are slow-ish, the smallest are quick.
  */
-const AWAKE = { full: 1700, lighter: 900, lightest: 500, minimal: 300 };
-const LOCKED = { full: null, lighter: 3000, lightest: 600, minimal: 400 };
+const AWAKE = { full: 1700, lighter: 900, lightest: 500 };
+const LOCKED = { full: null, lighter: 3000, lightest: 600 };
 
 function play(ctl, link, frames) {
     const trace = [];
@@ -67,7 +67,7 @@ def("locked for a long time: probing up gets rarer, not constant", () => {
     // A locked link where the lighter rung is FAST, so the controller keeps
     // being tempted to try full pictures again. Each try costs a timeout, so the
     // wait between tries has to grow: 4, 8, 16, 32, then 64 frames.
-    const TEMPTING = { full: null, lighter: 800, lightest: 500, minimal: 300 };
+    const TEMPTING = { full: null, lighter: 800, lightest: 500 };
     const ctl = createQualityController();
     const r = play(ctl, TEMPTING, 300);
     const at = [...r.trace].map((c, i) => (c === "f" ? i : -1)).filter((i) => i >= 0);
@@ -77,13 +77,15 @@ def("locked for a long time: probing up gets rarer, not constant", () => {
         detail: `${at.length} full-size attempts in 300 frames at ${at.join(",")}; ${r.delivered} delivered` };
 });
 
-def("a collapsed link: falls through to minimal pictures, which keep landing", () => {
-    // The session behind the fourth rung: lightest took ~5s and failed half the
-    // time. Only minimal frames are quick enough to get through.
-    const COLLAPSED = { full: null, lighter: null, lightest: 9000, minimal: 1500 };
+def("a collapsed link: falls through to the smallest picture, which keeps landing", () => {
+    // The session behind the bottom rung: full-size frames never landed and the
+    // rung above crawled at ~9s. Only the smallest are quick enough to be
+    // worth sending — but a probe back up still DELIVERS, slowly, which is why
+    // almost every frame arrives even though the link is in trouble.
+    const COLLAPSED = { full: null, lighter: 9000, lightest: 1500 };
     const ctl = createQualityController();
     const r = play(ctl, COLLAPSED, 40);
-    return { pass: ctl.current.name === "minimal" && r.delivered >= 36,
+    return { pass: ctl.current.name === "lightest" && r.delivered >= 36,
         detail: `${r.delivered}/40 delivered — ${r.trace}` };
 });
 
@@ -108,9 +110,9 @@ def("a merely mediocre link still climbs back", () => {
     // The reported session: every send landed, none of them fast, and the
     // picture stayed at the smallest rung for the rest of the session because
     // nothing ever counted as "fast enough to try again".
-    const MEDIOCRE = { full: 3700, lighter: 3600, lightest: 3500, minimal: 3400 };
+    const MEDIOCRE = { full: 3700, lighter: 3600, lightest: 3500 };
     const ctl = createQualityController();
-    ctl.force("minimal");
+    ctl.force("lightest");
     const r = play(ctl, MEDIOCRE, 40);
     return { pass: ctl.current.name === "full" && r.delivered === 40,
         detail: `ended at ${ctl.current.name} with every frame delivered — ${r.trace}` };
@@ -143,8 +145,28 @@ def("fewer shades produce only levels the display has, and blocks repeat exactly
     };
 });
 
+def("the two block axes expand independently, and the ladder uses both", () => {
+    // 1x2 is the rung that keeps every horizontal pixel and repeats rows,
+    // which is where most of a block's saving comes from. Getting the axes
+    // the wrong way round would silently halve the wrong dimension.
+    const small = Uint8Array.from([1, 2, 3, 4]);      // 2x2
+    const rows = expandBlocks(small, 2, 2, 1, 2);     // -> 2x4, each row twice
+    const cols = expandBlocks(small, 2, 2, 2, 1);     // -> 4x2, each pixel twice across
+    const wantRows = [1, 2, 1, 2, 3, 4, 3, 4];
+    const wantCols = [1, 1, 2, 2, 3, 3, 4, 4];
+    // A rung names its axes; nothing may fall back to a square silently.
+    const named = PICTURE_LADDER.every((r) => r.blockX >= 1 && r.blockY >= 1);
+    const anisotropic = PICTURE_LADDER.some((r) => r.blockX !== r.blockY);
+    return {
+        pass: wantRows.every((v, i) => rows[i] === v) &&
+              wantCols.every((v, i) => cols[i] === v) && named && anisotropic,
+        detail: `rows ${rows.join("")} cols ${cols.join("")}; ladder ` +
+            PICTURE_LADDER.map((r) => `${r.name} ${r.blockX}x${r.blockY}`).join(", "),
+    };
+});
+
 let bad = 0;
-console.log("\n  Picture ladder (F-050)\n");
+console.log("\n  Picture ladder (F-056)\n");
 for (const c of checks) {
     let r;
     try { r = c.fn(); } catch (e) { r = { pass: false, detail: `threw: ${e.message}` }; }
