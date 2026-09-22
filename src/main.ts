@@ -2384,43 +2384,20 @@ import * as store from "./store";
                     // to the handlers below, which still need to see them.
                 }
 
-                // Pause / Play toggle on single tap
-                if (sysType === OsEventTypeList.CLICK_EVENT) {
-                    // MARKED, because an unmarked one cost a session. Playback
-                    // stopped mid-episode with the glasses on a wearer's face and
-                    // the report could say nothing: no user pause, no background
-                    // pause, no end of media — because a tap on the glasses took
-                    // this branch and left no trace. A brush against the temple
-                    // pauses the picture, and that has to be visible.
-                    noteLifecycle("glasses-tap", { wasPlaying: isPlaying, to: isPlaying ? "paused" : "playing" });
-                    const title =
-                        document.getElementById("playing-title")
-                            ?.textContent || "media";
-                    if (isPlaying) {
-                        isPlaying = false;
-                        if (typeof stopScenePipeline === 'function') stopScenePipeline();
-                        try { silentAudio.pause(); } catch (e) {}
-                        playBtn.innerText = "Play";
-                        setStatus(`Paused: ${title}`, "active");
-                        // SAY SO ON THE GLASSES. `setStatus` writes to the phone,
-                        // which is in a pocket. A tester's playback stopped
-                        // mid-episode and all the glasses showed was a picture
-                        // that had stopped changing — indistinguishable from the
-                        // freezes we have been chasing for days. A brush against
-                        // the temple pauses this, so the pause has to be legible
-                        // where the wearer is actually looking.
-                        ble.forgetText();
-                        sendSubtitleToGlasses("Paused - tap to resume").catch(() => {});
-                    } else if (bifs && bifs.length > 0) {
-                        isPlaying = true;
-                        backgroundedWhilePlaying = false;
-                        silentAudio.play().catch(() => {});
-                        playBtn.innerText = "Pause";
-                        setStatus(`Now playing: ${title}`, "active");
-                        if (typeof runScenePipeline === 'function') runScenePipeline();
-                    }
-                    return;
-                }
+                // TAP DOES NOT PAUSE, deliberately.
+                //
+                // This branch tested `sysType === CLICK_EVENT`, and CLICK_EVENT
+                // is 0 — which proto3 omits, so a tap arrives carrying no
+                // eventType at all and the comparison was `null === 0`. It has
+                // never fired on hardware. The same absence is why a list
+                // selection has no event type (F-053).
+                //
+                // Removed rather than repaired. The behaviour it was reaching
+                // for is one a brush against the temple triggers by accident,
+                // and this app already had a session where playback stopped on
+                // a wearer's face with nothing able to explain it. Play, pause,
+                // restart and return are all in the contextual menu, which
+                // takes a deliberate press to open.
 
                 // The glasses host lost/regained foreground (e.g. the user
                 // switched to another glasses app, or the phone screen
