@@ -1,263 +1,233 @@
-# Trickplayer (Even Realities G2)
+# Trickplayer
 
-Shows a frame from a Plex trick-play track plus the subtitles from that moment
-on a pair of G2 glasses, advancing through an episode in step with the dialogue.
+**Watch your own media on Even Realities G2 glasses — as a still frame every few seconds, with the subtitles in sync.**
 
-The **first** of three implementations of this idea. The two watch faces —
-[`trickplayer-pebble`](../trickplayer-pebble) (Pebble Time 2) and
-[`trickplayer-wearos`](../trickplayer-wearos) (Wear OS) — are ports of what
-was worked out here. Shared rules and findings live in
-[`trickplayer-knowledge`](../trickplayer-knowledge); see [KNOWLEDGE.md](KNOWLEDGE.md).
+Trickplayer takes the preview thumbnails and subtitle track your Plex or Jellyfin server already generates and streams them to your glasses. You get the picture of what's happening and the dialogue as it's spoken, on a display you can see through, from a server you own.
+
+<p align="center">
+  <img src="store_assets/glasses_scene_1.png" alt="A trick-play frame on the glasses with two lines of subtitle beneath it" width="420">
+  <img src="store_assets/glasses_scene_2.png" alt="A second scene on the glasses display" width="420">
+</p>
+
+▶ **[Watch a short clip](store_assets/tears_of_steel_g2_clip.mp4)** of it running.
+
+> Screenshots and clip show *Tears of Steel* — (CC) Blender Foundation, [mango.blender.org](https://mango.blender.org), used under CC BY 3.0.
+
+---
 
 ## What it actually is
 
-A webview app running under the Even Hub SDK. It signs in to Plex, browses to an
-episode, downloads that episode's trick-play index and subtitle sidecar, and then
-drives the glasses on a timer: one still frame plus the lines belonging to it,
-then the next.
+It is **not** video. The G2 display is 576×288 and monochrome green, and the Bluetooth link to it carries a few kilobytes a second — nowhere near enough for moving pictures.
 
-Unlike the two watch faces, this is a **player** — it advances on a clock, not on
-a glance. Single tap pauses and resumes; double tap exits. Whether that
-difference should stay is an open question in the shared plan.
+What it *is*: your media server already builds a **trick-play index** for every item — the strip of thumbnails you scrub through in the web player. Trickplayer fetches those thumbnails and the subtitle track, then shows you one frame at a time alongside the lines spoken during it.
 
-## Status
+---
 
-Working end to end against a real Plex server: sign-in, browse, eligibility
-filtering, playback with synced subtitles, and recovery from a backgrounded or
-suspended webview. Deployed to GitHub Pages by Actions on push to `main`.
+## How it works
 
-Known debt, all tracked in `trickplayer-knowledge/PLAN.md` §3:
+A **scene** is one frame plus every subtitle cue that starts during it. Scenes tile the episode end to end, so a line straddling a boundary is shown once, in the scene it begins in — never twice.
 
-- The trick-play index parser hardcodes a `1000 ms` timestamp multiplier instead
-  of reading the header field, and takes the last frame's length from the file
-  size rather than the sentinel entry.
-- The whole index file is downloaded — 9.5 MB for a 24-minute episode — and a
-  `Blob` and object URL are created per frame and never revoked. The other two
-  platforms range-fetch individual frames against a ~6 KB index.
-- Subtitle cleaning does not strip HTML tags or ASS override blocks, so real
-  Plex sidecars show `<i>` and `{\an8}` on the glasses.
-- Eligibility is checked in bulk, batches of 20, up front. Lazy per-item checking
-  is both faster to first result and cheaper.
-- `src/image/renderer.ts`, `public/sample.png`, `public/assets/`, `old_index.html`,
-  `test.ehpk`, `extract.cjs` and `make_assets.cjs` are leftovers from the template
-  this repo was forked from and are referenced by nothing.
+Three things make it watchable given how slow the link is:
 
-## Layout
+- **The next frame is fetched while you're still reading the current one.** By the time a scene ends, its replacement is usually already on the glasses.
+- **Quality adapts to the link.** If sends start failing or dragging, the picture drops to a cheaper form automatically, then climbs back when the link recovers. You get a coarser image rather than a stalled one.
 
-```
-index.html            webview host, zoom-locked viewport
-src/main.ts           everything else — 2,500 lines, see below
-src/timeline.ts       frame timeline — trick-play index parsing
-src/subtitles.ts      SRT parsing
-app.json              manifest; network permission whitelisted to *.plex.direct
-.github/workflows/    Pages deploy
-```
+---
 
-`main.ts` is a single file holding sign-in, server discovery, browsing,
-eligibility scanning, the image pipeline, the BLE send queue, the scene pipeline
-and the debug panel. Splitting it is a precondition for testing any of it
-headlessly, which is why the shared conformance corpus needs `timeline.ts` separated
-from its browser Blob layer first.
+## Features
 
-## Run
+### Your own server, and nothing else
+Connects to Plex or Jellyfin running on hardware you control. Sign in once on the phone and it remembers.
+
+### Browse from the glasses or the phone
+Your phone handles sign-in and full library browsing. The glasses carry the shortcuts — **Recently played**, **Continue watching**, and **Playlists** — so once something is set up you never have to take the phone out.
+
+<p align="center">
+  <img src="store_assets/glasses_select.png" alt="The glasses picker showing Recently played, Continue watching and Playlists" width="420">
+</p>
+
+### Picks up where you left off
+Reads the resume position from your media server, and can optionally report back as you watch so your other clients stay in step. Reporting is **off** until you turn it on — it writes to your server.
+
+### Adaptive picture quality
+Bluetooth to glasses is unreliable by nature. Rather than stalling, the picture steps down through progressively cheaper forms and climbs back when the link improves. You can also pin it by hand if you'd rather have consistency than adaptation.
+
+### Tuned for a see-through display
+Contrast, brightness and gamma, plus a **Glare** control that gives up the brightest levels.
+
+### Private by construction
+Trickplayer talks to your media server and to nothing else. No account to create, no telemetry, no analytics, no third party. Diagnostic logging is off until you switch it on, stays on your phone, and only ever leaves if you copy it and send it yourself.
+
+---
+
+## What you need
+
+- A pair of **Even Realities G2** glasses and the Even Hub app.
+- A **Plex or Jellyfin** server you can reach. Jellyfin support is experimental.
+- Items that have **both** a trick-play index **and** subtitles. Trickplayer checks each one and shows you which will play, so you don't have to guess.
+
+### Server setup
+
+| | What to enable | Subtitles |
+|---|---|---|
+| **Plex** | *Generate video preview thumbnails* — Settings → Scheduled Tasks | **External `.srt` files only.** Plex's API does not expose embedded subtitle tracks, so sidecar files are required. |
+| **Jellyfin** | *Enable trickplay image extraction* — per library settings | Embedded tracks work, as well as sidecars. |
+
+---
+
+## Controls
+
+### On the glasses
+
+| Gesture | What it does |
+|---|---|
+| Swipe up / down | Move through a list |
+| Tap | Choose the highlighted row |
+| Tap, then long press | Open the contextual menu |
+| Double tap | Exit the app |
+
+The contextual menu holds **Play / Pause**, **Play from start**, and **Return to list**.
+
+
+### On the phone
+
+Sign in, browse your full library, play, pause, seek, and everything under Settings.
+
+---
+
+## Settings
+
+| Setting | What it changes |
+|---|---|
+| **Framerate** | How often a new image is sent. Fewer images means longer gaps between images but may be more reliable. |
+| **Picture quality** | *Auto* adjusts based on connection quality. *Quality* and *Speed* pin it. |
+| **Glare** | How much of the top of the brightness range to give up. (depending on content the brightest level blows out the image) |
+| **Contrast / Brightness / Gamma** | Standard tone controls, with a live preview. |
+| **Skip silent scenes** | Drop stretches with no dialogue, so the episode moves faster. |
+| **Report progress** | Write your position back to the media server. Off by default. |
+| **Debugging tools** | Message logging and link capture, both off by default. |
+
+---
+
+## FAQ
+
+<details>
+<summary><b>Is this streaming video to my glasses?</b></summary>
+
+No — and it can't be. The link carries a few kilobytes a second, and the display is monochrome green. Trickplayer sends one still every few seconds, using the preview thumbnails your server already generated. Think motion comic, not film.
+</details>
+
+<details>
+<summary><b>Why does an item say it can't be played?</b></summary>
+
+It is missing one of the two halves. Trickplayer needs a trick-play index *and* subtitles for the same item. The list tells you which items have both, so nothing fails halfway through. See [server setup](#server-setup) for what to enable.
+</details>
+
+<details>
+<summary><b>Why does Plex need external subtitle files?</b></summary>
+
+Plex's API doesn't expose subtitles embedded inside a video file — only sidecar files sitting next to it. That's a Plex limitation rather than a Trickplayer one. Jellyfin does serve embedded tracks, so it works either way there.
+</details>
+
+<details>
+<summary><b>What's the catch with Jellyfin?</b></summary>
+
+Remote access. Glasses apps declare in advance which domains they may reach, and Plex has a first-party one (`plex.direct`) that covers every user's server. Jellyfin has no equivalent, so there is no single domain to declare.
+
+Local connections work. For remote access, Trickplayer also permits `*.ts.net`, so a [Tailscale](https://tailscale.com) network will reach your server from anywhere. Anything else is currently out of reach.
+</details>
+
+<details>
+<summary><b>The picture got blocky mid-episode. Is something broken?</b></summary>
+
+No — that's the quality ladder doing its job. When sends slow down or fail, the picture steps down to something cheaper so frames keep arriving rather than stopping, then climbs back on its own once the link recovers. Locking your phone is the most common cause: it slows Bluetooth enough to push full-size frames past the host's deadline.
+</details>
+
+<details>
+<summary><b>Does it send my viewing data anywhere?</b></summary>
+
+No. It talks to your media server and nothing else. There is no account, no telemetry and no analytics. If you turn on *Report progress*, positions are written to **your** server — the same thing any other client does — and nowhere else.
+</details>
+
+<details>
+<summary><b>Why is the brightest part of the picture uncomfortable?</b></summary>
+
+The display's top level reads much brighter than its position in the range suggests, which on a see-through display can cause eye strain. The **Glare** setting gives up the brightest levels to soften it. It is on by default, at a cost of roughly half a percent of the picture.
+</details>
+
+<details>
+<summary><b>Can I watch anything, or just TV?</b></summary>
+
+Anything with thumbnails and subtitles — films, episodes, whatever is in a playlist. Subtitle-led material fares best, since the dialogue drives the pacing.
+</details>
+
+---
+
+## For developers
+
+This is the **first** of three implementations of the idea. The two watch faces — [`trickplayer-pebble`](https://github.com/lukemeyer/trickplayer-pebble) (Pebble Time 2) and [`trickplayer-wearos`](https://github.com/lukemeyer/trickplayer-wearos) (Wear OS) — are ports of what was worked out here. Shared rules and measurements live in [`trickplayer-knowledge`](https://github.com/lukemeyer/trickplayer-knowledge); see [KNOWLEDGE.md](KNOWLEDGE.md) for how this repo relates to them.
+
+### Run it
 
 ```bash
 npm install
-npm run dev
+npm run dev          # vite, bound to the LAN so a phone can load it
+npm run simulate     # desktop glasses simulator
 ```
 
-Then `npm run simulate` for the desktop simulator, or
-`npx evenhub qr --url http://<your-ip>:5173` to load it on real glasses.
+To load a dev build on real glasses, point the Even Hub app at `http://<your-ip>:5173`. To package a release:
 
-The SDK is pinned to `0.0.14` — later versions changed bridge behaviour that the
-foreground/background handling depends on.
-
-## How playback works
-
-A **scene** is one frame plus every subtitle cue in its window. (This build
-called it a *chunk* until the vocabulary was standardized across the three
-platforms — see KNOWLEDGE.md.)
-
-Scenes tile the episode, and a cue is owned by the scene it **starts** in, so a
-line straddling a boundary is not shown twice.
-
-Two things make it watchable given how slow the link is:
-
-- **The next scene's image is prefetched** while the current scene's subtitles
-  are still being read out, so the frame is usually ready before it is needed.
-- **Pacing adapts.** A moving average of the last few render durations, clamped
-  to 1–8 s, decides how long a scene gets. A transfer that takes four seconds on
-  a bad link stretches the scene rather than desyncing it.
-
-Consecutive cues are merged into multi-line blocks that fit the subtitle
-container, so there is more to read while the next image transfers. Cues more
-than 4 s apart are not merged — that gap is a real silence and merging across it
-reads wrong.
-
-## The link is the constraint
-
-Everything above exists because BLE image transfer to the G2 is slow (~0.5–2 s
-for ~20 KB) and intermittently fails.
-
-- **All BLE writes are serialised** through one promise chain. `updateImageRawData`
-  calls must not overlap; overlapping them wedges the channel.
-- **A failed image send is retried** up to 3 times with a 350 ms backoff, under a
-  5 s total budget. The budget matters more than the retry count: without it one
-  bad frame starves the subtitle channel behind it in the queue.
-- **Images are sent at 256×128**, below the 288×144 container maximum. Fewer bytes
-  transfer faster and fail less. Lower it further to trade size for reliability.
-- **Link state is recorded on every send** — connection type, battery, wearing
-  state, queue depth, consecutive failure count. That is what distinguishes
-  transient saturation from a real disconnect, which otherwise look identical.
-
-## G2 specifics
-
-- Display: 576×288, 4-bit greyscale — 16 shades of green.
-- Image containers: 20–288 wide, 20–144 tall, 4 per page maximum.
-- The image sits centred at the top; the subtitle container is 432×132 at
-  y=156, filling the space below it.
-- **Image containers cannot capture events.** A full-screen text container is
-  used as the event layer.
-- Photos and gradients need preprocessing. The app converts to luminance, applies
-  brightness/contrast/gamma, and dithers — Floyd–Steinberg by default, with
-  Atkinson and plain threshold as alternatives — before packing to 4-bit. The SDK
-  returns `imageToGray4Failed` when its own conversion chokes, which is the signal
-  that preprocessing is not optional.
-
-## Staying alive in the background
-
-A backgrounded webview gets its timers throttled or suspended, which kills the
-pipeline mid-episode. Two mitigations, both needed:
-
-- **A looping silent audio element** while playing, which keeps the webview from
-  being suspended when the phone screen locks.
-- **Explicit foreground-exit and foreground-enter handling**, which pauses the
-  pipeline and resumes it rather than letting it run against a dead link and
-  burn through its retry budgets.
-
-## Sign-in
-
-Plex PIN flow: mint a PIN, show the code, poll until it is authorised, then list
-servers and let the user pick a server and a connection.
-
-Two things the watch ports improved on and this build has not adopted: the
-routes are a manual dropdown here (local / remote / relay) rather than raced
-automatically, and the PIN is not persisted across a reload. Both are in
-PLAN.md §3.
-
-## Eligibility is stricter than it looks
-
-An item is only usable if it has **both** an `sd` trick-play index and a subtitle
-stream with a **non-null `key`**. Most SRT streams Plex reports are embedded in
-the media file and cannot be fetched separately; only sidecars can.
-
-That filter is a Plex limitation rather than a rule about media, which matters
-for the roadmap: Jellyfin converts and serves embedded subtitles on demand, so
-the same filter there would hide most of a library.
-
-## Why eligibility is cached for the session and not longer
-
-Eligibility is one round trip per item (F-015), so walking into an episode and
-back out used to re-ask every question in the list. Answers are now kept in
-memory for as long as the source stays open.
-
-Keeping them **across launches** was considered and rejected for now:
-
-| | |
-|---|---|
-| Size per answer | ~250 B (title, duration, badges, `timelineRef`, `subtitleRef`, plus the item ref used as the key) |
-| A 1,000-episode library | ~250 KB |
-| A 5,000-item library | ~1.2 MB |
-
-The size is survivable — it would go through the store's bulk accessors, not
-the boot hydrate, so only a session that browses pays to read it. The reason
-not to is **staleness**: the answer is a claim about what the server has right
-now. Add a subtitle sidecar to an episode and an ineligible item becomes
-eligible; re-analyse a library and the part IDs the answer is built from
-change. A stale "no" hides content the user owns, and a stale "yes" resolves to
-a dead reference at play time — both worse than the second or two of re-asking.
-
-If it is worth persisting later, the shape that would be safe: keyed by source,
-capped at ~300 most-recent entries (~75 KB), carrying a schema version and a
-short TTL, and treated as a hint that still gets verified when the item is
-actually opened.
-
-## Measuring the link
-
-`telemetry.html` is a **separate entry point**, not a flag on the player.
-Recording every BLE operation costs something, and a wearer who is just
-watching an episode should not pay it. It does not duplicate the app's markup
-either — it fetches `index.html` at runtime and injects the body, so there is
-one copy of the flow and the two cannot drift.
-
-Play something for five minutes, then **Generate report**. Fifteen minutes
-gives better tail estimates. The report goes to the clipboard and to the
-console, because a phone in a pocket has neither a clipboard the wearer can
-reach nor a console — `adb logcat`, or the simulator's `/api/console`.
-
-Three buttons do work of their own:
-
-| | |
-|---|---|
-| **Sweep payload sizes** | Sends synthetic payloads from ~0 to ~44 KB. Real frames all cluster around 15 KB, so a normal session has almost no range to fit a regression against; the sweep gives the analysis its spread in about a minute. |
-| **Time the prepare path** | Runs decode → pixels → encode on frames it generates itself. **Needs no glasses and no account**, so it also runs in the simulator. |
-| **Discard session** | The session survives reloads on purpose; this is how you start a clean one. |
-
-Query flags drive the same things from a harness, since neither the EvenHub
-simulator nor a phone on a desk has a pointer into the WebView:
-
-    ?play=1      start the first playable item and leave it running
-    ?probe=1     sweep on load, print the report at 90s
-    ?prep=1      time the prepare path, print the phase split
-    ?stuck=1     inject the host pause that froze a real session
-    ?notext=1    inject the container loss that killed text but not images
-
-The last two are reproductions of reported failures. Neither can be induced
-any other way — you cannot make a host suspend you on demand, and you cannot
-unplug a container.
-
-### What the report will tell you
-
-```
-    image write  n=32  p50 2219ms  p90 2901ms
-    fetch        n=32  p50   36ms  p90   73ms  28% already cached
-    prepare      n=32  p50 4068ms  p90 4109ms
-      decode     p50   17ms
-      pixels     p50   17ms
-      encode     p50 4022ms  max 13018ms
+```bash
+npx evenhub pack app.json dist -o trickplayer-X.Y.Z.ehpk
 ```
 
-That is a real session on a Pixel 10 Pro Fold, and it is what the split is
-for: four seconds in `prepare`, and the report can say **which** four seconds.
-`encode` was `canvas.toBlob` — a request handed to the host whose callback
-comes back whenever the task queue allows, on a phone also driving a BLE
-radio. It is now a PNG written directly, at 0.07ms (F-048).
+> The SDK is pinned to `0.0.14`. Later versions changed bridge behaviour that the foreground/background handling depends on.
 
-Everything in it is split by **which fix it would imply**, which is the one
-design rule here. `prepare` was a single number for a while, hit 4 seconds on
-real hardware, and could only produce the advice "chase it" — a decode, a pixel
-loop and a PNG encode have three different remedies and one number cannot
-choose between them (F-046). The same applies to contention: a fetch under a
-write and a decode under a write are opposite problems, because the decode can
-wait and the prefetch is the only thing hiding the network.
+### Tests
 
-`tools/pixel-bench.mjs` pins the middle phase off-device at ~0.5 ms, so a phone
-reporting milliseconds there is fine and a phone reporting seconds is being
-interrupted, not computing slowly.
+Everything runs headless, without glasses:
 
-### The suites
+```bash
+npm run conformance      # the shared findings ledger, asserted against this code
+npm run quality-check    # the picture ladder
+npm run telemetry-check  # report generation and redaction
+npm run ble-sim          # the send queue under a lossy link
+npm run png-check        # the PNG encoder
+npm run route-check      # server discovery and route racing
+npm run store-check      # every persisted key is actually hydrated
+npm run redaction-check  # nothing identifying reaches a report
+npm run pixel-bench      # the pixel pipeline, timed and pinned byte-for-byte
+```
 
-    npm run ble-sim           the transport against a simulated link
-    npm run telemetry-check   plant a defect, require the report to find it
-    npm run png-check         the PNG writer, against zlib and Node's crc32
-    npm run pixel-bench       the dither, against the code it replaced
-    npm run conformance       the shared corpus
+### Layout
 
-`telemetry-check` is the unusual one: every case plants a known fault and fails
-if the report does not name it *and* prescribe the remedy that belongs to it.
-An analysis that cannot be wrong is not measuring anything.
+```
+index.html          webview host, zoom-locked viewport
+src/main.ts         the engine: BLE queue, scene pipeline, image path, glasses UI
+src/ui.ts           the phone panels, and the engine's UI hooks
+src/quality.ts      the picture ladder
+src/pixels.ts       greyscale, tone, dither, block expansion
+src/png.ts          4-bit greyscale PNG encoder
+src/timeline.ts     trick-play index parsing
+src/subtitles.ts    SRT parsing and cleaning
+src/plex*.ts        Plex sign-in, server discovery, library
+src/jellyfin*.ts    Jellyfin equivalents
+src/logging.ts      the debugging tools panel
+app.json            manifest and network permissions
+tools/              the test suites above
+```
 
-## What is not in this repo
+### Display facts worth knowing
 
-No frames, stills or screenshots of real media — they are stills from a TV
-episode and are development artefacts rather than anything needed to build.
+- 576×288, 4-bit greyscale — 16 shades of green.
+- Images are sent at 256×128, inside the 288×144 container maximum.
+- Image containers **cannot** capture events; a full-screen text container is used as the event layer.
+- A list holds exactly 20 rows, and a menu 10 items with 32-byte labels.
+
+---
+
+## Credits
+
+*Tears of Steel* — (CC) Blender Foundation, [mango.blender.org](https://mango.blender.org). Licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/). Every screenshot and the demo clip in this README show that film; see [`store_assets/README.md`](store_assets/README.md) for why it is the one film these repositories carry images of.
+
+Trickplayer is not affiliated with Plex, Jellyfin, or Even Realities.
