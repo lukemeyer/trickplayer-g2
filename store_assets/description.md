@@ -26,3 +26,5 @@ A Plex or Jellyfin server you can reach, and items that have a trick-play index 
 PLEX: You need to turn on "Generate video preview thumbnails" in scheduled tasks AND make sure you have subtitles downloaded for your media. Plex ONLY supports EXTERNAL subtitle files (srt), not embeded via their API.
 JELLYFIN: You need to enable "Enable trickplay image extraction" in your library settings. 
 ---
+
+Screenshots show Tears of Steel — (CC) Blender Foundation, mango.blender.org
