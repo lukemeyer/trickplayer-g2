@@ -165,6 +165,48 @@ def("the two block axes expand independently, and the ladder uses both", () => {
     };
 });
 
+def("the brightness ceiling caps every dither, and 15 changes nothing", () => {
+    // The panel's top level is uncomfortable on real optics, so the encoder can
+    // be told to stop short of it. Two things have to hold: nothing may ever be
+    // emitted above the cap by ANY path — ordered dithers round up, which is
+    // exactly how a naive cap leaks — and the cap switched off must leave the
+    // shipping output untouched, because it sits in the tone loop that every
+    // frame goes through.
+    const w = 64, h = 32, rgba = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+        // A full sweep including pure white, which is the value that leaks.
+        const v = Math.round((i / (w * h - 1)) * 255);
+        rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255;
+    }
+    const paths = [
+        { dither: "floyd-steinberg" },
+        { dither: "atkinson" },
+        { dither: "bayer" },
+        { dither: "bayer2x2" },
+        { dither: "threshold" },
+        { dither: "bayer2x2", palette: PALETTES.perceptual12 },
+        { dither: "floyd-steinberg", shades: 4 },
+    ];
+    let leaked = null, changed = null, everCapped = false;
+    for (const base of paths) {
+        const off = toGlassesLevels(rgba, w, h, base);
+        const same = toGlassesLevels(rgba, w, h, { ...base, ceiling: 15 });
+        if (!off.every((v, i) => v === same[i])) changed ??= JSON.stringify(base);
+        for (const c of [14, 13, 11, 8, 0]) {
+            const lv = toGlassesLevels(rgba, w, h, { ...base, ceiling: c });
+            const max = Math.max(...lv);
+            if (max > c) leaked ??= `${JSON.stringify(base)} ceiling ${c} emitted ${max}`;
+            if (max === c) everCapped = true;
+        }
+    }
+    return {
+        pass: !leaked && !changed && everCapped,
+        detail: leaked ? `leaked: ${leaked}`
+            : changed ? `ceiling 15 altered ${changed}`
+            : `${paths.length} paths capped cleanly, ceiling 15 byte-identical`,
+    };
+});
+
 let bad = 0;
 console.log("\n  Picture ladder (F-056)\n");
 for (const c of checks) {

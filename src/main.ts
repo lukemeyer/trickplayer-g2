@@ -120,6 +120,21 @@ import * as store from "./store";
             let brightnessValue = 0;
             let contrastValue = 0;
             let gammaValue = 1.0;
+            /**
+             * Highest display level the encoder may emit (0..15); 15 is off.
+             *
+             * Defaults to 13 — the top two levels given up — because on real
+             * optics the brightest level is uncomfortable rather than merely
+             * bright, and that costs 0.52% of the picture. The library default
+             * in pixels.ts stays 15 so the encoder itself is unopinionated and
+             * the conformance fixtures keep pinning an uncapped frame; this is
+             * the APP deciding, which is where a comfort default belongs.
+             *
+             * A hardware accommodation rather than a picture setting — see the
+             * `ceiling` note in pixels.ts. It rides with the tone controls
+             * because that is where it is applied.
+             */
+            let ceilingValue = 13;
             // Bayer 2x2, because it is 59% faster on the wire than
             // Floyd-Steinberg at the same sixteen shades — measured on hardware,
             // same frame, five encodings (see PICTURE_LADDER). Two pixels share
@@ -777,6 +792,7 @@ import * as store from "./store";
                             brightness: brightnessValue,
                             contrast: contrastValue,
                             gamma: gammaValue,
+                            ceiling: ceilingValue,
                             dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
                             // A rung asks for either a level COUNT or a named
                             // palette; a manual override from the settings panel
@@ -3012,7 +3028,10 @@ import * as store from "./store";
                     const src = (y * w + cropX) * 4;
                     crop.set(rgba.subarray(src, src + half * 4), y * half * 4);
                 }
-                const tone = { brightness: brightnessValue, contrast: contrastValue, gamma: gammaValue };
+                const tone = {
+                    brightness: brightnessValue, contrast: contrastValue,
+                    gamma: gammaValue, ceiling: ceilingValue,
+                };
                 // Candidates name their palette; the quantiser wants the levels.
                 const side = (o) => ({ ...tone, ...o, palette: resolvePalette(o.palette) });
                 const a = toGlassesLevels(crop, half, h, side(optsA));
@@ -3326,6 +3345,7 @@ import * as store from "./store";
 
                 const tone = {
                     brightness: brightnessValue, contrast: contrastValue, gamma: gammaValue,
+                    ceiling: ceilingValue,
                 };
                 const results = [];
                 for (const v of variants) {
@@ -3406,7 +3426,7 @@ import * as store from "./store";
                 }
                 const levels = toGlassesLevels(x.getImageData(0, 0, w, h).data, w, h, {
                     brightness: brightnessValue, contrast: contrastValue,
-                    gamma: gammaValue, dither: ditherAlgorithm,
+                    gamma: gammaValue, ceiling: ceilingValue, dither: ditherAlgorithm,
                 });
 
                 const candidates = [
@@ -3634,8 +3654,17 @@ import * as store from "./store";
                 if (typeof p.brightness === "number") brightnessValue = p.brightness;
                 if (typeof p.contrast === "number") contrastValue = p.contrast;
                 if (typeof p.gamma === "number") gammaValue = p.gamma;
+                if (typeof p.ceiling === "number") ceilingValue = p.ceiling;
                 if (p.texture) ditherAlgorithm = p.texture;
-                return { brightnessValue, contrastValue, gammaValue, ditherAlgorithm };
+                return { brightnessValue, contrastValue, gammaValue, ceilingValue, ditherAlgorithm };
+            }
+
+            /** The brightness ceiling, 0..15. 15 is off. */
+            export function setCeiling(level) {
+                const n = Number(level);
+                ceilingValue = Number.isFinite(n) ? Math.max(0, Math.min(15, Math.round(n))) : 15;
+                noteLifecycle("brightness-ceiling", { level: ceilingValue });
+                return ceilingValue;
             }
 
             /** What a preview would cost to fetch, or null if the source cannot say. */

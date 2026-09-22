@@ -88,7 +88,7 @@
              the far left of the panel while the slider it describes started
              two thirds of the way across. -->
         <div class="control-row">
-          <label for="opt-bandwidth">Bandwidth</label>
+          <label for="opt-bandwidth">Framerate</label>
           <div class="range-field">
             <input type="range" id="opt-bandwidth" min="0" max="2" step="1" value="2" />
             <div class="range-ends">
@@ -98,6 +98,21 @@
           </div>
         </div>
         <p class="text-muted" id="bandwidth-note"></p>
+
+        <!-- Named for what the wearer is choosing, not for the mechanism.
+             Underneath, "quality" pins sixteen grey levels and "speed" pins
+             twelve placed where the eye can tell them apart — about 300ms a
+             frame cheaper, and indistinguishable in eighteen blind
+             comparisons on real material. Auto simply follows the link. -->
+        <div class="control-row">
+          <label>Picture quality</label>
+          <span class="segmented">
+            <button class="btn-secondary active" data-levels="auto">Auto</button>
+            <button class="btn-secondary" data-levels="16">Quality</button>
+            <button class="btn-secondary" data-levels="perceptual12">Speed</button>
+          </span>
+        </div>
+        <p class="text-muted" id="levels-note"></p>
 
         <h3>Picture</h3>
         <!-- Single live preview inside settings if item is selected -->
@@ -113,35 +128,6 @@
           <label for="opt-contrast">Contrast</label>
           <input type="range" id="opt-contrast" min="-100" max="100" step="1" value="0" />
         </div>
-        <!-- Fine is the default now: on hardware it is 59% faster on the wire
-             than Smooth at the same sixteen grey levels. What it LOOKS like on
-             a green micro-OLED is the open question, which is why all of these
-             are switchable while something is playing. -->
-        <div class="control-row">
-          <label>Texture</label>
-          <span class="segmented">
-            <button class="btn-secondary active" data-texture="bayer2x2">Fine</button>
-            <button class="btn-secondary" data-texture="floyd-steinberg">Smooth</button>
-            <button class="btn-secondary" data-texture="bayer">Coarse</button>
-            <button class="btn-secondary" data-texture="atkinson">Crisp</button>
-            <button class="btn-secondary" data-texture="threshold">Flat</button>
-          </span>
-        </div>
-        <p class="text-muted" id="texture-note"></p>
-
-        <!-- Auto follows the bandwidth ladder. The rest pin it, so two
-             encodings can be compared without the ladder moving underneath. -->
-        <div class="control-row">
-          <label>Grey levels</label>
-          <span class="segmented">
-            <button class="btn-secondary active" data-levels="auto">Auto</button>
-            <button class="btn-secondary" data-levels="16">16</button>
-            <button class="btn-secondary" data-levels="perceptual12">P12</button>
-            <button class="btn-secondary" data-levels="perceptual8">P8</button>
-            <button class="btn-secondary" data-levels="4">4</button>
-          </span>
-        </div>
-        <p class="text-muted" id="levels-note"></p>
         <div class="control-row">
           <label for="opt-brightness">Brightness</label>
           <input type="range" id="opt-brightness" min="-100" max="100" step="1" value="0" />
@@ -150,6 +136,22 @@
           <label for="opt-gamma">Gamma</label>
           <input type="range" id="opt-gamma" min="50" max="200" step="5" value="100" />
         </div>
+        <!-- Runs the other way from the sliders above: it takes the TOP off
+             rather than moving the whole range, because the complaint it
+             answers is about the brightest level specifically, not about the
+             picture being too bright. Inverted so that dragging right does
+             more of the thing, like everything else here. -->
+        <div class="control-row">
+          <label for="opt-ceiling">Glare</label>
+          <div class="range-field">
+            <input type="range" id="opt-ceiling" min="0" max="4" step="1" value="2" />
+            <div class="range-ends">
+              <span class="text-muted">Full brightness</span>
+              <span class="text-muted">Softest</span>
+            </div>
+          </div>
+        </div>
+        <p class="text-muted" id="ceiling-note"></p>
         <button class="btn-secondary" id="picture-reset">Reset picture</button>
       </div>
     </dialog>

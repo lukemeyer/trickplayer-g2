@@ -54,9 +54,34 @@ const BAYER_2X2 = [
 export const PALETTES = {
     /** Eight levels, weighted towards the shadows. */
     perceptual8: [0, 1, 3, 5, 7, 9, 12, 15],
-    /** Twelve, thinning midtones where neighbouring steps are hardest to tell apart. */
+    /**
+     * Twelve, thinning midtones where neighbouring steps are hardest to tell
+     * apart — dense at BOTH ends.
+     *
+     * Measured over 28 frames, this is where it spends the display: levels
+     * 12-15 keep their own step for 3.4% of the picture, while levels 3-11
+     * share five steps between 53% of it. Nothing at the top is touched — the
+     * share of pure-white pixels is identical to sixteen even levels, to two
+     * decimal places — so bright areas do not CLIP. What they lose is
+     * gradation just below the top, which is where a smooth bright surface
+     * lives, and that reads as flatness rather than as clipping.
+     */
     perceptual12: [0, 1, 2, 3, 5, 7, 9, 11, 12, 13, 14, 15],
 };
+
+/**
+ * A palette's saving IS its displacement, which bounds how gentle one can be.
+ *
+ * A palette makes a frame cheaper by forcing pixels off their own level and
+ * into a two-value dither, which repeats and therefore compresses. Rearranging
+ * WHICH levels are dropped moves both numbers together — measured over 28
+ * frames, four arrangements of twelve levels ran from 23% displaced for 19%
+ * off the frame down to 7% displaced for 5% off it. There is no arrangement
+ * that disturbs less and saves more, so "spend the levels somewhere else" is
+ * not a free move.
+ *
+ * Kept here because it is the thing to check before proposing a new palette.
+ */
 
 /** Nearest palette value — what the error-diffusion dithers quantise to. */
 function nearestInPalette(palVals, v) {
@@ -109,6 +134,30 @@ function quantisePlane(data, w, h, opts = {}) {
     const gamma = opts.gamma ?? 1;
     const dither = opts.dither ?? "floyd-steinberg";
 
+    /**
+     * The highest display level the encoder may emit, 0..15.
+     *
+     * Not a picture decision — a hardware one. The panel's top level reads far
+     * brighter than its place in the ramp suggests, and on a see-through
+     * display a small patch of it is uncomfortable to look at rather than
+     * merely bright. Reported from the glasses as highlights feeling "blown
+     * out" and causing eye strain, which the level histogram ruled out as
+     * clipping: the share of pure-white pixels is the same under every
+     * encoding we ship, so it is not that MORE pixels reach the top, it is
+     * what the top itself does.
+     *
+     * Applied to luminance BEFORE the dither rather than to the output after
+     * it, which is what makes it work for every path at once — ordered and
+     * error-diffusing, palette and evenly spaced. A value that starts at or
+     * below the ceiling can never be rounded above it, because the bracket it
+     * lands in is bounded by the ceiling too.
+     *
+     * 15 is off, and off is byte-identical to having no ceiling at all
+     * (`ceilVal` is then 255, the clamp this replaces).
+     */
+    const ceiling = opts.ceiling ?? LEVELS;
+    const ceilVal = (ceiling < 0 ? 0 : ceiling > LEVELS ? LEVELS : ceiling) * STEP;
+
     // How many grey levels to quantise to. 16 is everything the display can
     // show; fewer makes a frame far more compressible, and the host compresses
     // what it sends — which, with the phone locked and the link slowed, is the
@@ -116,10 +165,20 @@ function quantisePlane(data, w, h, opts = {}) {
     // chosen are always a subset of the display's 16, evenly spaced.
     const shades = opts.shades ?? 16;
     const step = 255 / (shades - 1);
-    const top = shades - 1;
+    // The ceiling has to restrict the OUTPUT ALPHABET, not merely the input.
+    // Clamping luminance alone is not enough and the conformance check caught
+    // it: an ordered dither chooses between the two values BRACKETING a
+    // luminance, so a ceiling falling between them leaves the upper one
+    // reachable — perceptual 12 with a ceiling of 8 emitted 9, because the
+    // palette jumps 7 -> 9 and 8 clamps into the middle of that gap. Taking
+    // the values away instead makes every path obey it for free.
+    const top = Math.min(shades - 1, Math.floor(ceilVal / step));
     // An explicit palette overrides the even spacing. Absent — which is every
     // shipping path — nothing below behaves differently from before.
-    const palVals = opts.palette ? opts.palette.map((k) => k * STEP) : null;
+    const palVals = opts.palette
+        ? (opts.palette.map((k) => k * STEP).filter((v) => v <= ceilVal) || []) : null;
+    // Never leave the quantiser with nothing to choose from.
+    if (palVals && !palVals.length) palVals.push(0);
     const quant = palVals
         ? (v) => nearestInPalette(palVals, v)
         : (v) => {
@@ -140,7 +199,7 @@ function quantisePlane(data, w, h, opts = {}) {
         v += brightness;
         v = contrastFactor * (v - 128) + 128;
         if (applyGamma) v = 255 * Math.pow(v < 0 ? 0 : v / 255, invGamma);
-        gray[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+        gray[i] = v < 0 ? 0 : v > ceilVal ? ceilVal : v;
     }
 
     if (dither === "floyd-steinberg") {

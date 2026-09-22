@@ -51,6 +51,13 @@ const KEYS = [
     // Both default OFF when absent.
     "trickplayer.skipSilent",
     "trickplayer.reportProgress",
+    // How much of the top of the brightness range to give up. Unlike the other
+    // picture controls this one is persisted, because it is a comfort setting
+    // rather than a preference — the top display level is uncomfortable to
+    // look at on these optics, and having to set that again after every
+    // relaunch is the kind of thing people stop doing. Defaults to 2 when
+    // absent, NOT to 0.
+    "trickplayer.glare",
     // `trickplayer.imageFormat` used to live here and is gone on purpose: it
     // remembered an encoding escalation made during a transient wedge, which
     // would have pinned a device to the four-second encoder for good. See

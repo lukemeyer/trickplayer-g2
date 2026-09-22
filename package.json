@@ -17,7 +17,8 @@
     "quality-check": "node tools/quality-check.mjs",
     "wire-size": "node tools/wire-size.mjs",
     "pixel-bench": "node tools/pixel-bench.mjs",
-    "redaction-check": "node tools/redaction-check.mjs"
+    "redaction-check": "node tools/redaction-check.mjs",
+    "store-check": "node tools/store-check.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.14"

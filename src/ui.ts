@@ -1199,7 +1199,6 @@ function applyOptionsToEngine() {
         contrast: Number($("opt-contrast").value),
         brightness: Number($("opt-brightness").value),
         gamma: Number($("opt-gamma").value) / 100,
-        texture: document.querySelector("[data-texture].active")?.dataset.texture,
     });
     // Bandwidth last: it is the one that rebuilds and returns the counts.
     renderConsequences(engine.setBandwidth($("opt-bandwidth").value));
@@ -1261,6 +1260,9 @@ $("panel-settings").onclick = (e) => {
 
 const SKIP_SILENT_KEY = "trickplayer.skipSilent";
 const REPORT_PROGRESS_KEY = "trickplayer.reportProgress";
+const GLARE_KEY = "trickplayer.glare";
+/** Slider steps taken off the top by default — see the store key's note. */
+const GLARE_DEFAULT = 2;
 
 $("opt-skip-silent").onchange = (e) => {
     store.setItem(SKIP_SILENT_KEY, e.target.checked ? "1" : "0");
@@ -1289,37 +1291,44 @@ $("opt-gamma").oninput = (e) => {
     repaintPreview();
 };
 
-// What each texture costs on the wire, measured on hardware with the same
-// frame sent five ways. Shown because the whole point of exposing these is a
-// judgement about whether the cheaper one looks acceptable, and that judgement
-// needs the price next to it.
-const TEXTURE_NOTES = {
-    "bayer2x2": "Fine — 1117ms a frame measured. The default: a two-pixel pattern repeats at byte granularity, which the host's compressor can pack.",
-    "floyd-steinberg": "Smooth — 2697ms a frame measured, the slowest here. Scatters error so no two bytes repeat.",
-    "bayer": "Coarse — a four-pixel pattern. More visible texture than Fine, and slower.",
-    "atkinson": "Crisp — holds edges, spreads only three quarters of the error.",
-    "threshold": "Flat — no dithering at all. Bands, but nothing to compress around.",
-};
-
-const LEVEL_NOTES = {
-    "auto": "Follows the bandwidth ladder, which drops levels when the link slows.",
-    "16": "Every level the display has.",
-    "perceptual12": "Twelve, thinned in the midtones — 820ms a frame measured, the cheapest of these.",
-    "perceptual8": "Eight, weighted to the shadows — 915ms measured.",
-    "4": "Four, evenly spaced. What the old second rung used: 1333ms, and slower than 16 levels with a Fine texture.",
-};
-
-for (const btn of document.querySelectorAll("[data-texture]")) {
-    btn.onclick = () => {
-        for (const b of document.querySelectorAll("[data-texture]")) b.classList.remove("active");
-        btn.classList.add("active");
-        // Named by effect, not algorithm: nobody chooses between
-        // "Floyd–Steinberg" and "Atkinson" from the names (UI.md §4.2).
-        engine.setPicture({ texture: btn.dataset.texture });
-        $("texture-note").textContent = TEXTURE_NOTES[btn.dataset.texture] || "";
-        repaintPreview();
-    };
+/**
+ * How much of the top of the range to give up, as a ceiling on the display's
+ * own levels.
+ *
+ * The slider counts DOWN from 15 so that dragging right takes more off, which
+ * is the direction every other control here moves. Only the first two steps
+ * touch much: measured over 28 frames, 0.25% of pixels reach level 15 and
+ * 1.36% reach 13 or above, so this gives up very little picture — which is the
+ * point, since the complaint is about a small bright patch being painful
+ * rather than about the picture being too bright overall.
+ */
+const CEILING_NOTES = [
+    "",
+    "Drops the very brightest level. About a quarter of one percent of the picture.",
+    "Drops the top two levels. Small specular highlights stop peaking.",
+    "Drops the top three. Bright surfaces flatten slightly.",
+    "Drops the top four. Noticeably softer, and bright scenes lose some shape.",
+];
+function applyGlare(drop, save) {
+    const d = Math.max(0, Math.min(4, Number(drop) || 0));
+    $("opt-ceiling").value = String(d);
+    engine.setCeiling(15 - d);
+    $("ceiling-note").textContent = CEILING_NOTES[d] || "";
+    if (save) store.setItem(GLARE_KEY, String(d));
 }
+
+$("opt-ceiling").oninput = (e) => {
+    applyGlare(e.target.value, true);
+    repaintPreview();
+};
+
+// Named for the trade, described by the consequence. The wire cost is the
+// honest reason each exists, so it is what the note says.
+const LEVEL_NOTES = {
+    "auto": "Follows the link: full detail while it keeps up, lower resolution when it slows.",
+    "16": "Every tone the display has. About 300ms more per picture, for a difference nobody picked out in blind testing.",
+    "perceptual12": "Twelve tones, placed where the eye can tell them apart. Matched full detail in blind comparison and arrives quicker.",
+};
 
 for (const btn of document.querySelectorAll("[data-levels]")) {
     btn.onclick = () => {
@@ -1335,15 +1344,14 @@ $("picture-reset").onclick = () => {
     $("opt-contrast").value = 0;
     $("opt-brightness").value = 0;
     $("opt-gamma").value = 100;
-    for (const b of document.querySelectorAll("[data-texture]")) {
-        b.classList.toggle("active", b.dataset.texture === "bayer2x2");
-    }
     for (const b of document.querySelectorAll("[data-levels]")) {
         b.classList.toggle("active", b.dataset.levels === "auto");
     }
-    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1, texture: "bayer2x2" });
+    engine.setPicture({ contrast: 0, brightness: 0, gamma: 1 });
+    // Back to the DEFAULT rather than to nothing: zero glare is not the
+    // neutral setting here, it is the uncomfortable one.
+    applyGlare(GLARE_DEFAULT, true);
     engine.setLevels("auto");
-    $("texture-note").textContent = TEXTURE_NOTES["bayer2x2"];
     $("levels-note").textContent = "";
     repaintPreview();
 };
@@ -1442,6 +1450,13 @@ engine.setUiHooks({
     reportProgress = harness.get("progress") === "1"
         || store.getItem(REPORT_PROGRESS_KEY) === "1";
     $("opt-report-progress").checked = reportProgress;
+
+    // Glare is the one picture control that persists, and the one whose
+    // default is not "off". An absent value means never set, which takes the
+    // default; a stored "0" means someone chose full brightness and must
+    // survive, which is why this checks for absence rather than falsiness.
+    const storedGlare = store.getItem(GLARE_KEY);
+    applyGlare(storedGlare === "" || storedGlare == null ? GLARE_DEFAULT : Number(storedGlare), false);
 
     // The debugging switches, both off unless someone turned them on and both
     // sticky across launches — that is the point of them, since the session
