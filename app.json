@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.29",
+  "version": "0.9.30",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,14 +21,11 @@
   ],
   "changelog": [
     {
-      "version": "0.9.29",
+      "version": "0.9.30",
       "notes": [
-        "Pictures keep their shape. Films are shown at their own aspect ratio with black bars, rather than stretched to fill the frame — wide films are no longer squashed tall.",
-        "16:9 shows bigger. The picture area is now 256x144, so TV and other 16:9 material fills far more of it. Wide films look the same as before.",
-        "Faster when the link slows. The lower picture levels now cost about half what they did on busy scenes, so when the link struggles you get noticeably more pictures, not just smaller ones.",
-        "The picture steps down sooner, and less. When a full-quality frame is slow, the next level down — which keeps every horizontal pixel — takes over after a single slow frame, and full quality comes back as soon as the link allows.",
-        "A finer shading pattern at every level, with fewer blotchy frames in dark and smooth scenes.",
-        "Debugging tools: a new test measures what each picture actually costs the Bluetooth link."
+        "Choose your picture quality. Settings now offers Auto, High, Standard and Low. Auto steps between them as the connection allows; picking one holds it there, and the choice is remembered.",
+        "Settings and Debugging tools are tidier: evenly spaced, with sliders that line up and bigger buttons and checkboxes that are easier to hit.",
+        "Debugging tools now keep only what helps with a problem: the message log, the link capture, and two quick checks — whether your glasses accept pictures, and how fast your phone prepares them. The testing tools used to tune the picture have been removed."
       ]
     }
   ],
