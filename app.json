@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.28",
+  "version": "0.9.29",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,14 +21,14 @@
   ],
   "changelog": [
     {
-      "version": "0.9.28",
+      "version": "0.9.29",
       "notes": [
-        "Pictures arrive quicker. The best setting now uses twelve carefully placed grey levels rather than all sixteen — judged blind on the glasses, nobody could tell the two apart, and it is about a quarter faster per frame. You get more pictures for the same link.",
-        "New Glare setting, on by default. The display's brightest level is harsher on the eye than its place in the range suggests, so a little of the top is given up to soften it. Set it to Full brightness if you would rather have all of it.",
-        "When the link slows, the picture now gives up resolution rather than grey levels, and holds on to horizontal detail a step longer — so text stays readable further down.",
-        "Texture is gone. It offered three ways of shading the picture that blind comparison could not tell apart, which made it a choice about nothing. Bandwidth is now called Framerate, and Picture quality sits underneath it.",
-        "A single tap no longer pauses. It never actually worked on the glasses, and a brush against the temple should not stop playback. Play, pause, play from start and return to the list are all in the contextual menu — tap, then long press.",
-        "Debugging tools: Copy messages now works on a phone, and a new test walks through each picture quality level on the glasses so you can see the difference for yourself."
+        "Pictures keep their shape. Films are shown at their own aspect ratio with black bars, rather than stretched to fill the frame — wide films are no longer squashed tall.",
+        "16:9 shows bigger. The picture area is now 256x144, so TV and other 16:9 material fills far more of it. Wide films look the same as before.",
+        "Faster when the link slows. The lower picture levels now cost about half what they did on busy scenes, so when the link struggles you get noticeably more pictures, not just smaller ones.",
+        "The picture steps down sooner, and less. When a full-quality frame is slow, the next level down — which keeps every horizontal pixel — takes over after a single slow frame, and full quality comes back as soon as the link allows.",
+        "A finer shading pattern at every level, with fewer blotchy frames in dark and smooth scenes.",
+        "Debugging tools: a new test measures what each picture actually costs the Bluetooth link."
       ]
     }
   ],
