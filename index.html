@@ -99,21 +99,6 @@
         </div>
         <p class="text-muted" id="bandwidth-note"></p>
 
-        <!-- Named for what the wearer is choosing, not for the mechanism.
-             Underneath, "quality" pins sixteen grey levels and "speed" pins
-             twelve placed where the eye can tell them apart — about 300ms a
-             frame cheaper, and indistinguishable in eighteen blind
-             comparisons on real material. Auto simply follows the link. -->
-        <div class="control-row">
-          <label>Picture quality</label>
-          <span class="segmented">
-            <button class="btn-secondary active" data-levels="auto">Auto</button>
-            <button class="btn-secondary" data-levels="atkinson12">Quality</button>
-            <button class="btn-secondary" data-levels="perceptual12">Speed</button>
-          </span>
-        </div>
-        <p class="text-muted" id="levels-note"></p>
-
         <h3>Picture</h3>
         <!-- Single live preview inside settings if item is selected -->
         <div id="settings-preview-wrap" class="settings-preview-area hidden">
@@ -123,6 +108,21 @@
           </figure>
         </div>
         <p class="text-muted" id="settings-preview-empty">Select an episode to preview picture adjustments.</p>
+
+        <!-- The picture ladder, by the name the wearer sees: Auto follows the
+             link; High, Standard and Low pin full, 1x2 and 2x2 (PICTURE_LEVELS
+             in quality.ts). Four choices do not fit beside a label on a phone,
+             so this one stacks: label, then a full-width segmented control. -->
+        <div class="control-stack">
+          <label id="picture-level-label">Picture quality</label>
+          <span class="segmented segmented-full" role="radiogroup" aria-labelledby="picture-level-label">
+            <button class="btn-secondary active" data-level="auto" role="radio" aria-checked="true">Auto</button>
+            <button class="btn-secondary" data-level="high" role="radio" aria-checked="false">High</button>
+            <button class="btn-secondary" data-level="standard" role="radio" aria-checked="false">Standard</button>
+            <button class="btn-secondary" data-level="low" role="radio" aria-checked="false">Low</button>
+          </span>
+        </div>
+        <p class="text-muted" id="level-note"></p>
 
         <div class="control-row">
           <label for="opt-contrast">Contrast</label>

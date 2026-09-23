@@ -766,61 +766,6 @@ if (harness.get("settings") === "1") {
     setTimeout(() => openSettings(), 2000);
 }
 
-// `?compare=1` starts the picture comparison once something is playing. The
-// simulator has no pointer into the webview, and this is the one tool whose
-// whole loop — send, swipe, tap — has to be driven from outside.
-if (harness.get("compare") === "1") {
-    setTimeout(async () => {
-        const { runPictureComparison } = engine;
-        try {
-            const r = await runPictureComparison({
-                frames: Number(harness.get("frames")) || 2,
-                onProgress: (t) => console.log(`[Compare] ${t}`),
-            });
-            console.log(`[Compare] done: ${JSON.stringify(r.tally)}`);
-        } catch (e) {
-            console.error(`[Compare] failed: ${e?.message || e}`);
-        }
-    }, Number(harness.get("comparedelay")) || 6000);
-}
-
-// `?ladder=1` walks the picture ladder once something is playing — same reason
-// as the comparison above, plus one of its own: the rungs differ only in how
-// the picture was encoded, so the only way to judge them is to see them on the
-// glasses, and the only way to capture that is from outside.
-if (harness.get("ladder") === "1") {
-    setTimeout(async () => {
-        try {
-            const r = await engine.showLadder({
-                frames: Number(harness.get("frames")) || 3,
-                rungs: harness.get("rungs") ? harness.get("rungs").split(",") : null,
-                onProgress: (t) => console.log(`[Ladder] ${t}`),
-            });
-            console.log(`[Ladder] done: ${JSON.stringify(r.shown)}`);
-        } catch (e) {
-            console.error(`[Ladder] failed: ${e?.message || e}`);
-        }
-    }, Number(harness.get("ladderdelay")) || 6000);
-}
-
-// `?linkcost=1` runs the link-cost probe. Used to exercise the whole path in
-// the simulator — the frame chooser, the delimiters, the telemetry meta —
-// before spending a hardware session and an adb capture on it.
-if (harness.get("linkcost") === "1") {
-    setTimeout(async () => {
-        try {
-            const r = await engine.probeLinkCost({
-                perVariant: Number(harness.get("per")) || 2,
-                onProgress: (t) => console.log(`[LinkCost] ${t}`),
-            });
-            console.log(`[LinkCost] done: ${r.source} · ` +
-                r.results.map((x) => `${x.name} ${x.ok}/${x.of} ${x.medianMs}ms`).join(" · "));
-        } catch (e) {
-            console.error(`[LinkCost] failed: ${e?.message || e}`);
-        }
-    }, Number(harness.get("linkcostdelay")) || 25000);
-}
-
 // `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
 // The simulator has no pointer into the webview, so the first tap of sign-in
 // cannot be made by hand there.
@@ -1340,38 +1285,41 @@ $("opt-ceiling").oninput = (e) => {
     repaintPreview();
 };
 
-// Named for the trade, described by the consequence. The wire cost is the
-// honest reason each exists, so it is what the note says.
+// The ladder's positions, by consequence. Auto is the default and the only one
+// that moves; the others hold whatever the link does.
+const PICTURE_LEVEL_KEY = "trickplayer.pictureLevel";
 const LEVEL_NOTES = {
-    "auto": "Follows the link: full detail while it keeps up, lower resolution when it slows.",
-    "atkinson12": "Smoother shading, with far less of the fine cross-hatch pattern.",
-    "16": "Every tone the display has, for a difference nobody picked out in blind testing.",
-    "perceptual12": "Twelve tones, placed where the eye can tell them apart. Matched full detail in blind comparison and arrives quicker.",
+    auto: "Follows the link: High while it keeps up, stepping down to Standard and then Low when it slows.",
+    high: "Full detail on every picture. On a slow link, pictures arrive less often instead of looking softer.",
+    standard: "Every column, half the rows. About half the data of High, so on a slow link pictures keep coming.",
+    low: "Half the detail each way. The lightest pictures, for a link that is really struggling.",
 };
 
-for (const btn of document.querySelectorAll("[data-levels]")) {
-    btn.onclick = () => {
-        for (const b of document.querySelectorAll("[data-levels]")) b.classList.remove("active");
-        btn.classList.add("active");
-        engine.setLevels(btn.dataset.levels);
-        $("levels-note").textContent = LEVEL_NOTES[btn.dataset.levels] || "";
-        repaintPreview();
-    };
+function applyPictureLevel(level, save) {
+    const choice = level in LEVEL_NOTES ? level : "auto";
+    for (const b of document.querySelectorAll("[data-level]")) {
+        const on = b.dataset.level === choice;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-checked", on ? "true" : "false");
+    }
+    engine.setPictureLevel(choice);
+    $("level-note").textContent = LEVEL_NOTES[choice];
+    if (save) store.setItem(PICTURE_LEVEL_KEY, choice);
+}
+
+for (const btn of document.querySelectorAll("[data-level]")) {
+    btn.onclick = () => { applyPictureLevel(btn.dataset.level, true); repaintPreview(); };
 }
 
 $("picture-reset").onclick = () => {
     $("opt-contrast").value = 0;
     $("opt-brightness").value = 0;
     $("opt-gamma").value = 100;
-    for (const b of document.querySelectorAll("[data-levels]")) {
-        b.classList.toggle("active", b.dataset.levels === "auto");
-    }
     engine.setPicture({ contrast: 0, brightness: 0, gamma: 1 });
     // Back to the DEFAULT rather than to nothing: zero glare is not the
     // neutral setting here, it is the uncomfortable one.
     applyGlare(GLARE_DEFAULT, true);
-    engine.setLevels("auto");
-    $("levels-note").textContent = "";
+    applyPictureLevel("auto", true);
     repaintPreview();
 };
 
@@ -1476,6 +1424,9 @@ engine.setUiHooks({
     // survive, which is why this checks for absence rather than falsiness.
     const storedGlare = store.getItem(GLARE_KEY);
     applyGlare(storedGlare === "" || storedGlare == null ? GLARE_DEFAULT : Number(storedGlare), false);
+    // Picture quality persists too: a pin is a decision about someone's own
+    // link, which does not change between launches.
+    applyPictureLevel(store.getItem(PICTURE_LEVEL_KEY) || "auto", false);
 
     // The debugging switches, both off unless someone turned them on and both
     // sticky across launches — that is the point of them, since the session

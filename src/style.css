@@ -352,7 +352,6 @@ input[type="password"] {
 /* The exceptions, and they are deliberate ones: the toolbar is a dense strip
    of chips, not a form, and giving its icons and server picker a 42px floor
    made the whole header a third taller. */
-.icon-btn,
 .header-server select {
   min-height: 0;
 }
@@ -380,12 +379,6 @@ input[type="password"] {
 .control-row input[type="range"] {
   flex: 1;
   max-width: var(--range-width);
-}
-
-.control-row.range-labels,
-.control-row:has(span.text-muted) {
-  margin-top: 4px;
-  margin-bottom: 8px;
 }
 
 /* A slider and the words describing its two ends, as one control.
@@ -546,7 +539,10 @@ button:disabled {
 .icon-btn {
   width: auto;
   flex: 0 0 auto;
-  min-width: 0;
+  /* A 40px target, glyph centred. Fits the 53px header without growing it,
+     and a dialog's close button was 26x30 — the smallest thing on screen. */
+  min-width: 40px;
+  min-height: 40px;
   margin: 0;
   border: 0;
   background: none;
@@ -655,7 +651,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 24px;
+  margin-top: 20px;
   font-size: 0.9rem;
   color: var(--text-secondary);
 }
@@ -961,12 +957,23 @@ dialog.settings-dialog::backdrop {
   margin-bottom: 0;
 }
 
+/* ONE VERTICAL RHYTHM for both dialogs, set by the controls rather than the
+   gaps around them:
+
+     heading rule   -> first control   20px
+     control        -> next control    20px
+     control        -> its note         8px
+     note           -> next control    20px
+
+   Every block carries its gap as margin-TOP and nothing carries a bottom
+   margin, so two blocks never add their margins together — which is what made
+   the gap after a note twice the gap between two plain rows. */
 .dialog-card h3 {
   font-size: 1.15rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-top: 32px;
-  margin-bottom: 16px;
+  margin-top: 36px;
+  margin-bottom: 0;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -980,19 +987,46 @@ dialog.settings-dialog::backdrop {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  margin-top: 24px;
-  margin-bottom: 6px;
+  margin-top: 20px;
+  margin-bottom: 0;
+  /* A checkbox row is a tap target as a whole (its label is `for=` the box),
+     so it gets the same floor as a button. */
+  min-height: 32px;
+}
+
+/* A slider with end labels is taller than a plain one, and centring it put
+   its track 10px higher than every other track and its label beside the gap
+   between track and words. Top-aligned instead, with the track pushed down to
+   where a plain row's track sits and the label on the track's line. */
+.dialog-card .control-row:has(.range-field) {
+  align-items: flex-start;
+}
+.dialog-card .control-row:has(.range-field) > label {
+  line-height: 32px;
+}
+.dialog-card .control-row .range-field {
+  padding-top: 10px;
+}
+
+/* Slider rows share one label column, so every track starts at the same x
+   whatever its label says. */
+.dialog-card .control-row:has(input[type="range"]) > label {
+  flex: 0 0 96px;
+}
+
+/* Bigger than the platform default, which is 13px — too small to hit on a
+   phone. The label is tappable too, but the box is where people aim. */
+.dialog-card input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent-g2);
 }
 
 .dialog-card .control-row input[type="range"] {
   flex: 1;
   max-width: var(--range-width);
-}
-
-.dialog-card .control-row.range-labels,
-.dialog-card .control-row:has(span.text-muted) {
-  margin-top: 4px;
-  margin-bottom: 8px;
 }
 
 /* The cap belongs to the FIELD now, not to the bare track inside it — and
@@ -1004,14 +1038,14 @@ dialog.settings-dialog::backdrop {
 }
 
 .dialog-card p.text-muted {
-  margin-top: 6px;
-  margin-bottom: 20px;
+  margin-top: 8px;
+  margin-bottom: 0;
   line-height: 1.5;
   font-size: 0.84rem;
 }
 
 .dialog-card p.text-muted:empty {
-  margin: 0;
+  display: none;
 }
 
 .dialog-card .segmented {
@@ -1023,17 +1057,44 @@ dialog.settings-dialog::backdrop {
   font-size: 0.85rem;
 }
 
+/* A label on its own line with its control full width underneath, for a
+   control too wide to share a row with its label on a phone. Same top margin
+   as .control-row, so the rhythm down the panel does not change. */
+.dialog-card .control-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+  margin-bottom: 0;
+}
+.dialog-card .control-stack label {
+  margin-bottom: 0;
+  text-transform: none;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  letter-spacing: normal;
+}
+/* Equal segments across the full width: four choices, each an easy target. */
+.segmented-full {
+  width: 100%;
+}
+.dialog-card .segmented-full .btn-secondary {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 4px;
+}
+
 .dialog-card #picture-reset {
   margin-top: 28px;
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 #settings-preview-wrap {
-  margin: 16px 0 24px 0;
+  margin: 20px 0 0 0;
 }
 
-#settings-preview-empty {
-  margin: 12px 0 24px 0;
+.dialog-card p#settings-preview-empty {
+  margin: 20px 0 0 0;
   padding: 14px;
   background: var(--bg-input);
   border: 1px dashed var(--border-subtle);
@@ -1071,8 +1132,50 @@ dialog.settings-dialog::backdrop {
 /* A row of controls. Buttons here are as wide as their label and no wider:
    a full-width button reads as "the thing to do next", and a panel of six of
    them stacked reads as six of those. */
-.tlm-row {
-  margin-bottom: 20px;
+/* The debugging panel on the dialogs' rhythm (see .dialog-card h3): every
+   block carries its gap above it and none below. Here an explanation comes
+   BEFORE its controls, so it sits 12px under the heading and the controls
+   12px under it. */
+#tlm-panel .tlm-row,
+#tlm-panel .tlm-stats,
+#tlm-panel .tlm-checks,
+#tlm-panel .tlm-out {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+/* Buttons that share a row equally, so three short ones fit on a phone. */
+.tlm-even > .btn-inline {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+  white-space: nowrap;
+}
+
+/* A check: what it answers on the first line, what it costs underneath, as
+   one full-width tap target. */
+.tlm-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tlm-checks .tlm-check {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0;
+  padding: 12px 14px;
+  text-align: left;
+}
+.tlm-check-label {
+  font-size: 0.9rem;
+}
+#tlm-panel .tlm-check .tlm-check-detail {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.4;
 }
 
 .btn-inline {
@@ -1089,17 +1192,10 @@ dialog.settings-dialog::backdrop {
 
 /* The picker takes the room; its button does not. `stretch` on the row makes
    the two the same height, which padding alone never quite managed. */
-.tlm-testrow > select {
-  flex: 1 1 auto;
-  min-width: 0;
-  width: auto;
-  margin: 0;
-}
-
 .tlm-divider {
   border: 0;
   border-top: 1px solid var(--border-subtle);
-  margin: 28px 0 20px;
+  margin: 36px 0 0;
 }
 
 /* The live numbers, as cards: label above value, wrapping into as many
@@ -1109,7 +1205,6 @@ dialog.settings-dialog::backdrop {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 8px;
-  margin-bottom: 20px;
 }
 
 .tlm-stat {
@@ -1146,9 +1241,8 @@ dialog.settings-dialog::backdrop {
 .tlm-bad   { color: var(--color-danger); }
 
 /* Said once, quietly, under whichever switch was just turned on. */
-.tlm-relaunch {
-  margin-top: 0;
-  margin-bottom: 20px;
+#tlm-panel .tlm-relaunch {
+  margin-top: 12px;
   font-size: 0.8rem;
 }
 
@@ -1162,13 +1256,13 @@ dialog.settings-dialog::backdrop {
    made the explanation float midway between the heading above it and the
    buttons below, belonging to neither. */
 #tlm-panel .text-muted {
-  margin-top: 0;
-  margin-bottom: 14px;
+  margin-top: 12px;
+  margin-bottom: 0;
 }
 
-#tlm-panel h3 {
-  margin-top: 32px;
-  margin-bottom: 8px;
+/* The panel opens with two lines of explanation rather than a heading. */
+#tlm-panel .dialog-head + .text-muted {
+  margin-top: 0;
 }
 
 .tlm-console {
@@ -1176,5 +1270,17 @@ dialog.settings-dialog::backdrop {
   overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  margin-bottom: 12px;
+}
+
+/* The settings dialog's first heading sits right under the title; this
+   panel's follows two lines of explanation, so it takes the normal gap. */
+#tlm-panel .dialog-card h3:first-of-type {
+  margin-top: 36px;
+}
+
+/* The header's icons keep their 40px targets without making the header
+   taller: the extra reach overlaps the header's own padding. */
+.header-actions .icon-btn {
+  margin-top: -4px;
+  margin-bottom: -4px;
 }

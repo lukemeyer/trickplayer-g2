@@ -75,7 +75,7 @@ const PANEL = `
     <p class="text-muted">A copy of everything the app logs.</p>
     <div class="form-row tlm-row">
       <button class="btn-secondary btn-inline" id="tlm-messages-toggle">▶ Start logging</button>
-      <button class="btn-secondary btn-inline tlm-end hidden" id="tlm-copy-console">📋 Copy messages</button>
+      <button class="btn-secondary btn-inline tlm-end hidden" id="tlm-copy-console">Copy messages</button>
     </div>
     <div id="tlm-messages-body" class="hidden">
       <p class="text-muted tlm-relaunch">To log from app startup, relaunch the app.</p>
@@ -99,17 +99,14 @@ const PANEL = `
         <div class="tlm-stat"><span class="tlm-stat-label">Storage</span><span class="tlm-stat-value" id="tlm-store">—</span></div>
       </div>
 
-      <h3>Tests</h3>
-      <div class="form-row tlm-row tlm-testrow">
-        <select id="tlm-test" aria-label="Test to run"></select>
-        <button class="btn-secondary btn-inline" id="tlm-run">Run test</button>
-      </div>
+      <h3>Checks</h3>
+      <div class="tlm-checks" id="tlm-tests"></div>
 
       <h3>Report</h3>
-      <div class="form-row tlm-row">
-        <button class="btn-secondary btn-inline" id="tlm-report">📄 Generate</button>
-        <button class="btn-secondary btn-inline" id="tlm-copy">📋 Copy</button>
-        <button class="btn-secondary btn-inline" id="tlm-json">{ } Copy JSON</button>
+      <div class="form-row tlm-row tlm-even">
+        <button class="btn-secondary btn-inline" id="tlm-report">Generate</button>
+        <button class="btn-secondary btn-inline" id="tlm-copy">Copy</button>
+        <button class="btn-secondary btn-inline" id="tlm-json">Copy JSON</button>
       </div>
       <pre id="tlm-out" class="tlm-out hidden"></pre>
     </div>
@@ -117,7 +114,7 @@ const PANEL = `
     <!-- Below the line, because it reaches across both of the above. -->
     <hr class="tlm-divider" />
     <div class="form-row tlm-row">
-      <button class="btn-danger btn-inline" id="tlm-reset">🗑 Delete logs</button>
+      <button class="btn-danger btn-inline" id="tlm-reset">Delete logs</button>
     </div>
   </div>
 </dialog>`;
@@ -190,17 +187,22 @@ function persist() {
 
 // ------------------------------------------------------------------- tests
 //
-// One at a time, chosen from a list rather than offered as a wall of buttons.
-// Several of these send twenty-odd writes down a serial link, and two of them
-// running at once measures neither: the second one queues behind the first and
-// reports the wait as the link being slow.
+// Only checks that answer a question a real user's report raises. The
+// measurement probes that chose the picture encoding — dither and payload
+// sweeps, the link-cost capture, the blind comparison, the ladder walk — have
+// moved to trickplayer-lab, which models the host exactly and needs no
+// glasses time for most of it.
+//
+// One at a time: each sends writes down a serial link, and two at once would
+// measure the queue.
 
 const TESTS = [
     {
         id: "formats",
-        label: "Which image formats work? (~20s)",
-        needsPaused: "Pause playback first — this sends nine frames of its own.",
-        busy: "Trying each image encoding on the glasses…",
+        label: "Check the glasses accept pictures",
+        detail: "About 20 s. For \"subtitles show but pictures never do\".",
+        needsPaused: "Pause playback first — this sends nine pictures of its own.",
+        busy: "Trying each picture format on the glasses…",
         async run(engine) {
             recorder.mark("format-probe-start");
             const rs = await engine.probeFormats();
@@ -213,151 +215,12 @@ const TESTS = [
         },
     },
     {
-        id: "probe",
-        label: "Sweep payload sizes (~1 min)",
-        // Started during playback the sweep does not corrupt the measurement so
-        // much as sit in front of everything the player wants to send — a
-        // session reported "text only started appearing after about a minute",
-        // and that minute was this.
-        needsPaused: "Pause playback first — the sweep would queue in front of it for a minute.",
-        busy: "Sweeping payload sizes over the link…",
-        async run(engine) {
-            recorder.mark("probe-start");
-            await engine.probeLink();
-            recorder.mark("probe-end");
-            return "Sweep done — generate the report.";
-        },
-    },
-    {
-        id: "lockprobe",
-        label: "Sweep with the phone LOCKED (~5 min)",
-        busy: "Locked sweep starting…",
-        // Nobody can watch a panel on a locked phone, so it counts down, runs
-        // on its own, and leaves the report ready to copy on unlocking.
-        async run(engine) {
-            for (let n = 20; n > 0; n--) {
-                setHint(`Lock the phone now — sweep starts in ${n}s. ` +
-                    `Keep the glasses on; unlock in about 5 minutes.`);
-                await new Promise((r) => setTimeout(r, 1000));
-            }
-            recorder.mark("locked-sweep-start");
-            await engine.probeLockedLink();
-            recorder.mark("locked-sweep-end");
-            persist();
-            generateReport();
-            return "Locked sweep done — the report is below. Copy it.";
-        },
-    },
-    {
-        id: "dithers",
-        label: "Which dither the link likes (~1 min)",
-        // Twenty-five image writes, and the DURATIONS are the whole
-        // measurement. Behind playback they would queue, and what got measured
-        // would be the wait rather than the encoding.
-        needsPaused: "Pause playback first — this sends 25 frames of its own and times every one.",
-        busy: "Sending the same frame five ways…",
-        async run(engine) {
-            recorder.mark("dither-probe-start");
-            const { source, results } = await engine.probeDithers();
-            recorder.mark("dither-probe-end");
-            const base = results[0]?.medianMs || 0;
-            const parts = results.map((r) => {
-                if (!r.ok) return `${r.name}: FAILED (${r.reason || "no reason"})`;
-                const delta = base && r.medianMs !== base
-                    ? ` ${r.medianMs < base ? "−" : "+"}${Math.abs(r.medianMs - base)}ms` : "";
-                return `${r.name} ${r.medianMs}ms ≈${r.wireKb}KB${delta}`;
-            });
-            return `${source} · ${parts.join("  ·  ")} · the handed-over PNG is the ` +
-                `same size every time, so the differences are the host's compressor.`;
-        },
-    },
-    {
-        id: "compare",
-        label: "Compare picture settings by eye (~6 min)",
-        // Twenty-one image sends and a person answering between each: seven
-        // pairings per frame, three frames. Behind playback the pictures would
-        // queue and the wearer would be judging whatever arrived last.
-        //
-        // Run whole rather than one group at a time. The groups interleave, and
-        // that is what gave the second hardware run its control: nine
-        // full-detail pairs produced no decision while nine reduced-level pairs
-        // in the same session produced five, which is how "no difference" was
-        // told apart from "not looking carefully" (F-057).
-        needsPaused: "Pause playback first — this puts its own pictures up and waits for you between each.",
-        busy: "Choosing frames…",
-        async run(engine) {
-            recorder.mark("picture-comparison-start");
-            const { answers, tally } = await engine.runPictureComparison({
-                onProgress: (text) => setHint(text),
-            });
-            recorder.mark("picture-comparison-end");
-            if (!answers.length) return "No comparisons recorded.";
-            // Revealed only now: the wearer judged them blind, and seeing the
-            // names mid-run is exactly how a preference becomes an expectation.
-            const lines = Object.entries(tally).map(([group, rows]) =>
-                `${group} — ` + rows.map((r) =>
-                    `${r.id}: ${r.wins}W ${r.losses}L${r.draws ? ` ${r.draws}=` : ""}`).join(", "));
-            return `${answers.length} comparisons. ${lines.join("  ·  ")}`;
-        },
-    },
-    {
-        id: "linkcost",
-        label: "Measure the real link cost (~3 min, needs adb)",
-        // 42 image writes whose DURATIONS and wire bytes are the measurement.
-        // Behind playback what gets measured is the queue.
-        needsPaused: "Pause playback first — this sends 42 frames of its own and times every one.",
-        busy: "Open the item you want measured first — see the line below.",
-        async run(engine) {
-            // Said before the probe rather than after, because the capture has
-            // to be running while it happens and there is no way to go back.
-            // It measures whatever is LOADED. Said plainly, because the frame
-            // decides the numbers and the wrong item makes the run worthless.
-            setHint("Measuring the item that is loaded now. On a computer with the " +
-                "phone attached: adb logcat -c && adb logcat -v time > session.log");
-            for (let n = 15; n > 0; n--) {
-                setHint(`Start the capture now — probe begins in ${n}s.  ` +
-                    `adb logcat -c && adb logcat -v time > session.log`);
-                await new Promise((r) => setTimeout(r, 1000));
-            }
-            recorder.mark("link-cost-start");
-            const { source, results } = await engine.probeLinkCost({
-                onProgress: (text) => setHint(text),
-            });
-            recorder.mark("link-cost-end");
-            persist();
-            generateReport();
-            const parts = results.map((r) => r.ok
-                ? `${r.name} ${r.medianMs}ms x${r.vsShipping}`
-                : `${r.name} FAILED (${r.reason || "no reason"})`);
-            return `${source} · ${parts.join("  ·  ")} · stop the capture, then: ` +
-                `node tools/link-cost.mjs session.log report.json`;
-        },
-    },
-    {
-        id: "ladder",
-        label: "See each picture-quality rung (~2 min)",
-        // Twelve image sends with a person looking at each one. Behind playback
-        // the pictures would queue and you would be judging whatever arrived
-        // last, same as the comparison above.
-        needsPaused: "Pause playback first — this puts its own pictures up and waits for you between each.",
-        busy: "Choosing frames…",
-        async run(engine) {
-            recorder.mark("ladder-walk-start");
-            const { frames, shown } = await engine.showLadder({
-                onProgress: (text) => setHint(text),
-            });
-            recorder.mark("ladder-walk-end");
-            return `${shown.length} pictures over ${frames.length} frames — ` +
-                [...new Set(shown.map((s) => `${s.rung} ${s.source}`))].join(", ");
-        },
-    },
-    {
         id: "prep",
-        // Deliberately usable with nothing connected. The prepare tail was the
-        // largest unexplained number in a hardware session, and needing a
-        // paired link to measure it made it the hardest one to reproduce.
-        label: "Time the prepare path (no glasses needed)",
-        busy: "Preparing synthetic frames…",
+        // Usable with nothing connected: a slow phone is a slow phone whether
+        // or not the glasses are on.
+        label: "Time picture preparation on this phone",
+        detail: "A few seconds, no glasses needed. For \"pictures lag behind the subtitles\".",
+        busy: "Preparing test pictures…",
         async run(engine) {
             recorder.mark("prep-probe-start");
             const r = await engine.probePrepare();
@@ -379,24 +242,26 @@ const testsRun = new Set();
 let runningTest = null;
 
 function renderTests() {
-    const sel = $("tlm-test");
-    if (!sel) return;
-    const keep = sel.value;
-    sel.innerHTML = "";
-    for (const t of TESTS) {
-        const opt = document.createElement("option");
-        opt.value = t.id;
-        // The state belongs on the option, because the whole point of the list
-        // is knowing what you have already done without re-reading the hint.
-        const state = runningTest === t.id ? " — running…" : testsRun.has(t.id) ? " — ran" : "";
-        opt.textContent = `${t.label}${state}`;
-        sel.appendChild(opt);
+    const box = $("tlm-tests");
+    if (!box) return;
+    if (!box.childElementCount) {
+        for (const t of TESTS) {
+            const b = document.createElement("button");
+            b.className = "btn-secondary tlm-check";
+            b.dataset.test = t.id;
+            b.innerHTML = `<span class="tlm-check-label"></span><span class="tlm-check-detail text-muted"></span>`;
+            b.querySelector(".tlm-check-detail").textContent = t.detail;
+            b.onclick = () => runSelectedTest(t.id);
+            box.appendChild(b);
+        }
     }
-    if (keep) sel.value = keep;
-    const run = $("tlm-run");
-    if (run) {
-        run.disabled = runningTest !== null;
-        run.textContent = runningTest ? "Running…" : "Run test";
+    for (const b of box.querySelectorAll("button[data-test]")) {
+        const t = TESTS.find((x) => x.id === b.dataset.test);
+        // The state belongs on the button: knowing what has already been run
+        // without re-reading the hint is the point.
+        const state = runningTest === t.id ? " — running…" : testsRun.has(t.id) ? " — done" : "";
+        b.querySelector(".tlm-check-label").textContent = `${t.label}${state}`;
+        b.disabled = runningTest !== null;
     }
 }
 
@@ -408,8 +273,6 @@ function renderTests() {
  * survives the panel being rearranged; `$("tlm-probe").click()` did not.
  */
 export function runTest(id) {
-    const sel = $("tlm-test");
-    if (sel) sel.value = id;
     return runSelectedTest(id);
 }
 
@@ -429,9 +292,9 @@ export function isTestRunning() {
     return runningTest !== null;
 }
 
-async function runSelectedTest(forceId) {
+async function runSelectedTest(id) {
     if (runningTest || !recorder) return;
-    const t = TESTS.find((x) => x.id === (forceId ?? $("tlm-test").value));
+    const t = TESTS.find((x) => x.id === id);
     if (!t) return;
     if (t.needsPaused && engineRef.playbackState?.()?.playing) {
         setHint(t.needsPaused);
@@ -848,7 +711,6 @@ function mountPanel(engine) {
     };
 
     renderTests();
-    $("tlm-run").onclick = () => runSelectedTest();
 
     $("tlm-report").onclick = generateReport;
     $("tlm-copy").onclick = () =>

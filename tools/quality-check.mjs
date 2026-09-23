@@ -16,7 +16,7 @@ for (const f of ["quality", "pixels"]) {
         fs.readFileSync(path.join(ROOT, "src", `${f}.ts`), "utf8"),
         { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText);
 }
-const { createQualityController, PICTURE_LADDER, resolvePictureChoice } =
+const { createQualityController, PICTURE_LADDER, resolvePictureLevel } =
     await import(pathToFileURL(path.join(TMP, "quality.mjs")).href);
 const { toGlassesLevels, expandBlocks, PALETTES } = await import(pathToFileURL(path.join(TMP, "pixels.mjs")).href);
 
@@ -227,21 +227,41 @@ def("the brightness ceiling caps every dither, and 15 changes nothing", () => {
     };
 });
 
-def("a pinned Quality choice reaches Atkinson, and auto leaves the ladder alone", () => {
-    // The Quality button used to pin sixteen even levels — 8% more on the wire
-    // for a difference nobody picked out blind. It now pins Atkinson, which is
-    // aimed at the complaint people actually have. A pinned choice has to carry
-    // a DITHER, not just levels, which the override could not express before.
-    const auto = resolvePictureChoice("auto");
-    const pinned = resolvePictureChoice("atkinson12");
-    const plain = resolvePictureChoice("perceptual12");
+def("settings map High, Standard and Low onto the ladder, and Auto onto none", () => {
+    const got = ["auto", "high", "standard", "low", "nonsense"].map((c) => resolvePictureLevel(c));
+    const want = [null, "full", "lighter", "lightest", null];
+    const names = PICTURE_LADDER.map((r) => r.name);
     return {
-        pass: auto === null &&
-              pinned?.dither === "atkinson" && pinned?.palette === "perceptual12" &&
-              plain?.palette === "perceptual12" && plain?.dither === undefined,
-        detail: `auto ${JSON.stringify(auto)}; quality ${JSON.stringify(pinned)}; ` +
-            `speed ${JSON.stringify(plain)}`,
+        pass: want.every((w, i) => got[i] === w) && want.filter(Boolean).every((n) => names.includes(n)),
+        detail: `auto ${got[0]}, high ${got[1]}, standard ${got[2]}, low ${got[3]}, unknown ${got[4]}`,
     };
+});
+
+def("a pinned level holds whatever the link does", () => {
+    // Pinned to High on a link that fails everything: the picture stays High
+    // (the wearer asked for it), and the ladder reports itself at its floor so
+    // failures still reach the image backoff.
+    const ctl = createQualityController();
+    ctl.pin("full");
+    const r = play(ctl, { full: null, lighter: null, lightest: null }, 10);
+    const lowPinned = createQualityController();
+    lowPinned.pin("lightest");
+    const up = play(lowPinned, AWAKE, 20);
+    return {
+        // Low on a good link must not climb: all 20 frames at the pinned rung.
+        pass: /^f+$/.test(r.trace) && ctl.atLowest && up.delivered === 20 &&
+              lowPinned.current.name === "lightest" && lowPinned.index === PICTURE_LADDER.length - 1,
+        detail: `pinned full on a dead link: ${r.trace}; pinned low on a good one ends at ${lowPinned.current.name}`,
+    };
+});
+
+def("unpinning follows the link again, from the top", () => {
+    const ctl = createQualityController();
+    ctl.force("lightest");
+    ctl.pin("lighter");
+    ctl.pin(null);
+    const r = play(ctl, AWAKE, 10);
+    return { pass: ctl.pinned === null && /^f+$/.test(r.trace), detail: r.trace };
 });
 
 let bad = 0;

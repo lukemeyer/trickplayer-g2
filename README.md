@@ -101,12 +101,12 @@ Sign in, browse your full library, play, pause, seek, and everything under Setti
 | Setting | What it changes |
 |---|---|
 | **Framerate** | How often a new image is sent. Fewer images means longer gaps between images but may be more reliable. |
-| **Picture quality** | *Auto* adjusts based on connection quality. *Quality* and *Speed* pin it. |
+| **Picture quality** | *Auto* steps between High, Standard and Low as the connection allows. Choosing *High*, *Standard* or *Low* holds it there. |
 | **Glare** | How much of the top of the brightness range to give up. (depending on content the brightest level blows out the image) |
 | **Contrast / Brightness / Gamma** | Standard tone controls, with a live preview. |
 | **Skip silent scenes** | Drop stretches with no dialogue, so the episode moves faster. |
 | **Report progress** | Write your position back to the media server. Off by default. |
-| **Debugging tools** | Message logging and link capture, both off by default. |
+| **Debugging tools** | Message logging and link capture, both off by default, plus two checks: whether the glasses accept pictures, and how fast this phone prepares them. |
 
 ---
 

@@ -48,8 +48,8 @@ const BAYER_2X2 = [
  * distributed unevenly, keeps the shadows and gives up highlight steps nobody
  * can see.
  *
- * Offered, not chosen. Nothing selects these until they have been measured on
- * hardware — which is what `probeDithers` is for.
+ * The picture ladder uses perceptual12 at every rung (quality.ts); how it
+ * was chosen, and what it costs, is in trickplayer-lab.
  */
 export const PALETTES = {
     /** Eight levels, weighted towards the shadows. */

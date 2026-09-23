@@ -58,6 +58,10 @@ const KEYS = [
     // relaunch is the kind of thing people stop doing. Defaults to 2 when
     // absent, NOT to 0.
     "trickplayer.glare",
+    // Picture quality: auto, or a pinned rung (high / standard / low). A pin
+    // is a judgement about the wearer's own link, which does not change
+    // between launches. Defaults to auto when absent.
+    "trickplayer.pictureLevel",
     // `trickplayer.imageFormat` used to live here and is gone on purpose: it
     // remembered an encoding escalation made during a transient wedge, which
     // would have pinned a device to the four-second encoder for good. See

@@ -90,17 +90,35 @@ export function createQualityController({
     let successRun = 0;
     let waitBeforeProbe = probeAfter;
     let probing = false;
+    /** A rung the wearer pinned in settings, or -1 to follow the link. */
+    let pinned = -1;
 
     return {
-        get current() { return ladder[index]; },
-        /** On the smallest rung: nothing left to shrink. */
-        get atLowest() { return index === ladder.length - 1; },
-        get index() { return index; },
+        get current() { return ladder[pinned >= 0 ? pinned : index]; },
+        /**
+         * Nothing left to shrink: on the smallest rung, or pinned. A pinned
+         * rung is the floor the wearer chose, so failures there have to reach
+         * the image backoff exactly as they would at the bottom of the ladder.
+         */
+        get atLowest() { return pinned >= 0 || index === ladder.length - 1; },
+        get index() { return pinned >= 0 ? pinned : index; },
+        get pinned() { return pinned >= 0 ? ladder[pinned].name : null; },
         /** For harnesses: put the ladder on a named rung. */
         force(name) {
             const i = ladder.findIndex((r) => r.name === name);
             if (i >= 0) { index = i; successRun = 0; probing = false; }
             return ladder[index];
+        },
+        /**
+         * Hold one rung whatever the link does, or pass null to follow it
+         * again. Following resumes from the top: whatever the ladder had
+         * learned before the pin is stale by the time anyone unpins.
+         */
+        pin(name) {
+            const i = name == null ? -1 : ladder.findIndex((r) => r.name === name);
+            pinned = i;
+            if (i < 0) { index = 0; successRun = 0; probing = false; waitBeforeProbe = probeAfter; }
+            return this.current;
         },
 
         /**
@@ -108,6 +126,8 @@ export function createQualityController({
          * @returns a change `{ from, to, why }` when the rung moved, else null.
          */
         onResult(ok, ms) {
+            // Pinned: the wearer's choice outranks the link. Nothing moves.
+            if (pinned >= 0) return null;
             const from = ladder[index].name;
             // A rung may be quicker to give up than the rest: see `full`.
             const bad = !ok || ms > (ladder[index].slowMs ?? slowMs);
@@ -142,44 +162,17 @@ export function createQualityController({
 }
 
 /**
- * Named encodings the wearer can pin, overriding the ladder.
- *
- * `atkinson12` exists because of what the ordered dither costs the
- * PICTURE rather than the link. A 2x2 matrix repeats, and a regular
- * pattern is what the eye locks onto over a long sitting — the
- * screendoor complaint. Measured over 28 frames, the share of the
- * image carrying that exact two-value diagonal:
- *
- *     bayer 2x2       20.5%        <- what used to ship
- *     bayer 4x4       18.5%        <- the ladder now
- *     floyd-steinberg 11.1%
- *     atkinson         4.1%
- *
- * Atkinson spreads only three quarters of the error, so it dithers
- * fewer pixels at all and leaves no matrix to repeat.
- *
- * Its cost on the wire is now known (trickplayer-lab's exact host model,
- * letterboxed full frames over 44 Tears of Steel frames): 13.5 KB against
- * 13.1 KB for the ladder's Bayer 4x4 — 3% more. It is a setting rather than
- * the default because nobody has watched an episode on it yet.
+ * The settings choice, by the name the wearer sees, and the rung it pins.
+ * `auto` follows the link.
  */
-export const PICTURE_CHOICES = {
-    "16": { shades: 16 },
-    perceptual12: { palette: "perceptual12" },
-    perceptual8: { palette: "perceptual8" },
-    atkinson12: { dither: "atkinson", palette: "perceptual12" },
+export const PICTURE_LEVELS = {
+    auto: null,
+    high: "full",
+    standard: "lighter",
+    low: "lightest",
 };
 
-/**
- * A named choice, or null for "follow the ladder".
- *
- * Kept here rather than in the engine because it is data, and because an
- * engine module cannot be loaded without a browser — which meant the one
- * behaviour worth pinning could not be tested at all.
- */
-export function resolvePictureChoice(choice) {
-    if (!choice || choice === "auto") return null;
-    if (choice in PICTURE_CHOICES) return { ...PICTURE_CHOICES[choice] };
-    const n = Number(choice);
-    return Number.isFinite(n) && n > 0 ? { shades: n } : null;
+/** A settings choice to a rung name, or null for "follow the link". */
+export function resolvePictureLevel(choice) {
+    return PICTURE_LEVELS[choice] ?? null;
 }

@@ -83,11 +83,6 @@ if (flags.has("notext")) {
     setTimeout(() => { engine.simulateContainerLoss(); }, 25000);
 }
 
-/**
- * `?noimage=1` reproduces the hardware that rejected our frames: image writes
- * answer `sendFailed` until the encoding ladder reaches a format it accepts.
- * Run with `&probe=1` to drive it from the sweep.
- */
 /** `?wedgetest=1` runs the full prove -> wedge -> recover sequence, then reports. */
 if (flags.has("wedgetest")) {
     setTimeout(async () => {
@@ -104,15 +99,14 @@ if (flags.has("stubborntest")) {
     }, 4000);
 }
 
-/** `?locksweep=1` presses the locked-sweep button — for checking the flow, not locking. */
-if (flags.has("locksweep")) {
-    setTimeout(() => runTest("lockprobe"), 3000);
-}
-
 if (flags.has("sweeptest")) {
     setTimeout(() => engine.checkSweepLeavesRecoveryAlone(), 3000);
 }
 
+/**
+ * `?noimage=1` reproduces the hardware that rejected our frames: image writes
+ * answer `sendFailed` until the encoding ladder reaches a format it accepts.
+ */
 if (flags.has("noimage")) {
     engine.simulateImageRejection(flags.get("noimage") || "rgba");
 }
@@ -129,11 +123,6 @@ if (flags.has("noimage")) {
     setTimeout(() => { engine.simulateImageWedge(); }, 25000);
 }
 
-if (flags.has("probe")) {
-    setTimeout(() => runTest("probe"), 2500);
-    setTimeout(() => generateReportNow(), 90_000);
-}
-
 /**
  * `?prep=1` times the prepare path and prints the phase split to the console.
  * Needs no link, so unlike every other flag here it is fully meaningful in the
@@ -148,12 +137,13 @@ if (flags.has("prep")) {
 }
 
 /**
- * `?quality=lighter|lightest` prepares frames at that picture level and puts
- * the last one on the glasses — to look at what the ladder sends, not guess.
+ * `?quality=high|standard|low` pins that picture level — the same pin as the
+ * settings choice — prepares frames at it, and puts the last one on the
+ * glasses, to look at what the ladder sends rather than guess.
  */
 if (flags.get("quality")) {
     setTimeout(async () => {
-        const q = engine.forcePictureQuality(flags.get("quality"));
+        const q = engine.setPictureLevel(flags.get("quality"));
         const r = await engine.probePrepare({ runs: 4, sendLast: true });
         console.log(`[quality-probe] ${q}: ${(r.outBytes / 1024).toFixed(1)}KB prepared, p50 ${r.p50}ms`);
     }, 3000);
