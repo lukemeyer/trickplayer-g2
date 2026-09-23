@@ -311,7 +311,7 @@ export function toGlassesGrey(data, w, h, opts = {}) {
  *
  * The cheapest large reduction in what a frame costs to send: a picture drawn
  * at lower resolution and repeated has runs the host's compressor collapses,
- * and it still fills the same 256x128 container, so nothing about the page
+ * and it still fills the same container, so nothing about the page
  * changes.
  *
  * **The two axes are not the same lever, and they were measured apart.** A

@@ -7,7 +7,7 @@ import {
 import { buildSceneList, thinScenes } from "./scenes";
 import { createBleTransport } from "./bletransport";
 import { toGlassesLevels, expandBlocks, PALETTES } from "./pixels";
-import { createQualityController, PICTURE_LADDER } from "./quality";
+import { createQualityController, PICTURE_LADDER, resolvePictureChoice } from "./quality";
 import { encodeGreyPng } from "./png";
 import * as store from "./store";
 
@@ -108,12 +108,23 @@ import * as store from "./store";
             const RENDER_DURATION_CAP_MS = 4000; // clamp a single slow success before it feeds the pacing average
 
             // --- GLASSES IMAGE SIZE ---
-            // Smaller than the 288x144 container max => fewer bytes per BLE
-            // transfer, which is bandwidth-bound (~2-3s for ~20KB). Smaller
-            // images transfer faster and fail less on the flaky image channel.
-            // Lower these further to trade image size for more reliability.
+            // 256x144, chosen with trickplayer-lab's exact model of the host
+            // (see PICTURE_LADDER in quality.ts for how it compresses).
+            //
+            // The WIDTH is not free. The host's compressor probes at growing
+            // gaps (0, 1, 2, 4, 7, 11, 17, 26, 40, 61, 92, 139, …) and notices a
+            // repeated row only when the row's length in bytes is a gap between
+            // two probes. 256 px is 128 bytes (139 - 11), and of the widths the
+            // SDK allows only 256 and 264 line up: at 288 the 1x2 rung costs
+            // 10.6 KB instead of 5.7, with its worst frames sent uncompressed.
+            //
+            // The HEIGHT is the SDK's maximum. Frames are letterboxed, so a
+            // wide film shows exactly as it did at 256x128 (256x106, +0.4 KB at
+            // full), while 16:9 grows from 225x127 to 254x143 — 27% more
+            // picture for 17-20% more bytes. The subtitle container already
+            // starts at y 156, laid out for a 144-tall image.
             const GLASSES_IMAGE_WIDTH = 256;
-            const GLASSES_IMAGE_HEIGHT = 128;
+            const GLASSES_IMAGE_HEIGHT = 144;
             const GLASSES_IMAGE_X = Math.round((576 - GLASSES_IMAGE_WIDTH) / 2); // keep centered
 
             // --- ADVANCED IMAGE PREVIEW STATE ---
@@ -135,11 +146,10 @@ import * as store from "./store";
              * because that is where it is applied.
              */
             let ceilingValue = 13;
-            // Bayer 2x2, because it is 59% faster on the wire than
-            // Floyd-Steinberg at the same sixteen shades — measured on hardware,
-            // same frame, five encodings (see PICTURE_LADDER). Two pixels share
-            // a byte in the packed plane, so a two-pixel pattern repeats at byte
-            // granularity and the host's compressor can match it.
+            // Only a fallback now: every PICTURE_LADDER rung names its own
+            // dither (Bayer 4x4), and a pinned picture choice may name one
+            // too. The wire-cost question this used to hinge on is settled —
+            // see trickplayer-lab docs/METHOD.md and quality.ts.
             let ditherAlgorithm = "bayer2x2";
 
             /**
@@ -609,6 +619,55 @@ import * as store from "./store";
                 return { canvas: prepCanvas, ctx: prepCtx };
             }
 
+            /**
+             * Draw a frame into the plane a rung will encode, and quantise it.
+             *
+             * LETTERBOXED, not stretched, and always with black at the bottom.
+             * The host stores the picture as a BMP, bottom row first, and its
+             * compressor (dart_lz4's fast engine) gives up for the whole frame
+             * if the first ~200 bytes — that bottom row — do not repeat: its
+             * search step grows with every miss. A stretched frame with detail
+             * along its bottom edge therefore went out uncompressed at 17.3 KB,
+             * and the 1x2 rung saved nothing on it. With a flat bottom row the
+             * compressor engages and the blocked rungs cost about half. See
+             * trickplayer-lab docs/METHOD.md, and PICTURE_LADDER in quality.ts.
+             *
+             * The fit is worked out in DISPLAY pixels and snapped to the rung's
+             * block grid, so every rung frames the picture identically. At
+             * least one block row is kept free at the bottom even when the
+             * source's aspect would fill the container (a 2:1 source), and the
+             * bars are forced to level 0 after the tone curve — brightness and
+             * contrast must not lift them, both because a lit bar glows on a
+             * see-through display and because the compressor needs them flat.
+             *
+             * @returns the full-size level plane (w*h, 0..15), blocks expanded.
+             */
+            function drawFramePlane(ctx, bitmap, w, h, bx, by, opts) {
+                const sw = w / bx, sh = h / by;
+                const srcW = bitmap.width || w, srcH = bitmap.height || h;
+                const availH = h - by;
+                const scale = Math.min(w / srcW, availH / srcH);
+                const ow = Math.min(w, Math.max(bx, Math.round((srcW * scale) / bx) * bx));
+                const oh = Math.min(availH, Math.max(by, Math.round((srcH * scale) / by) * by));
+                const ox = Math.round((w - ow) / 2 / bx) * bx;
+                const oy = Math.floor((availH - oh) / 2 / by) * by;
+                // In plane pixels from here on.
+                const px = ox / bx, py = oy / by, pw = ow / bx, ph = oh / by;
+                ctx.clearRect(0, 0, w, h);
+                ctx.fillStyle = "#000";
+                ctx.fillRect(0, 0, sw, sh);
+                ctx.drawImage(bitmap, px, py, pw, ph);
+                const d = ctx.getImageData(0, 0, sw, sh);
+                const small = toGlassesLevels(d.data, sw, sh, opts);
+                for (let y = 0; y < sh; y++) {
+                    const inRow = y >= py && y < py + ph;
+                    for (let x = 0; x < sw; x++) {
+                        if (!inRow || x < px || x >= px + pw) small[y * sw + x] = 0;
+                    }
+                }
+                return expandBlocks(small, sw, sh, bx, by);
+            }
+
             /** Decode to something drawable, preferring the off-thread path. */
             async function decodeFrame(blob) {
                 if (typeof createImageBitmap === "function") {
@@ -784,16 +843,16 @@ import * as store from "./store";
                     const levels = await timed("pixels", meta, () => {
                         const bx = rung.blockX ?? rung.block ?? 1;
                         const by = rung.blockY ?? rung.block ?? 1;
-                        const sw = targetWidth / bx, sh = targetHeight / by;
-                        ctx.clearRect(0, 0, targetWidth, targetHeight);
-                        ctx.drawImage(bitmap, 0, 0, sw, sh);
-                        const d = ctx.getImageData(0, 0, sw, sh);
-                        const small = toGlassesLevels(d.data, sw, sh, {
+                        return drawFramePlane(ctx, bitmap, targetWidth, targetHeight, bx, by, {
                             brightness: brightnessValue,
                             contrast: contrastValue,
                             gamma: gammaValue,
                             ceiling: ceilingValue,
-                            dither: ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm,
+                            // A pinned choice may name its own dither, which is
+                            // how "Quality" reaches Atkinson without the ladder
+                            // knowing anything about it. Otherwise the rung's.
+                            dither: levelsOverride?.dither ?? rung.dither
+                                ?? (ditherAlgorithm === "ordered-4x4" ? "bayer" : ditherAlgorithm),
                             // A rung asks for either a level COUNT or a named
                             // palette; a manual override from the settings panel
                             // beats both, so a wearer can judge one encoding
@@ -801,7 +860,6 @@ import * as store from "./store";
                             shades: levelsOverride?.shades ?? rung.shades,
                             palette: resolvePalette(levelsOverride?.palette ?? rung.palette),
                         });
-                        return expandBlocks(small, sw, sh, bx, by);
                     });
                     // Our own encoder for the first two rungs: synchronous,
                     // about a tenth of a millisecond, against the four seconds
@@ -3181,6 +3239,470 @@ import * as store from "./store";
             }
 
             /**
+             * What each encoding really costs the link, read off the wire.
+             *
+             * `probeDithers` times writes and divides by a constant to guess at
+             * bytes. That guess is the weakest link in every dither decision so
+             * far: the proxy we model with under-prices error diffusion about
+             * twofold against what hardware showed, so any comparison BETWEEN
+             * an ordered dither and a diffusing one rests on a number nobody
+             * has measured.
+             *
+             * The EvenHub host logs every BLE write it makes, with byte counts,
+             * one layer below where our telemetry stops. An adb capture taken
+             * during this probe therefore holds the real answer — but the
+             * shipping host does not forward `console.log` to logcat, so the
+             * capture cannot see WHICH encoding produced which burst.
+             *
+             * So this makes the capture self-segmenting. Exactly one text write
+             * goes out before each variant and none between its images, which
+             * gives the parser an unambiguous delimiter and, because the image
+             * count per variant is known, a way to CHECK its own alignment
+             * rather than assume it. See tools/link-cost.mjs.
+             *
+             * Nothing here needs a wall clock, which keeps the recorder's
+             * promise that an exported session carries none.
+             */
+            const LINK_COST_VARIANTS = [
+                // TWO CONTROLS, AT BOTH ENDS.
+                //
+                // `blank` is a single flat level: the most compressible plane
+                // that exists. `noise` is uniform random levels: as close to
+                // incompressible as this format allows. The SDK compresses with
+                // LZ4 from 0.0.12 and we are pinned to 0.0.14, so if compression
+                // reaches the air these two MUST differ by a wide margin. If
+                // they come back the same size, nothing on this path is being
+                // compressed and every dither argument that rests on
+                // compressibility is void — including our own.
+                //
+                // They bracket the run rather than leading it, because the same
+                // control at the start and at the end also measures drift. That
+                // matters: `probeDithers` ran its variants in one fixed order
+                // and reported times that fell monotonically with position,
+                // which is exactly what link warm-up looks like and was read as
+                // a property of the dithers.
+                { name: "REF blank (first)", synth: "blank" },
+                { name: "REF noise (first)", synth: "noise" },
+
+                // Then the real question. Shipping first, so the rest are read
+                // against what the wearer gets today.
+                { name: "bayer2x2 p12 (shipping)", dither: "bayer2x2", palette: PALETTES.perceptual12 },
+                { name: "bayer2x2 16", dither: "bayer2x2", shades: 16 },
+                { name: "atkinson p12", dither: "atkinson", palette: PALETTES.perceptual12 },
+                { name: "atkinson p8", dither: "atkinson", palette: PALETTES.perceptual8 },
+                { name: "atkinson 16", dither: "atkinson", shades: 16 },
+                { name: "floyd-steinberg p12", dither: "floyd-steinberg", palette: PALETTES.perceptual12 },
+                { name: "floyd-steinberg 16", dither: "floyd-steinberg", shades: 16 },
+
+                { name: "REF almost-blank", synth: "almost-blank" },
+                { name: "REF halves", synth: "halves" },
+                { name: "REF ramp", synth: "ramp" },
+                // The same two planes at 8 bits instead of 4, which DOUBLES what
+                // we hand over — 33 KB against 16.2. If the wire is unchanged,
+                // the host decoded our PNG and sent its own representation, and
+                // the bytes we choose never reach the air at all. If the wire
+                // doubles, it is forwarding what we give it.
+                { name: "REF blank grey8", synth: "blank", bits: 8 },
+                { name: "REF noise grey8", synth: "noise", bits: 8 },
+                // Real content, and reproducible: the corpus carries the actual
+                // frame bytes for the first 114 frames of Tears of Steel, with
+                // attribution (corpus/real/ATTRIBUTION.md). Both of these were
+                // picked by the frame scorer as faces against smooth gradients,
+                // which is the case a synthetic ramp cannot stand in for.
+                { name: "REF tears-of-steel f70", frame: 70, dither: "bayer2x2", palette: PALETTES.perceptual12 },
+                { name: "REF tears-of-steel f100", frame: 100, dither: "bayer2x2", palette: PALETTES.perceptual12 },
+                { name: "REF noise (last)", synth: "noise" },
+                { name: "REF blank (last)", synth: "blank" },
+            ];
+
+            /**
+             * Reference planes, built so the SAME BYTES can be rebuilt offline.
+             *
+             * The point of the probe is to learn what the link charges for a
+             * payload. To turn that into a model that predicts arbitrary
+             * pictures WITHOUT the glasses, the offline side has to compress
+             * exactly what the device sent — and until now it could not, because
+             * the probe used whatever frame happened to be loaded.
+             *
+             * `blank` and `noise` bracket the compressor's range. `ramp` sits in
+             * the middle. Noise uses a named 32-bit LCG rather than
+             * `Math.random` for the obvious reason, and Math.imul rather than
+             * plain multiplication for a less obvious one: written as
+             * `seed * 1664525` the product runs past 2^53 and the float rounds,
+             * which degenerates the sequence enough that LZ4 squeezed 42% out of
+             * supposedly incompressible noise the first time this was tried
+             * offline.
+             */
+            function referencePlane(kind, w, h) {
+                const out = new Uint8Array(w * h);
+                if (kind === "blank") return out;
+                if (kind === "almost-blank") {
+                    // Blank with ONE pixel changed. If a flat plane goes out at
+                    // 0.26 KB and this one goes out at 17 KB, then blank was
+                    // never evidence of compression — it was a uniform image
+                    // taking some other path entirely, and nothing here is
+                    // compressed. If this lands near 0.26 KB too, compression is
+                    // real and merely gives up on texture.
+                    out[(h >> 1) * w + (w >> 1)] = 15;
+                    return out;
+                }
+                if (kind === "halves") {
+                    // Two large flat regions: trivially compressible by any
+                    // scheme, and not uniform. Sits between blank and ramp.
+                    for (let y = 0; y < h; y++) {
+                        for (let x = w >> 1; x < w; x++) out[y * w + x] = 15;
+                    }
+                    return out;
+                }
+                if (kind === "noise") {
+                    let seed = 12345 >>> 0;
+                    for (let i = 0; i < out.length; i++) {
+                        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+                        out[i] = ((seed / 4294967296) * 16) | 0;
+                    }
+                    return out;
+                }
+                // ramp: a mid-range point, and it has to earn that.
+                //
+                // A plain horizontal gradient is not one — every row is
+                // identical, so it compressed to 0.37 KB against blank's 0.15
+                // and sat uselessly next to the bottom of the range. This is a
+                // diagonal gradient with a soft radial lobe, so no two rows
+                // repeat and the ordered dither has real work to do.
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const dx = (x - w * 0.5) / (w * 0.5), dy = (y - h * 0.5) / (h * 0.5);
+                        const diag = (x / (w - 1)) * 0.6 + (y / (h - 1)) * 0.4;
+                        const lobe = Math.max(0, 1 - (dx * dx + dy * dy)) * 0.45;
+                        const v = Math.min(15, Math.max(0, (diag + lobe) * 15));
+                        const lo = Math.floor(v);
+                        const frac = v - lo;
+                        const th = [[0, 2], [3, 1]][y & 1][x & 1];
+                        out[y * w + x] = Math.min(15, frac > (th + 0.5) / 4 ? lo + 1 : lo);
+                    }
+                }
+                return out;
+            }
+
+            /**
+             * FNV-1a over the payload, so the offline side can PROVE it rebuilt
+             * the same bytes rather than assume it.
+             *
+             * The real-frame references go through the WebView's JPEG decoder
+             * here and a different one offline. If those disagree by a single
+             * pixel the dither diverges and the payload is not comparable — a
+             * difference invisible in every number except this one.
+             */
+            /**
+             * The exact plane, packed and base64'd, so the offline model can
+             * compress WHAT WAS SENT instead of trying to rebuild it.
+             *
+             * Rebuilding was the plan and it cannot work. The BIF frames are
+             * 320x133 and the container is 256x128, so the device resamples with
+             * `drawImage` — a browser algorithm, not a specified one — after
+             * decoding a JPEG with a browser decoder. Neither is reproducible
+             * offline to the byte, and a calibration point that is nearly the
+             * same payload is not a calibration point at all.
+             *
+             * Two pixels per byte, so 16 KB for a 256x128 frame and about 22 KB
+             * of base64 — which is why it is done for the two reference frames
+             * and not for every send.
+             */
+            function packedBase64(levels) {
+                const packed = new Uint8Array(levels.length >> 1);
+                for (let i = 0, o = 0; i < levels.length; i += 2) {
+                    packed[o++] = ((levels[i] & 15) << 4) | (levels[i + 1] & 15);
+                }
+                let bin = "";
+                // Chunked: spreading 8192 bytes into String.fromCharCode as
+                // arguments overflows the call stack on some engines.
+                for (let i = 0; i < packed.length; i += 4096) {
+                    bin += String.fromCharCode(...packed.subarray(i, i + 4096));
+                }
+                return btoa(bin);
+            }
+
+            function payloadHash(bytes) {
+                let h = 0x811c9dc5;
+                for (let i = 0; i < bytes.length; i++) {
+                    h ^= bytes[i];
+                    h = Math.imul(h, 0x01000193) >>> 0;
+                }
+                return h.toString(16).padStart(8, "0");
+            }
+
+            /**
+             * Score a frame for how much it will reveal about an encoding.
+             *
+             * Compressibility is a property of the picture, so the frame chosen
+             * decides the numbers. A dark or flat frame understates every
+             * difference between dithers — there is nothing for them to differ
+             * ABOUT — and a wall of noise overstates them. What is wanted is an
+             * ordinary shot: smooth areas for the dither to show itself in, and
+             * real detail for it to have work to do.
+             *
+             *   spread  luminance standard deviation — does it use the range
+             *   detail  mean |Laplacian| — rises on edges and facial structure
+             *   flat    share of the picture that is smooth, where a dither
+             *           pattern is visible and where banding appears
+             *
+             * All three are wanted at once, which is why they multiply rather
+             * than add: a frame missing any one of them is not representative,
+             * however well it scores on the others. Validated offline against
+             * the Tears of Steel corpus, where it picks faces against skies
+             * over title cards and dark interiors.
+             */
+            function scoreFrameForProbe(data, w, h) {
+                const g = new Float32Array(w * h);
+                let sum = 0;
+                for (let i = 0; i < g.length; i++) {
+                    const o = i << 2;
+                    g[i] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
+                    sum += g[i];
+                }
+                const mean = sum / g.length;
+                let varr = 0;
+                for (const v of g) varr += (v - mean) ** 2;
+                const sd = Math.sqrt(varr / g.length);
+
+                let lap = 0, flat = 0, n = 0;
+                for (let y = 1; y < h - 1; y++) {
+                    for (let x = 1; x < w - 1; x++) {
+                        const i = y * w + x;
+                        const l = Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]);
+                        lap += l;
+                        if (l < 4) flat++;
+                        n++;
+                    }
+                }
+                const detail = lap / n, flatShare = flat / n;
+                // Mid-brightness preferred: a frame at either extreme spends
+                // most of the palette on tones it does not contain.
+                const midness = 1 - Math.abs(mean - 118) / 118;
+                return {
+                    mean, sd, detail, flatShare,
+                    score: (sd / 64) * (Math.min(detail, 24) / 24) *
+                        Math.max(0.15, flatShare) * Math.max(0, midness),
+                };
+            }
+
+            /** The best of a sample spread across the loaded item. */
+            async function pickProbeFrame(sample = 12) {
+                const pool = sceneList.length
+                    ? sceneList.map((s) => s.frameIndex)
+                    : bifs.map((_, i) => i);
+                if (!pool.length) return null;
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+                const { ctx } = prepSurface(w, h);
+                const step = Math.max(1, Math.floor(pool.length / sample));
+                let best = null;
+                for (let i = 0; i < pool.length; i += step) {
+                    const frameIndex = pool[i];
+                    try {
+                        const { blob } = await getFrameAssets(frameIndex);
+                        const bitmap = await decodeFrame(blob);
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(bitmap, 0, 0, w, h);
+                        const d = ctx.getImageData(0, 0, w, h).data;
+                        const sc = scoreFrameForProbe(d, w, h);
+                        if (!best || sc.score > best.score) best = { frameIndex, ...sc };
+                    } catch (e) {
+                        // A frame that will not decode is not a reason to
+                        // abandon the choice; it is one fewer candidate.
+                    }
+                }
+                return best;
+            }
+
+            export async function probeLinkCost({
+                perVariant = 4, variants = LINK_COST_VARIANTS, frameIndex = null,
+                gapMs = 800, onProgress = () => {},
+            } = {}) {
+                if (!bridgeInstance) throw new Error("no bridge — connect the glasses first");
+                if (isPlaying || scenePipelineRunning) {
+                    noteLifecycle("playback-stopped", { by: "link cost probe" });
+                    isPlaying = false;
+                    stopScenePipeline();
+                    try { silentAudio.pause(); } catch (e) {}
+                }
+                if (!(await applyPage("player"))) {
+                    throw new Error("the glasses refused the player page — play something once, then retry");
+                }
+
+                const w = GLASSES_IMAGE_WIDTH, h = GLASSES_IMAGE_HEIGHT;
+                const { ctx } = prepSurface(w, h);
+                let source = "synthetic";
+                if (bifs.length) {
+                    try {
+                        // CHOSEN, not taken from the middle. The middle frame of
+                        // an item is as likely to be a title card or a dark
+                        // interior as anything, and either would flatten the
+                        // difference this probe exists to measure.
+                        onProgress("Choosing a frame worth measuring on…");
+                        const pick = frameIndex != null
+                            ? { frameIndex }
+                            : await pickProbeFrame();
+                        if (!pick) throw new Error("no frames in the loaded item");
+                        const { blob } = await getFrameAssets(pick.frameIndex);
+                        const bitmap = await decodeFrame(blob);
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(bitmap, 0, 0, w, h);
+                        source = `frame ${pick.frameIndex}`;
+                        if (pick.score != null) {
+                            source += ` (spread ${pick.sd.toFixed(0)}, detail ` +
+                                `${pick.detail.toFixed(1)}, ${Math.round(pick.flatShare * 100)}% smooth)`;
+                        }
+                        noteLifecycle("link-cost-frame", {
+                            frameIndex: pick.frameIndex,
+                            chosen: frameIndex != null ? "by hand" : "by score",
+                        });
+                    } catch (e) {
+                        console.warn(`[LinkCost] could not read a real frame: ${e?.message || e}`);
+                    }
+                }
+                if (source === "synthetic") {
+                    // Compressibility is a property of the picture, so a
+                    // synthetic frame measures a picture nobody sends. Say so
+                    // in the result rather than letting it pass as a finding.
+                    const g = ctx.createLinearGradient(0, 0, w, h);
+                    g.addColorStop(0, "#101820"); g.addColorStop(0.5, "#c8d0d8"); g.addColorStop(1, "#201810");
+                    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+                    for (let i = 0; i < 40; i++) {
+                        ctx.fillStyle = `rgba(${(i * 37) % 256},${(i * 91) % 256},${(i * 53) % 256},0.5)`;
+                        ctx.fillRect((i * 71) % w, (i * 43) % h, 8 + (i % 17), 6 + (i % 13));
+                    }
+                }
+                const rgba = ctx.getImageData(0, 0, w, h).data;
+
+                const tone = {
+                    brightness: brightnessValue, contrast: contrastValue,
+                    gamma: gammaValue, ceiling: ceilingValue,
+                };
+
+                // Reference frames are addressed by INDEX, not by whatever the
+                // scorer picked, because the offline side has to read the same
+                // ones out of corpus/real/tears-of-steel.bif. A variant whose
+                // frame will not load is dropped rather than quietly measured
+                // against the wrong picture.
+                const frameRgba = new Map();
+                for (const v of variants) {
+                    if (v.frame == null || frameRgba.has(v.frame)) continue;
+                    try {
+                        const { blob } = await getFrameAssets(v.frame);
+                        const bitmap = await decodeFrame(blob);
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(bitmap, 0, 0, w, h);
+                        frameRgba.set(v.frame, ctx.getImageData(0, 0, w, h).data);
+                    } catch (e) {
+                        console.warn(`[LinkCost] reference frame ${v.frame} unavailable: ${e?.message || e}`);
+                        frameRgba.set(v.frame, null);
+                    }
+                }
+
+                const results = [];
+                for (let vi = 0; vi < variants.length; vi++) {
+                    const v = variants[vi];
+                    const src = v.frame != null ? frameRgba.get(v.frame) : rgba;
+                    if (v.frame != null && !src) {
+                        results.push({
+                            name: v.name, index: vi, ok: 0, of: perVariant,
+                            reason: `frame ${v.frame} unavailable — is Tears of Steel loaded?`,
+                        });
+                        continue;
+                    }
+                    const levels = v.synth
+                        ? referencePlane(v.synth, w, h)
+                        : toGlassesLevels(src, w, h, {
+                            // A reference frame is encoded WITHOUT the wearer's
+                            // tone settings: the offline side cannot know them,
+                            // and a calibration point that depends on a slider
+                            // is not a calibration point.
+                            ...(v.frame != null ? {} : tone),
+                            dither: v.dither, shades: v.shades, palette: v.palette,
+                        });
+                    const bytes = encodeGreyPng(levels, w, h, v.bits ?? 4);
+                    const hash = payloadHash(bytes);
+                    if (v.frame != null) {
+                        // Only the real frames: the synthetic planes are
+                        // reproducible from their own description, and the hash
+                        // proves it.
+                        // `variant`, NOT `name`: a mark is recorded as
+                        // `{ at, name, ...detail }`, so a `name` in the detail
+                        // silently overwrites the mark's own and the reader
+                        // never finds it again.
+                        noteLifecycle("link-cost-reference", {
+                            variant: v.name, frame: v.frame, hash,
+                            plane: packedBase64(levels),
+                        });
+                    }
+
+                    // THE DELIMITER. Exactly one, before the images, and none
+                    // between them — that is what lets the parser bracket a
+                    // variant and verify the count it finds.
+                    await ble.sendText(
+                        (content) => bridgeInstance.textContainerUpgrade({
+                            containerID: 1, containerName: "g2_subs",
+                            contentOffset: 0, contentLength: 0, content,
+                        }),
+                        `${vi + 1}/${variants.length} ${v.name}`,
+                    ).catch(() => {});
+
+                    onProgress(`${vi + 1}/${variants.length} — ${v.name}, ${perVariant} sends`);
+                    noteLifecycle("link-cost-variant", {
+                        index: vi, name: v.name, handedBytes: bytes.byteLength, perVariant,
+                    });
+
+                    let ok = 0, lastReason = "";
+                    const times = [];
+                    for (let n = 0; n < perVariant; n++) {
+                        const payload =
+                            typeof ImageRawDataUpdate !== "undefined"
+                                ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                                : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                        const meta = {
+                            bytes: bytes.byteLength, probe: true,
+                            linkCost: true, variant: v.name, variantIndex: vi,
+                            // What lets the offline model prove it rebuilt the
+                            // same payload rather than assume it.
+                            hash,
+                        };
+                        const r = await ble.sendImage(async (p) => {
+                            const res = await bridgeInstance.updateImageRawData(p);
+                            meta.result = res;
+                            lastReason = res;
+                            return res === "success";
+                        }, payload, meta);
+                        if (r.ok) { ok++; times.push(r.duration); }
+                        // IDLE between sends, on purpose. Sent back to back the
+                        // writes never leave a gap, and an adb capture came
+                        // back as one 712 KB blob spanning the whole run with
+                        // every frame fused into it. The parser can pull them
+                        // apart by shape, but it should not have to: a pause
+                        // wider than its burst threshold makes each transfer
+                        // its own object in the log. It also measures a quieter
+                        // link, since nothing is queued behind anything.
+                        await new Promise((r2) => setTimeout(r2, gapMs));
+                    }
+                    times.sort((a, b) => a - b);
+                    const median = times.length ? times[times.length >> 1] : 0;
+                    results.push({
+                        name: v.name, index: vi, hash,
+                        handedKb: +(bytes.byteLength / 1024).toFixed(1),
+                        ok, of: perVariant,
+                        medianMs: Math.round(median),
+                        reason: ok === perVariant ? "" : lastReason,
+                    });
+                }
+
+                const base = results[0];
+                for (const r of results) {
+                    r.vsShipping = base.medianMs ? +(r.medianMs / base.medianMs).toFixed(2) : 0;
+                }
+                noteLifecycle("link-cost-probe", { source, perVariant, variants: results.length });
+                return { source, perVariant, results };
+            }
+
+            /**
              * Walk the picture ladder on screen, a tap per rung.
              *
              * The comparison above answers "can you tell these apart"; this one
@@ -3229,21 +3751,17 @@ import * as store from "./store";
                     for (const rung of walk) {
                         const bx = rung.blockX ?? rung.block ?? 1;
                         const by = rung.blockY ?? rung.block ?? 1;
-                        const sw = w / bx, sh = h / by;
                         const { ctx } = prepSurface(w, h);
-                        ctx.clearRect(0, 0, w, h);
-                        ctx.drawImage(bitmap, 0, 0, sw, sh);
-                        const d = ctx.getImageData(0, 0, sw, sh);
-                        const small = toGlassesLevels(d.data, sw, sh, {
+                        // Exactly what playback does at this rung.
+                        const levels = drawFramePlane(ctx, bitmap, w, h, bx, by, {
                             brightness: brightnessValue,
                             contrast: contrastValue,
                             gamma: gammaValue,
                             ceiling: ceilingValue,
-                            dither: "bayer2x2",
+                            dither: rung.dither ?? "bayer",
                             shades: rung.shades,
                             palette: resolvePalette(rung.palette),
                         });
-                        const levels = expandBlocks(small, sw, sh, bx, by);
                         const bytes = encodeGreyPng(levels, w, h, 4);
                         const payload =
                             typeof ImageRawDataUpdate !== "undefined"
@@ -3643,9 +4161,7 @@ import * as store from "./store";
              * — the ladder would otherwise move underneath the comparison.
              */
             export function setLevels(choice) {
-                if (!choice || choice === "auto") levelsOverride = null;
-                else if (choice in PALETTES) levelsOverride = { palette: choice };
-                else levelsOverride = { shades: Number(choice) || 16 };
+                levelsOverride = resolvePictureChoice(choice);
                 noteLifecycle("levels-choice", { choice });
                 return levelsOverride;
             }

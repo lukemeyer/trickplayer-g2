@@ -301,6 +301,39 @@ const TESTS = [
         },
     },
     {
+        id: "linkcost",
+        label: "Measure the real link cost (~3 min, needs adb)",
+        // 42 image writes whose DURATIONS and wire bytes are the measurement.
+        // Behind playback what gets measured is the queue.
+        needsPaused: "Pause playback first — this sends 42 frames of its own and times every one.",
+        busy: "Open the item you want measured first — see the line below.",
+        async run(engine) {
+            // Said before the probe rather than after, because the capture has
+            // to be running while it happens and there is no way to go back.
+            // It measures whatever is LOADED. Said plainly, because the frame
+            // decides the numbers and the wrong item makes the run worthless.
+            setHint("Measuring the item that is loaded now. On a computer with the " +
+                "phone attached: adb logcat -c && adb logcat -v time > session.log");
+            for (let n = 15; n > 0; n--) {
+                setHint(`Start the capture now — probe begins in ${n}s.  ` +
+                    `adb logcat -c && adb logcat -v time > session.log`);
+                await new Promise((r) => setTimeout(r, 1000));
+            }
+            recorder.mark("link-cost-start");
+            const { source, results } = await engine.probeLinkCost({
+                onProgress: (text) => setHint(text),
+            });
+            recorder.mark("link-cost-end");
+            persist();
+            generateReport();
+            const parts = results.map((r) => r.ok
+                ? `${r.name} ${r.medianMs}ms x${r.vsShipping}`
+                : `${r.name} FAILED (${r.reason || "no reason"})`);
+            return `${source} · ${parts.join("  ·  ")} · stop the capture, then: ` +
+                `node tools/link-cost.mjs session.log report.json`;
+        },
+    },
+    {
         id: "ladder",
         label: "See each picture-quality rung (~2 min)",
         // Twelve image sends with a person looking at each one. Behind playback

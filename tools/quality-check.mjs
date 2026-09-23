@@ -16,7 +16,8 @@ for (const f of ["quality", "pixels"]) {
         fs.readFileSync(path.join(ROOT, "src", `${f}.ts`), "utf8"),
         { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } }).outputText);
 }
-const { createQualityController, PICTURE_LADDER } = await import(pathToFileURL(path.join(TMP, "quality.mjs")).href);
+const { createQualityController, PICTURE_LADDER, resolvePictureChoice } =
+    await import(pathToFileURL(path.join(TMP, "quality.mjs")).href);
 const { toGlassesLevels, expandBlocks, PALETTES } = await import(pathToFileURL(path.join(TMP, "pixels.mjs")).href);
 
 /**
@@ -110,12 +111,31 @@ def("a merely mediocre link still climbs back", () => {
     // The reported session: every send landed, none of them fast, and the
     // picture stayed at the smallest rung for the rest of the session because
     // nothing ever counted as "fast enough to try again".
+    //
+    // It climbs out of the bottom rung, but not all the way: a full frame
+    // that takes 3.7s is past the top rung's own, sooner limit, and 1x2 at
+    // half the air is the better place to be on such a link.
     const MEDIOCRE = { full: 3700, lighter: 3600, lightest: 3500 };
     const ctl = createQualityController();
     ctl.force("lightest");
     const r = play(ctl, MEDIOCRE, 40);
-    return { pass: ctl.current.name === "full" && r.delivered === 40,
-        detail: `ended at ${ctl.current.name} with every frame delivered — ${r.trace}` };
+    const settled = r.trace.slice(-20).replace(/f/g, "");
+    return { pass: r.trace.includes("l") && /^l+$/.test(settled) && r.delivered === 40,
+        detail: `settled on ${ctl.current.name} with every frame delivered — ${r.trace}` };
+});
+
+def("full drops to 1x2 sooner than 1x2 drops to 2x2", () => {
+    // Asked for: the lighter rung loses little picture for half the air, so a
+    // full frame need not crawl to 4s before the ladder gives up on it.
+    const top = createQualityController().onResult(true, 3200);
+    const mid = createQualityController();
+    mid.force("lighter");
+    const stays = mid.onResult(true, 3200);
+    const drops = mid.onResult(true, 4200);
+    return {
+        pass: top?.to === "lighter" && stays === null && drops?.to === "lightest",
+        detail: `3.2s at full -> ${top?.to}; 3.2s at lighter -> ${stays?.to ?? "stays"}; 4.2s at lighter -> ${drops?.to}`,
+    };
 });
 
 def("unlocking: climbs back to full pictures", () => {
@@ -204,6 +224,23 @@ def("the brightness ceiling caps every dither, and 15 changes nothing", () => {
         detail: leaked ? `leaked: ${leaked}`
             : changed ? `ceiling 15 altered ${changed}`
             : `${paths.length} paths capped cleanly, ceiling 15 byte-identical`,
+    };
+});
+
+def("a pinned Quality choice reaches Atkinson, and auto leaves the ladder alone", () => {
+    // The Quality button used to pin sixteen even levels — 8% more on the wire
+    // for a difference nobody picked out blind. It now pins Atkinson, which is
+    // aimed at the complaint people actually have. A pinned choice has to carry
+    // a DITHER, not just levels, which the override could not express before.
+    const auto = resolvePictureChoice("auto");
+    const pinned = resolvePictureChoice("atkinson12");
+    const plain = resolvePictureChoice("perceptual12");
+    return {
+        pass: auto === null &&
+              pinned?.dither === "atkinson" && pinned?.palette === "perceptual12" &&
+              plain?.palette === "perceptual12" && plain?.dither === undefined,
+        detail: `auto ${JSON.stringify(auto)}; quality ${JSON.stringify(pinned)}; ` +
+            `speed ${JSON.stringify(plain)}`,
     };
 });
 

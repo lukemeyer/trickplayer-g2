@@ -14,7 +14,8 @@
 // takes seconds. So this is a bitrate ladder driven by outcomes, not by a
 // lock signal — which also means it helps with any other slow link, for free.
 //
-//   - a failure, or a success slower than `slowMs`: drop one rung now.
+//   - a failure, or a success slower than `slowMs` (or the rung's own
+//     `slowMs`, which is sooner on the top rung): drop one rung now.
 //   - `probeAfter` fast successes in a row on a lower rung: try one rung up.
 //   - that probe fails or is slow: drop back, and double how long to wait
 //     before probing again (capped). A probe that holds resets the wait.
@@ -22,74 +23,60 @@
 // Pure, so it can be tested without glasses (tools/quality-check.mjs).
 
 /**
- * The rungs, timed on hardware rather than modelled.
+ * The rungs, sized from a model of the host that is exact to the byte.
  *
- * These used to reduce SHADES first — 16 down to 4 — on the reasoning that
- * fewer levels is less to send. Measured on a G2 over BLE, the same frame
- * five ways, that turned out to be the wrong first move:
+ * What the host does with a picture is now known rather than inferred
+ * (trickplayer-lab, docs/METHOD.md): it decodes whatever we hand it, re-encodes
+ * the container as a 4-bit BMP stored bottom row first, compresses that with
+ * dart_lz4's fast engine, and sends it in 4 KB chunks, each acked before the
+ * next. The lab ports that encoder and reproduces the host's output byte for
+ * byte, and the air time fits 0.14 s + 0.084 s/KB + 0.044 s per chunk.
  *
- *   Floyd-Steinberg, 16 shades   2697 ms   <- the old default
- *   Floyd-Steinberg,  4 shades   1333 ms   <- the old second rung
- *   Bayer 2x2,       16 shades   1117 ms
- *   Bayer 2x2, perceptual 12      820 ms
+ * Two things follow that the old rungs got wrong:
  *
- * The old second rung threw away twelve grey levels and was STILL slower than
- * keeping all sixteen with an ordered dither. Two pixels share a byte in the
- * packed plane, so a 2x2 pattern repeats at byte granularity and the host's
- * compressor eats it; error diffusion scatters bytes and gives it nothing.
- * So the dither comes first, the palette second, and resolution last.
+ *  - The encoder's search step grows with every byte it fails to match, so it
+ *    decides in the first ~200 bytes — the picture's BOTTOM ROW — whether to
+ *    compress at all. A stretched frame whose bottom row is not flat went out
+ *    whole, at 17.3 KB, however it was dithered or blocked: on busy frames the
+ *    1x2 rung saved nothing. So every frame is now letterboxed at its own
+ *    aspect with at least one black row at the bottom (see drawFramePlane in
+ *    main.ts), and the blocked rungs compress as they were meant to.
+ *  - Bayer 4x4 beats 2x2 at every rung: 1-5% more bytes for a clearly better
+ *    picture, and much better worst frames.
  *
- * `palette` is a set of native levels rather than a count, because the eye
- * separates dark tones far better than bright ones and evenly spaced levels
- * spend them where they are least useful (see PALETTES in pixels.ts).
+ * Predicted over the 44 non-black Tears of Steel frames, confirmed on hardware
+ * on 7 of them to within 6 bytes:
  *
- * `blockX`/`blockY` are separate for the same reason the palette is not a
- * count: the two axes are different mechanisms and cost different amounts.
- * See expandBlocks in pixels.ts.
+ *     rung      blocks   on the air   per frame   bSSIM (worst frame)
+ *     full      1x1      13.1 KB      1.39 s      0.990 (0.987)
+ *     lighter   1x2       5.7 KB      0.70 s      0.974 (0.960)
+ *     lightest  2x2       5.0 KB      0.64 s      0.945 (0.919)
+ *
+ * Against the old shipping full rung (stretched, Bayer 2x2): 14.9 KB, 1.57 s,
+ * 0.986 (0.922). The old 1x2 rung was 11.6 KB on average and 17.3 KB on busy
+ * frames.
+ *
+ * Those figures are for a 2.4:1 film in a 256x128 container. The container is
+ * now 256x144 (see GLASSES_IMAGE_HEIGHT in main.ts): the same film costs
+ * 13.5 / 5.7 / 5.0 KB, and 16:9 material, now shown at 254x143 rather than
+ * 225x127, costs 15.5 / 7.2 / 6.3 KB — which is part of why `full` gives up
+ * sooner than the rest.
+ *
+ * The drop from `full` to `lighter` is taken sooner than the others (its own
+ * `slowMs`). The lighter rung costs half the air for a small loss of picture,
+ * so waiting for a full frame to crawl past 4 s before giving up on it bought
+ * nothing. Full stays the top rung, and the ladder still climbs back to it.
+ *
+ * `palette` is a set of native levels rather than a count: perceptual 12 was
+ * judged indistinguishable from sixteen levels blind on the glasses, and costs
+ * 5-12% less. `blockX`/`blockY` are separate because the axes are different
+ * mechanisms; see expandBlocks in pixels.ts. `dither: "bayer"` is the 4x4
+ * ordered dither in pixels.ts.
  */
 export const PICTURE_LADDER = [
-    // TONE IS NO LONGER A RUNG. The ladder used to open with all sixteen even
-    // levels and step down to perceptual 12, on the assumption that tone depth
-    // was worth paying for. Judged blind on the glasses, three times, nobody
-    // could tell them apart — and the same person in the same session decided
-    // 8 of 9 comparisons between reduced-level candidates, so the test was
-    // discriminating and simply found nothing here to discriminate.
-    //
-    // The difference is bounded by construction: perceptual 12 drops levels 4,
-    // 6, 8 and 10, so a pixel either keeps its level exactly or moves by one
-    // step, never more. Over 28 frames that is 23% of pixels, and after the
-    // blur the eye applies to a dither it averages 0.06 of a step.
-    //
-    // Dropping the rung is worth 297ms a frame (1117 against 820, measured) on
-    // EVERY frame while the link is healthy — which on this device is frame
-    // rate, not load time. Sixteen levels is still offered by hand in settings
-    // for anyone who wants it; it is just not what the ladder climbs to.
-    //
-    // So dither and palette are settled constants, and what remains varies
-    // only by resolution.
-    { name: "full", palette: "perceptual12", blockX: 1, blockY: 1 },      // 820 ms measured
-    // Vertical only: 256x64 repeated down. Resolution is two levers, not one,
-    // and they are worth different amounts. Over 28 real frames, deflated as
-    // the host sees them:
-    //
-    //     1x1  5.05 KB       1x2  2.84 KB       2x2  1.91 KB
-    //                        2x1  3.22 KB
-    //
-    // Repeating rows makes whole PNG scanlines byte-identical, which is a
-    // single long match; repeating columns only doubles nibbles inside a byte.
-    // So 1x2 captures most of a 2x2 block's saving while keeping every
-    // horizontal pixel, and it still clears the locked-link cliff (F-056) with
-    // room to spare — an estimated 5.9 KB against the 8 KB where transfers
-    // start to slow.
-    { name: "lighter", palette: "perceptual12", blockX: 1, blockY: 2 },
-    // The floor was a 4x4 block — a 64x32 picture — from a locked session where
-    // the rung above took 4.7s and landed 47% of the time. That rung was
-    // Floyd-Steinberg at four even shades, which the same measurement puts at
-    // ~9.1 KB: over the cliff, so something drastic was the only way under it.
-    // The rung above is now ~2.8 KB, so this one no longer has to be. 2x4 is
-    // within half a kilobyte of 4x4 and keeps twice the horizontal resolution,
-    // which makes 4x4 dominated.
-    { name: "lightest", palette: "perceptual12", blockX: 2, blockY: 4 },
+    { name: "full", dither: "bayer", palette: "perceptual12", blockX: 1, blockY: 1, slowMs: 3000 },
+    { name: "lighter", dither: "bayer", palette: "perceptual12", blockX: 1, blockY: 2 },
+    { name: "lightest", dither: "bayer", palette: "perceptual12", blockX: 2, blockY: 2 },
 ];
 
 export function createQualityController({
@@ -122,7 +109,8 @@ export function createQualityController({
          */
         onResult(ok, ms) {
             const from = ladder[index].name;
-            const bad = !ok || ms > slowMs;
+            // A rung may be quicker to give up than the rest: see `full`.
+            const bad = !ok || ms > (ladder[index].slowMs ?? slowMs);
 
             if (bad) {
                 successRun = 0;
@@ -151,4 +139,47 @@ export function createQualityController({
             return null;
         },
     };
+}
+
+/**
+ * Named encodings the wearer can pin, overriding the ladder.
+ *
+ * `atkinson12` exists because of what the ordered dither costs the
+ * PICTURE rather than the link. A 2x2 matrix repeats, and a regular
+ * pattern is what the eye locks onto over a long sitting — the
+ * screendoor complaint. Measured over 28 frames, the share of the
+ * image carrying that exact two-value diagonal:
+ *
+ *     bayer 2x2       20.5%        <- what used to ship
+ *     bayer 4x4       18.5%        <- the ladder now
+ *     floyd-steinberg 11.1%
+ *     atkinson         4.1%
+ *
+ * Atkinson spreads only three quarters of the error, so it dithers
+ * fewer pixels at all and leaves no matrix to repeat.
+ *
+ * Its cost on the wire is now known (trickplayer-lab's exact host model,
+ * letterboxed full frames over 44 Tears of Steel frames): 13.5 KB against
+ * 13.1 KB for the ladder's Bayer 4x4 — 3% more. It is a setting rather than
+ * the default because nobody has watched an episode on it yet.
+ */
+export const PICTURE_CHOICES = {
+    "16": { shades: 16 },
+    perceptual12: { palette: "perceptual12" },
+    perceptual8: { palette: "perceptual8" },
+    atkinson12: { dither: "atkinson", palette: "perceptual12" },
+};
+
+/**
+ * A named choice, or null for "follow the ladder".
+ *
+ * Kept here rather than in the engine because it is data, and because an
+ * engine module cannot be loaded without a browser — which meant the one
+ * behaviour worth pinning could not be tested at all.
+ */
+export function resolvePictureChoice(choice) {
+    if (!choice || choice === "auto") return null;
+    if (choice in PICTURE_CHOICES) return { ...PICTURE_CHOICES[choice] };
+    const n = Number(choice);
+    return Number.isFinite(n) && n > 0 ? { shades: n } : null;
 }

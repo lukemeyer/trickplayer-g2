@@ -803,6 +803,24 @@ if (harness.get("ladder") === "1") {
     }, Number(harness.get("ladderdelay")) || 6000);
 }
 
+// `?linkcost=1` runs the link-cost probe. Used to exercise the whole path in
+// the simulator — the frame chooser, the delimiters, the telemetry meta —
+// before spending a hardware session and an adb capture on it.
+if (harness.get("linkcost") === "1") {
+    setTimeout(async () => {
+        try {
+            const r = await engine.probeLinkCost({
+                perVariant: Number(harness.get("per")) || 2,
+                onProgress: (t) => console.log(`[LinkCost] ${t}`),
+            });
+            console.log(`[LinkCost] done: ${r.source} · ` +
+                r.results.map((x) => `${x.name} ${x.ok}/${x.of} ${x.medianMs}ms`).join(" · "));
+        } catch (e) {
+            console.error(`[LinkCost] failed: ${e?.message || e}`);
+        }
+    }, Number(harness.get("linkcostdelay")) || 25000);
+}
+
 // `?addsource=plex|jellyfin` starts the add-a-server flow on that provider.
 // The simulator has no pointer into the webview, so the first tap of sign-in
 // cannot be made by hand there.
@@ -1326,7 +1344,8 @@ $("opt-ceiling").oninput = (e) => {
 // honest reason each exists, so it is what the note says.
 const LEVEL_NOTES = {
     "auto": "Follows the link: full detail while it keeps up, lower resolution when it slows.",
-    "16": "Every tone the display has. About 300ms more per picture, for a difference nobody picked out in blind testing.",
+    "atkinson12": "Smoother shading, with far less of the fine cross-hatch pattern.",
+    "16": "Every tone the display has, for a difference nobody picked out in blind testing.",
     "perceptual12": "Twelve tones, placed where the eye can tell them apart. Matched full detail in blind comparison and arrives quicker.",
 };
 

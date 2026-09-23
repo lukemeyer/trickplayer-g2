@@ -859,7 +859,7 @@ button:disabled {
 
 .single-preview-figure img {
   width: 256px;
-  height: 128px;
+  height: 144px;
   display: block;
   background: #000;
   border: 1px solid var(--border-subtle);
@@ -907,7 +907,7 @@ button:disabled {
 }
 .preview-scene img {
   width: 256px;
-  height: 128px;
+  height: 144px;
   display: block;
   background: #000;
   border: 1px solid var(--border-subtle);
