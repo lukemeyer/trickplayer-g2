@@ -134,18 +134,17 @@ import * as store from "./store";
             /**
              * Highest display level the encoder may emit (0..15); 15 is off.
              *
-             * Defaults to 13 — the top two levels given up — because on real
-             * optics the brightest level is uncomfortable rather than merely
-             * bright, and that costs 0.52% of the picture. The library default
-             * in pixels.ts stays 15 so the encoder itself is unopinionated and
-             * the conformance fixtures keep pinning an uncapped frame; this is
-             * the APP deciding, which is where a comfort default belongs.
+             * Defaults to 15, off. Until 0.9.31 it defaulted to 13, the top two
+             * levels given up, because on real optics the brightest level can
+             * be uncomfortable rather than merely bright. That stays one
+             * slider step away for anyone who wants it (ui.ts, GLARE_DEFAULT).
+             * A wearer's saved choice still wins over this.
              *
              * A hardware accommodation rather than a picture setting — see the
              * `ceiling` note in pixels.ts. It rides with the tone controls
              * because that is where it is applied.
              */
-            let ceilingValue = 13;
+            let ceilingValue = 15;
             // Only a fallback now: every PICTURE_LADDER rung names its own
             // dither (Bayer 4x4). The wire-cost question this used to hinge on
             // is settled — see trickplayer-lab docs/METHOD.md and quality.ts.

@@ -153,7 +153,7 @@ No. It talks to your media server and nothing else. There is no account, no tele
 <details>
 <summary><b>Why is the brightest part of the picture uncomfortable?</b></summary>
 
-The display's top level reads much brighter than its position in the range suggests, which on a see-through display can cause eye strain. The **Glare** setting gives up the brightest levels to soften it. It is on by default, at a cost of roughly half a percent of the picture.
+The display's top level reads much brighter than its position in the range suggests, which on a see-through display can cause eye strain. The **Glare** setting gives up the brightest levels to soften it. It is off by default; the first two steps cost roughly half a percent of the picture.
 </details>
 
 <details>

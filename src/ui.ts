@@ -1224,8 +1224,8 @@ $("panel-settings").onclick = (e) => {
 const SKIP_SILENT_KEY = "trickplayer.skipSilent";
 const REPORT_PROGRESS_KEY = "trickplayer.reportProgress";
 const GLARE_KEY = "trickplayer.glare";
-/** Slider steps taken off the top by default — see the store key's note. */
-const GLARE_DEFAULT = 2;
+/** Slider steps taken off the top by default: none. Was 2 until 0.9.31. */
+const GLARE_DEFAULT = 0;
 
 $("opt-skip-silent").onchange = (e) => {
     store.setItem(SKIP_SILENT_KEY, e.target.checked ? "1" : "0");
@@ -1316,8 +1316,8 @@ $("picture-reset").onclick = () => {
     $("opt-brightness").value = 0;
     $("opt-gamma").value = 100;
     engine.setPicture({ contrast: 0, brightness: 0, gamma: 1 });
-    // Back to the DEFAULT rather than to nothing: zero glare is not the
-    // neutral setting here, it is the uncomfortable one.
+    // Back to the default, and saved, so a reset is a choice that survives a
+    // relaunch like any other.
     applyGlare(GLARE_DEFAULT, true);
     applyPictureLevel("auto", true);
     repaintPreview();

@@ -48,8 +48,9 @@ const BAYER_2X2 = [
  * distributed unevenly, keeps the shadows and gives up highlight steps nobody
  * can see.
  *
- * The picture ladder uses perceptual12 at every rung (quality.ts); how it
- * was chosen, and what it costs, is in trickplayer-lab.
+ * The picture ladder used perceptual12 at every rung until 0.9.31 and now
+ * uses all sixteen levels (quality.ts says why); these stay for any rung that
+ * names a palette, and for the tests.
  */
 export const PALETTES = {
     /** Eight levels, weighted towards the shadows. */

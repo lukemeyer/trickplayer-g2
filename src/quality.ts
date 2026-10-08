@@ -32,6 +32,19 @@
  * next. The lab ports that encoder and reproduces the host's output byte for
  * byte, and the air time fits 0.14 s + 0.084 s/KB + 0.044 s per chunk.
  *
+ * Since a glasses firmware update (between 2026-09-23 and 2026-10-08) the host
+ * uses dart_lz4's HC engine instead, depth 64, again matched byte for byte. It
+ * finds any repeat, so the bottom-row trick below matters less and every rung
+ * is cheaper. Air time is now 0.075 s + 0.099 s/KB + ~0.01 s per chunk.
+ * Measured on hardware (7 frames, 256x144, no glare ceiling, sixteen levels):
+ *
+ *     rung      on the air   per send   bSSIM
+ *     full      10.0 KB      1.14 s     0.996
+ *     lighter    5.5 KB      0.73 s     0.987
+ *     lightest   4.2 KB      0.56 s     0.971
+ *
+ * The rest of this note, and its figures, describe the fast engine.
+ *
  * Two things follow that the old rungs got wrong:
  *
  *  - The encoder's search step grows with every byte it fails to match, so it
@@ -67,16 +80,21 @@
  * so waiting for a full frame to crawl past 4 s before giving up on it bought
  * nothing. Full stays the top rung, and the ladder still climbs back to it.
  *
- * `palette` is a set of native levels rather than a count: perceptual 12 was
- * judged indistinguishable from sixteen levels blind on the glasses, and costs
- * 5-12% less. `blockX`/`blockY` are separate because the axes are different
- * mechanisms; see expandBlocks in pixels.ts. `dither: "bayer"` is the 4x4
- * ordered dither in pixels.ts.
+ * Every rung uses all sixteen levels (`shades: 16`). Until 0.9.31 they used
+ * perceptual 12 (pixels.ts), which was judged indistinguishable from sixteen
+ * blind on the glasses and cost 5-12% less on the fast engine. Under HC,
+ * sixteen costs 6-10% more per send, and a second blind A/B (trickplayer-lab
+ * `eyes`) found many frames where the difference shows, so the headroom goes
+ * to tone. A rung may name a `palette` instead of `shades`.
+ *
+ * `blockX`/`blockY` are separate because the axes are different mechanisms;
+ * see expandBlocks in pixels.ts. `dither: "bayer"` is the 4x4 ordered dither
+ * in pixels.ts.
  */
 export const PICTURE_LADDER = [
-    { name: "full", dither: "bayer", palette: "perceptual12", blockX: 1, blockY: 1, slowMs: 3000 },
-    { name: "lighter", dither: "bayer", palette: "perceptual12", blockX: 1, blockY: 2 },
-    { name: "lightest", dither: "bayer", palette: "perceptual12", blockX: 2, blockY: 2 },
+    { name: "full", dither: "bayer", shades: 16, blockX: 1, blockY: 1, slowMs: 3000 },
+    { name: "lighter", dither: "bayer", shades: 16, blockX: 1, blockY: 2 },
+    { name: "lightest", dither: "bayer", shades: 16, blockX: 2, blockY: 2 },
 ];
 
 export function createQualityController({
