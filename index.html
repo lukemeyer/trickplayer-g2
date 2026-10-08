@@ -252,18 +252,6 @@
       <button class="btn-danger" id="close-player-btn">Stop</button>
     </div>
 
-    <!-- Import Map Configuration to Bind Even Realities Web Ecosystem Libraries.
-         Pinned to an explicit version — the bare "+esm" URL resolves to
-         npm's "latest" tag, so every future SDK release would silently
-         change runtime behavior on next page load with no chance to test
-         it first. Bump this deliberately alongside package.json. -->
-    <script type="importmap">
-      {
-        "imports": {
-          "@evenrealities/even_hub_sdk": "https://cdn.jsdelivr.net/npm/@evenrealities/even_hub_sdk@0.0.14/+esm"
-        }
-      }
-    </script>
     <script type="module" src="/src/ui.ts"></script>
   </body>
 </html>

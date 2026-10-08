@@ -2278,6 +2278,19 @@ import * as store from "./store";
 
             // --- EVEN HUB SDK EXTENSIONS ---
             // 1. Double tap exit & lifecycle cleanup
+            //
+            // A double tap only ASKS to leave: shutDownPageContainer(1) shows
+            // the host's exit dialog, and the wearer may answer No. So it must
+            // fire on every double tap, and it must not tear anything down —
+            // this used to share a one-shot guard with cleanup(), so after one
+            // "No" every later double tap did nothing (store review rejection).
+            function requestExit() {
+                if (bridgeInstance) {
+                    bridgeInstance.shutDownPageContainer(1);
+                }
+            }
+
+            // Teardown, for when the app is really going away.
             let cleanedUp = false;
             function cleanup() {
                 if (cleanedUp) return;
@@ -2287,9 +2300,6 @@ import * as store from "./store";
                 isPlaying = false;
                 playBtn.innerText = "Play";
                 try { silentAudio.pause(); } catch (e) {}
-                if (bridgeInstance) {
-                    bridgeInstance.shutDownPageContainer(1);
-                }
             }
 
             // --- BACKGROUND / FOREGROUND HANDLING ---
@@ -2401,7 +2411,7 @@ import * as store from "./store";
                 // Double Tap Exit
                 if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
                     noteLifecycle("glasses-double-tap", { wasPlaying: isPlaying });
-                    cleanup();
+                    requestExit();
                     return;
                 }
             

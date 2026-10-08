@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.30",
+  "version": "0.9.31",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,11 +21,9 @@
   ],
   "changelog": [
     {
-      "version": "0.9.30",
+      "version": "0.9.31",
       "notes": [
-        "Choose your picture quality. Settings now offers Auto, High, Standard and Low. Auto steps between them as the connection allows; picking one holds it there, and the choice is remembered.",
-        "Settings and Debugging tools are tidier: evenly spaced, with sliders that line up and bigger buttons and checkboxes that are easier to hit.",
-        "Debugging tools now keep only what helps with a problem: the message log, the link capture, and two quick checks — whether your glasses accept pictures, and how fast your phone prepares them. The testing tools used to tune the picture have been removed."
+        "Double tap on the glasses now always brings up the exit prompt."
       ]
     }
   ],
