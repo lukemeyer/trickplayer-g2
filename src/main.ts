@@ -632,6 +632,14 @@ import * as store from "./store";
             function drawFramePlane(ctx, bitmap, w, h, bx, by, opts) {
                 const sw = w / bx, sh = h / by;
                 const srcW = bitmap.width || w, srcH = bitmap.height || h;
+                // TODO(2026-12-07): drop the reserved bottom row (availH = h).
+                // Only glasses still on the pre-2026-10 firmware need it: their
+                // fast compressor gives up on a frame without a flat bottom
+                // row (44-47% more for 1x2 and 2x2 full-bleed frames), while
+                // the HC compressor since that update saves 1% with it, just
+                // the row itself. The SDK does not report firmware, so this
+                // waits for most users to have updated. Keep the level-0 bars
+                // below either way: a lit bar glows on a see-through display.
                 const availH = h - by;
                 const scale = Math.min(w / srcW, availH / srcH);
                 const ow = Math.min(w, Math.max(bx, Math.round((srcW * scale) / bx) * bx));

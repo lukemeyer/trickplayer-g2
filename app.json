@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.31",
+  "version": "0.9.32",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,9 +21,9 @@
   ],
   "changelog": [
     {
-      "version": "0.9.31",
+      "version": "0.9.32",
       "notes": [
-        "Double tap on the glasses now always brings up the exit prompt."
+        "Improved picture quality."
       ]
     }
   ],
