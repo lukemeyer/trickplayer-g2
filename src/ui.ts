@@ -819,10 +819,99 @@ for (const btn of document.querySelectorAll("[data-provider]")) {
     };
 }
 
-$("jf-address-next").onclick = () => {
+/**
+ * The Jellyfin address, exactly as typed.
+ *
+ * Nothing is refused up front. What the host's network whitelist really lets
+ * through is not something we can know from here, so the address is tried as
+ * entered and only a failure is explained. That includes the scheme: it is
+ * never filled in for the wearer. Prefixing one was flagged in store review as
+ * a URL outside the whitelist, so a bare host is sent back with a request to
+ * include it instead.
+ */
+const JELLYFIN_HOSTS = [".ts.net", ".plex.direct"];   // app.json network.whitelist
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+function jellyfinAddress(raw: string): { url: URL } | { error: string } {
+    if (!HAS_SCHEME.test(raw)) {
+        return { error: "Include the scheme at the start of the address: https (or http), then a colon and two slashes." };
+    }
+    try {
+        return { url: new URL(raw) };
+    } catch {
+        return { error: "That doesn't look like a server address." };
+    }
+}
+
+/** Reach the server's public info endpoint. @returns null on success, or why not. */
+async function probeJellyfin(base: string): Promise<null | { kind: "network" | "http" | "not-jellyfin"; detail: string }> {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 10000);
+    try {
+        const res = await fetch(`${base}/System/Info/Public`, {
+            headers: { Accept: "application/json" }, signal: ctl.signal,
+        });
+        if (!res.ok) return { kind: "http", detail: `HTTP ${res.status}` };
+        const info = await res.json().catch(() => null);
+        if (!info || !(info.Id || info.ServerName)) {
+            return { kind: "not-jellyfin", detail: "unexpected reply" };
+        }
+        return null;
+    } catch (e) {
+        return { kind: "network", detail: ctl.signal.aborted ? "timed out" : (e?.message || String(e)) };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** What to tell the wearer when the probe fails, from what actually happened. */
+function jellyfinHelp(url: URL, why: { kind: string; detail: string }): string {
+    if (why.kind === "http") {
+        return `Reached ${url.host}, but it answered ${why.detail}. Check the address — ` +
+            "if Jellyfin is served under a path (like /jellyfin), include it.";
+    }
+    if (why.kind === "not-jellyfin") {
+        return `Reached ${url.host}, but it doesn't look like a Jellyfin server. ` +
+            "Check the address and port.";
+    }
+    const tips = [`Couldn't connect to ${url.host} (${why.detail}).`];
+    const host = url.hostname.toLowerCase();
+    if (!JELLYFIN_HOSTS.some((d) => host.endsWith(d))) {
+        tips.push("The Even app may only let Trickplayer reach ts.net and plex.direct addresses — " +
+            "if your server is on Tailscale, try its ts.net name.");
+    }
+    if (url.protocol === "http:") {
+        tips.push("Plain http connections may be blocked — try an https address.");
+    }
+    tips.push("Make sure the server is running and reachable from your phone.");
+    return tips.join(" ");
+}
+
+$("jf-address-next").onclick = async () => {
     const raw = $("jf-address").value.trim();
     if (!raw) return;
-    const url = /^https?:\/\//.test(raw) ? raw : `http://${raw}`;
+    const err = $("jf-address-error");
+    const btn = $("jf-address-next") as HTMLButtonElement;
+    const fail = (msg: string) => {
+        err.textContent = msg;
+        setHidden("jf-address-error", false);
+    };
+    const checked = jellyfinAddress(raw);
+    if ("error" in checked) return fail(checked.error);
+    const parsed = checked.url;
+    const url = parsed.origin + parsed.pathname.replace(/\/$/, "");
+
+    setHidden("jf-address-error", true);
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "Connecting…";
+    const why = await probeJellyfin(url);
+    btn.disabled = false;
+    btn.textContent = label;
+    if (why) {
+        console.warn(`[jellyfin] probe ${url} failed: ${why.kind} ${why.detail}`);
+        return fail(jellyfinHelp(parsed, why));
+    }
+
     account = createJellyfinAccount({ serverUrl: url, name: url });
     setHidden("add-step-address", true);
     beginAuth();
