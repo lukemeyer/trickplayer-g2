@@ -708,6 +708,40 @@ button:disabled {
   border-color: rgba(170, 92, 195, 0.3);
 }
 
+/* Subtitle and picture state. Green is the .tag-badge default. */
+.tag-ok { }
+.tag-wait {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--color-warning);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+.tag-bad {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-danger);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.tag-off {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: rgba(100, 116, 139, 0.35);
+}
+/* Something the item does not have. */
+.tag-struck {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+/* Listed, but cannot play: it stays in the list and says why. */
+.media-item.unplayable .media-title { color: var(--text-muted); }
+.media-item.unplayable { cursor: default; }
+/* Its duration is not something to look at; its crossed-out badges are. */
+.media-item.unplayable .tag-badge:not(.tag-bad):not(.tag-off) {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: rgba(100, 116, 139, 0.35);
+}
+.media-subtitle.note-bad { color: var(--color-danger); }
+
 /* --- LOAD PROGRESS ----------------------------------------------------- */
 .load-progress-container {
   margin-top: 20px;

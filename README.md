@@ -71,7 +71,7 @@ Trickplayer talks to your media server and to nothing else. No account to create
 
 | | What to enable | Subtitles |
 |---|---|---|
-| **Plex** | *Generate video preview thumbnails* — Settings → Scheduled Tasks | **External `.srt` files only.** Plex's API does not expose embedded subtitle tracks, so sidecar files are required. |
+| **Plex** | *Generate video preview thumbnails* — Settings → Scheduled Tasks | External `.srt` files, or a text track embedded in the file. An embedded track is read through your server's transcoder the first time you play the item (see below). |
 | **Jellyfin** | *Enable trickplay image extraction* — per library settings | Embedded tracks work, as well as sidecars. |
 
 ---
@@ -121,13 +121,25 @@ No — and it can't be. The link carries a few kilobytes a second, and the displ
 <details>
 <summary><b>Why does an item say it can't be played?</b></summary>
 
-It is missing one of the two halves. Trickplayer needs a trick-play index *and* subtitles for the same item. The list tells you which items have both, so nothing fails halfway through. See [server setup](#server-setup) for what to enable.
+It is missing one of the two halves. Trickplayer needs preview thumbnails (a trick-play index) *and* text subtitles for the same item. Every episode is listed, and the badges say which half each one has:
+
+| Badge | Meaning |
+|---|---|
+| **SUBS** in green | Subtitles ready. Plays straight away. |
+| **SUBS** in amber | Subtitles are inside the video file. The first play reads them out, which takes a little while; after that it's green. |
+| ~~**SUBS**~~ in red | Plex lists a subtitle file that isn't on the server any more. Refresh the item's metadata in Plex. |
+| ~~**SUBS**~~ in grey | No text subtitles. Image-based ones (PGS, VobSub) can't be read as text. |
+| ~~**IMG**~~ in grey | No preview thumbnails yet. |
+
+See [server setup](#server-setup) for what to enable.
 </details>
 
 <details>
-<summary><b>Why does Plex need external subtitle files?</b></summary>
+<summary><b>Why does the first play of some Plex items take longer?</b></summary>
 
-Plex's API doesn't expose subtitles embedded inside a video file — only sidecar files sitting next to it. That's a Plex limitation rather than a Trickplayer one. Jellyfin does serve embedded tracks, so it works either way there.
+Plex won't hand over a subtitle track embedded inside a video file directly, only sidecar files sitting next to it. For an embedded track, Trickplayer asks your server's transcoder to read it out, which means the server runs through the whole file once: a few seconds to a couple of minutes depending on its hardware. Your phone downloads only the subtitles themselves (tens of kilobytes), and the result is kept, so playing the item again is instant.
+
+Trickplayer reads the track that is **selected** for the item in Plex. To change which language you get, pick the subtitle track in a Plex app first. Image-based tracks (PGS, VobSub) can't be read as text. Jellyfin serves embedded tracks on its own, so none of this applies there.
 </details>
 
 <details>

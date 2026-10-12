@@ -13,7 +13,11 @@
 //   use(server)             → void                fixes the route later calls use
 //   listRoots()             → [Container]
 //   listChildren(ref)       → [Container | Item]  recursive; no assumed depth
-//   resolvePlayable(item)   → Playable | null     the ONLY eligibility signal
+//   assess(item)            → { img, subs, playable }   the ONLY eligibility signal
+//                              img: has preview thumbnails; subs: "file" (plays
+//                              at once), "embedded" (read from the media file on
+//                              first play), "none"; playable: Playable | null
+//   resolvePlayable(item)   → Playable | null     assess(item).playable
 //   openSource(playable)    → MediaSource         hands the engine src/source.ts
 //   persist()               → JSON                what re-creates this account
 //
@@ -23,7 +27,8 @@
 //   Item      { ref, title, kind: "item" }        may still be ineligible
 //   Playable  { title, durationMs, badges[], source-shaped provider config }
 //
-// **`resolvePlayable` returning null is the only eligibility signal there is.**
+// **`assess` is the only eligibility signal there is**; `resolvePlayable` is its
+// yes-or-no half.
 // Plex needs the non-null-subtitle-key filter and Jellyfin must not have it
 // (F-037), so shared code never asks the question itself — it asks the account.
 //

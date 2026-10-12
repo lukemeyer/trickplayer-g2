@@ -21,6 +21,7 @@ import { setMessageLogging } from "./consolemirror";
 import * as engine from "./main";
 import { createPlexAccount } from "./plexaccount";
 import { createJellyfinAccount } from "./jellyfinaccount";
+import { cachedEmbeddedIds } from "./plexsource";
 import * as store from "./store";
 
 // ---------------------------------------------------------------- plumbing
@@ -228,15 +229,26 @@ function row(parent, title, subtitle, onClick, badges = []) {
             (subtitle ? `<div class="media-subtitle">${esc(subtitle)}</div>` : "") +
         `</div>` +
         (badges.length
-            ? `<span class="tags">${badges.map((b) => {
-                const lower = String(b).toLowerCase();
-                const cls = lower === "plex" ? " tag-plex" : lower === "jellyfin" ? " tag-jellyfin" : "";
-                return `<span class="tag-badge${cls}">${esc(b)}</span>`;
-            }).join("")}</span>`
+            ? `<span class="tags">${badges.map(badgeHtml).join("")}</span>`
             : "");
     div.onclick = onClick;
     parent.appendChild(div);
     return div;
+}
+
+/**
+ * A badge is a string, or `{ text, tone, struck }` for the subtitle and
+ * picture states: tone "ok" (green), "wait" (amber), "bad" (red), "off"
+ * (grey); `struck` crosses it out, for something the item does not have.
+ */
+function badgeHtml(b) {
+    if (b && typeof b === "object") {
+        const cls = `tag-badge tag-${b.tone || "ok"}${b.struck ? " tag-struck" : ""}`;
+        return `<span class="${cls}">${esc(b.text)}</span>`;
+    }
+    const lower = String(b).toLowerCase();
+    const cls = lower === "plex" ? " tag-plex" : lower === "jellyfin" ? " tag-jellyfin" : "";
+    return `<span class="tag-badge${cls}">${esc(b)}</span>`;
 }
 
 const mb = (bytes) => bytes >= 1e6
@@ -299,14 +311,31 @@ let sourceKey = null;    // provider:id of the open source — scopes the cache 
 const eligibility = new Map();
 const eligibilityKey = (item) => `${sourceKey}|${JSON.stringify(item.ref)}`;
 
-/** Ask once per item per session. `null` (ineligible) is an answer worth keeping. */
-async function resolveCached(item) {
+/**
+ * Ask once per item per session: `{ img, subs, playable }` (see account.ts).
+ * An ineligible answer is worth keeping too.
+ */
+async function assessCached(item) {
     const key = eligibilityKey(item);
     if (eligibility.has(key)) return eligibility.get(key);
-    const match = await account.resolvePlayable(item);
-    eligibility.set(key, match);
-    return match;
+    const answer = await account.assess(item);
+    eligibility.set(key, answer);
+    return answer;
 }
+
+/** The yes-or-no half, for everything that only needs something to play. */
+async function resolveCached(item) {
+    return (await assessCached(item)).playable;
+}
+
+/**
+ * Subtitle files Plex lists but the server could not find, for this session.
+ *
+ * Only learned by trying: the list asks one question per item (F-015), and
+ * that question cannot tell a listed file from a present one.
+ */
+const missingSubs = new Set();
+const missingKey = (playable) => `${sourceKey}|${playable?.config?.subtitleRef}`;
 
 // ------------------------------------------------------------ recently played
 //
@@ -783,6 +812,22 @@ if (harness.has("play")) {
     setTimeout(() => { firstPlayable(want && want !== "1" ? want : null); }, 2500);
 }
 
+// `?open=<text>` opens the first library show whose title contains the text,
+// as the phone list. The simulator has no pointer into the webview, so a list
+// several levels down cannot be reached by hand there.
+if (harness.get("open")) {
+    setTimeout(async () => {
+        if (!account) return;
+        const want = harness.get("open").toLowerCase();
+        for (const root of await account.listRoots()) {
+            if (root.ref.kind !== "section") continue;
+            const show = (await account.listChildren(root.ref))
+                .find((c) => c.kind === "container" && c.title.toLowerCase().includes(want));
+            if (show) { stack = [root]; openContainer(show); return; }
+        }
+    }, 2500);
+}
+
 $("add-source-btn").onclick = () => startAddSource();
 $("add-source-cancel").onclick = () => {
     stopPolling();
@@ -1127,34 +1172,109 @@ async function renderList() {
                          here?.title === "Playlists";
     const isLibrary = !isNonLibrary;
 
-    let found = 0;
+    // Every item is listed straight away, in server order, and each row fills
+    // in as its answer arrives. An item that cannot play stays visible and
+    // says which half it is missing: a season that silently looks shorter
+    // than it is reads as a broken app.
+    const ready = account.provider === "plex" ? await cachedEmbeddedIds() : new Set();
+    if (myGeneration !== scanGeneration) return;
+    const rows = items.map((item) => {
+        const div = row(list, displayTitle(item, isLibrary), "", null,
+            [...durationBadge(item), { text: "Checking…", tone: "off" }]);
+        div.onclick = () => { $("list-status").textContent = "Still checking this one…"; };
+        return div;
+    });
+
+    const counts = { ready: 0, slow: 0, no: 0 };
+    const summary = (pending) => {
+        const parts = [];
+        if (counts.ready) parts.push(`${counts.ready} ready`);
+        if (counts.slow) parts.push(`${counts.slow} read from file`);
+        if (counts.no) parts.push(`${counts.no} can't play`);
+        if (pending) parts.push(`checking ${pending}…`);
+        return parts.join(" · ");
+    };
+    $("list-status").textContent = summary(items.length);
+
     for (let i = 0; i < items.length; i++) {
         if (myGeneration !== scanGeneration) return;
-        $("list-status").textContent =
-            `Checking ${i + 1} of ${items.length}` + (found ? ` — ${found} playable` : "");
-        let match = null;
+        let answer = { img: false, subs: "none", playable: null, failed: true };
         try {
-            // The ONLY eligibility signal. Plex needs the sidecar-subtitle
-            // rule and Jellyfin must not have it (F-037), so this file never
-            // asks the question itself.
-            match = await resolveCached(items[i]);
+            answer = await assessCached(items[i]);
         } catch (e) {
             console.warn(`eligibility check failed for ${items[i].title}: ${e.message}`);
         }
-        if (!match) continue;
-        found++;
-        const titleToShow = displayTitle(match, isLibrary);
-        const badges = match.badges?.length ? match.badges : (match.durationMs ? [fmtDuration(match.durationMs)] : []);
-        row(list, titleToShow, "", () => openItem(match), badges);
+        if (myGeneration !== scanGeneration) return;
+        const state = rowState(items[i], answer, ready);
+        counts[state.count]++;
+        fillRow(rows[i], displayTitle(answer.playable || items[i], isLibrary), state);
+        $("list-status").textContent = summary(items.length - i - 1);
     }
+    if (!counts.ready && !counts.slow) {
+        $("list-status").textContent = "Nothing here can be played yet — an item needs preview thumbnails (IMG) and text subtitles (SUBS).";
+    }
+}
 
-    if (myGeneration !== scanGeneration) return;
-    // A container that is half ineligible says so rather than silently
-    // appearing short — on Plex that is often most of a playlist, and someone
-    // who has not heard of the sidecar rule would think the app was broken.
-    $("list-status").textContent = found
-        ? `${found} of ${items.length} playable`
-        : "Nothing here can be played yet — an item needs a trick-play index and subtitles.";
+function durationBadge(item) {
+    return item.durationMs ? [fmtDuration(item.durationMs)] : [];
+}
+
+/**
+ * How a row reads, from an eligibility answer.
+ *
+ * SUBS is always shown: green when it plays at once (a subtitle file, or a
+ * track already read from the media file), amber when the track still has to
+ * be read from the file on first play, crossed out red when Plex lists a file
+ * the server could not find, crossed out grey when there are none. IMG is
+ * shown only when it is missing, crossed out — every playable row has it.
+ */
+function rowState(item, answer, ready) {
+    const p = answer.playable;
+    const dur = durationBadge(p || item);
+    if (answer.failed) {
+        return { count: "no", playable: null, badges: dur, note: "Couldn't check this one", tone: "off" };
+    }
+    const missing = p && missingSubs.has(missingKey(p));
+    let subsBadge, note = "", count = "no";
+    if (missing) {
+        subsBadge = { text: "Subs", tone: "bad", struck: true };
+        note = "Subtitle file missing — refresh in Plex";
+    } else if (answer.subs === "file" || (answer.subs === "embedded" && ready.has(p?.config?.embedded?.cacheId))) {
+        subsBadge = { text: "Subs", tone: "ok" };
+        count = "ready";
+    } else if (answer.subs === "embedded") {
+        subsBadge = { text: "Subs", tone: "wait" };
+        count = "slow";
+    } else {
+        subsBadge = { text: "Subs", tone: "off", struck: true };
+    }
+    const imgBadge = answer.img ? [] : [{ text: "Img", tone: "off", struck: true }];
+    if (!answer.img) {
+        note = answer.subs === "none" ? "No preview thumbnails or text subtitles" : "No preview thumbnails yet";
+        count = "no";
+    } else if (answer.subs === "none") {
+        note = "No text subtitles on the server";
+    }
+    return {
+        count,
+        playable: count === "no" ? null : p,
+        badges: [...dur, ...imgBadge, subsBadge],
+        note,
+        tone: missing ? "bad" : "off",
+    };
+}
+
+function fillRow(div, title, state) {
+    div.classList.toggle("unplayable", !state.playable);
+    div.innerHTML =
+        `<div class="media-info">` +
+            `<div class="media-title">${esc(title)}</div>` +
+            (state.note ? `<div class="media-subtitle note-${state.tone}">${esc(state.note)}</div>` : "") +
+        `</div>` +
+        `<span class="tags">${state.badges.map(badgeHtml).join("")}</span>`;
+    div.onclick = state.playable
+        ? () => openItem(state.playable)
+        : () => { $("list-status").textContent = state.note || "This one can't play."; };
 }
 
 // ==================================================================== PLAYER
@@ -1197,6 +1317,7 @@ async function openItem(match) {
         rememberPlayed(match, from);
     } catch (e) {
         console.error(`Could not load this item: ${e.message}`);
+        if (e.code === "SUBS_MISSING") missingSubs.add(missingKey(match));
         setPlayerError(`Could not load ${match.title}: ${e.message}`);
     }
 }

@@ -11,6 +11,8 @@ import { normaliseRoutes, raceRoutes, staticBest, rank } from "./plexroutes";
 
 const CLIENT_ID = "trickplayer-g2";
 const APP_NAME = "Trickplayer";
+/** Subtitle codecs the transcoder can hand back as text (F-023). */
+const TEXT_SUBTITLE_CODECS = new Set(["srt", "subrip", "ass", "ssa", "webvtt", "vtt", "mov_text", "text"]);
 
 export function createPlexAccount(saved = {}) {
     let accountToken = saved.accountToken || null;
@@ -376,49 +378,81 @@ export function createPlexAccount(saved = {}) {
     const pad = (n) => String(n || 0).padStart(2, "0");
 
     /**
-     * Eligibility, and the fetch config if eligible. One request per item.
+     * Eligibility, what is missing if not, and the fetch config if eligible.
+     * One request per item.
      *
      * **Plex's rule, and only Plex's.** An item needs an `sd` trick-play index
-     * AND a subtitle stream with a NON-NULL key: most SRT streams Plex reports
-     * are embedded in the media file and cannot be fetched separately (F-014).
+     * AND text subtitles, from one of two places:
+     *
+     *   - a sidecar: a subtitle stream with a NON-NULL key, fetched as a file.
+     *     Preferred — one small request, no work for the server.
+     *   - an embedded track (no key), extracted by the server's transcoder
+     *     (F-023). Only the track SELECTED for the item in Plex can be read
+     *     that way, and only a text one; an image-based track would be burned
+     *     into a picture this app never shows.
+     *
      * Jellyfin converts embedded tracks on demand and must not be asked this
      * (F-037), which is why the question lives here and not in shared code.
      */
-    async function resolvePlayable(item) {
+    async function assess(item) {
         const d = await plexFetch(`/library/metadata/${item.ref.key}`);
         const md = d.MediaContainer?.Metadata?.[0];
-        if (!md?.Media) return null;
+        if (!md?.Media) return { img: false, subs: "none", playable: null };
 
+        // What the item has, part by part, so an ineligible one can say which
+        // half is missing — not only whether it plays.
+        const RANK = { none: 0, embedded: 1, file: 2 };
+        let img = false, subs = "none";
         for (const media of md.Media) {
             for (const part of media.Part || []) {
-                if (!part.indexes || !part.indexes.includes("sd")) continue;
-                const sub = (part.Stream || []).find(
-                    (st) => st.streamType === 3 && st.codec === "srt" && st.key,
+                const hasImg = !!part.indexes && part.indexes.includes("sd");
+                const subStreams = (part.Stream || []).filter((st) => st.streamType === 3);
+                const sub = subStreams.find((st) => st.codec === "srt" && st.key);
+                // Looked for even when there is a sidecar: a sidecar Plex still
+                // lists can be gone from disk (a 404), and then the file's own
+                // track is the way to the subtitles.
+                const inFile = subStreams.find(
+                    (st) => !st.key && st.selected && TEXT_SUBTITLE_CODECS.has(st.codec),
                 );
-                if (!sub) continue;
+                const partSubs = sub ? "file" : inFile ? "embedded" : "none";
+                img = img || hasImg;
+                if (RANK[partSubs] > RANK[subs]) subs = partSubs;
+                if (!hasImg || partSubs === "none") continue;
+                const embedded = inFile
+                    ? { ratingKey: String(md.ratingKey), streamId: inFile.id,
+                        cacheId: `${id}:${md.ratingKey}:${inFile.id}` }
+                    : null;
                 return {
-                    title: item.title,
-                    shortTitle: item.shortTitle || item.title,
-                    seriesTitle: item.seriesTitle || "",
-                    episodeNumber: item.episodeNumber || "",
-                    episodeName: item.episodeName || "",
-                    durationMs: md.duration || item.durationMs || null,
-                    // What the progress report has to name. The playback config
-                    // is about BYTES — a part id and a subtitle key — and says
-                    // nothing about which library item they came from.
-                    progressRef: { key: item.ref.key },
-                    // The metadata fetch has the authoritative one; the listing's
-                    // copy can be older.
-                    resumeMs: md.viewOffset || item.resumeMs || 0,
-                    // Duration is FORMATTED by the flow, not here: three
-                    // copies of one formatter have to agree for ever, and the
-                    // shape of a badge is a presentation question anyway.
-                    badges: [],
-                    config: { timelineRef: part.id, subtitleRef: sub.key },
+                    img: true,
+                    subs: partSubs,
+                    playable: {
+                        title: item.title,
+                        shortTitle: item.shortTitle || item.title,
+                        seriesTitle: item.seriesTitle || "",
+                        episodeNumber: item.episodeNumber || "",
+                        episodeName: item.episodeName || "",
+                        durationMs: md.duration || item.durationMs || null,
+                        // What the progress report has to name. The playback config
+                        // is about BYTES — a part id and a subtitle key — and says
+                        // nothing about which library item they came from.
+                        progressRef: { key: item.ref.key },
+                        // The metadata fetch has the authoritative one; the listing's
+                        // copy can be older.
+                        resumeMs: md.viewOffset || item.resumeMs || 0,
+                        // Duration is FORMATTED by the flow, not here: three
+                        // copies of one formatter have to agree for ever, and the
+                        // shape of a badge is a presentation question anyway.
+                        badges: [],
+                        config: { timelineRef: part.id, subtitleRef: sub ? sub.key : null, embedded },
+                    },
                 };
             }
         }
-        return null;
+        return { img, subs, playable: null };
+    }
+
+    async function resolvePlayable(item) {
+        return (await assess(item)).playable;
     }
 
     /**
@@ -472,6 +506,15 @@ export function createPlexAccount(saved = {}) {
             token: () => serverToken,
             timelineRef: playable.config.timelineRef,
             subtitleRef: playable.config.subtitleRef,
+            // `cacheId` is set at resolve time; a recently-played entry saved
+            // before it existed computes the same one here.
+            embedded: playable.config.embedded
+                ? { cacheId: `${id}:${playable.config.embedded.ratingKey}:${playable.config.embedded.streamId}`,
+                    ...playable.config.embedded }
+                : null,
+            clientId: CLIENT_ID,
+            product: APP_NAME,
+            durationMs: playable.durationMs || null,
         });
     }
 
@@ -493,6 +536,6 @@ export function createPlexAccount(saved = {}) {
         get isAuthenticated() { return !!accountToken; },
         get hasServer() { return !!serverUrl; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, resolvePlayable, openSource, persist, reportProgress,
+        listRoots, listChildren, assess, resolvePlayable, openSource, persist, reportProgress,
     };
 }

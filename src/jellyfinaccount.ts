@@ -239,24 +239,27 @@ export function createJellyfinAccount(saved = {}) {
     const pad = (n) => String(n || 0).padStart(2, "0");
 
     /**
-     * Eligibility, and the fetch config if eligible.
+     * Eligibility, what is missing if not, and the fetch config if eligible.
      *
      * **Deliberately NOT Plex's rule.** Requiring an external subtitle file
      * would hide most of a Jellyfin library, because embedded tracks are
      * converted on demand (F-037). What this needs is trickplay generated at
-     * some width, and a subtitle stream of any kind.
+     * some width, and a TEXT subtitle stream, embedded or not. An image-based
+     * one (PGS, VobSub) cannot be served as SRT: Jellyfin only burns those into
+     * video. The default text track is preferred, as a player would pick it.
      */
-    async function resolvePlayable(item) {
+    async function assess(item) {
         const it = item.ref.raw
             || (await req(`/Items?${q({ userId, Ids: item.ref.id, Fields: ITEM_FIELDS })}`)).Items?.[0];
-        if (!it) return null;
+        if (!it) return { img: false, subs: "none", playable: null };
 
         const tp = it.Trickplay && Object.keys(it.Trickplay).length ? it.Trickplay : null;
-        if (!tp) return null;
         const ms = (it.MediaSources || [])[0];
-        if (!ms) return null;
-        const sub = (ms.MediaStreams || []).find((s) => s.Type === "Subtitle");
-        if (!sub) return null;
+        const texts = (ms?.MediaStreams || []).filter((s) => s.Type === "Subtitle" && s.IsTextSubtitleStream);
+        const sub = texts.find((s) => s.IsDefault) || texts[0];
+        // Jellyfin converts on demand, so a text track plays at once: "file".
+        const status = { img: !!tp, subs: sub ? "file" : "none", playable: null };
+        if (!tp || !ms || !sub) return status;
 
         // Widest available: more pixels per thumbnail, and the sheet count is
         // the same either way, so there is nothing to trade (F-038).
@@ -264,7 +267,7 @@ export function createJellyfinAccount(saved = {}) {
         const width = Math.max(...Object.keys(byWidth).map(Number));
         const durationMs = it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : (item.durationMs || null);
 
-        return {
+        status.playable = {
             title: item.title,
             shortTitle: item.shortTitle || item.title,
             seriesTitle: item.seriesTitle || "",
@@ -286,7 +289,13 @@ export function createJellyfinAccount(saved = {}) {
                 subtitleIndex: sub.Index,
             },
         };
+        return status;
     }
+
+    async function resolvePlayable(item) {
+        return (await assess(item)).playable;
+    }
+
 
     function openSource(playable) {
         const c = playable.config;
@@ -317,6 +326,6 @@ export function createJellyfinAccount(saved = {}) {
         get isAuthenticated() { return !!token; },
         get hasServer() { return !!base; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, resolvePlayable, openSource, persist, reportProgress,
+        listRoots, listChildren, assess, resolvePlayable, openSource, persist, reportProgress,
     };
 }

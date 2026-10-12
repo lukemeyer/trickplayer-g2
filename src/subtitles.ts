@@ -52,7 +52,61 @@ export function decodeSubtitleBytes(buffer) {
     return new TextDecoder().decode(b);
 }
 
+/**
+ * ASS / SSA, as Plex's transcoder emits an embedded track (F-023).
+ *
+ * Only the `[Events]` section matters: each `Dialogue:` line is a cue, its
+ * fields named by the section's own `Format:` line. Text is the LAST field and
+ * may itself contain commas. `\N` is a hard break, `\h` a hard space, and
+ * `{…}` blocks are override directives — positioning and styling, not words
+ * (F-011). Times are H:MM:SS.cc, in hundredths.
+ */
+export function parseAss(text) {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const start = lines.findIndex((l) => /^\s*\[Events\]\s*$/i.test(l));
+    if (start < 0) return [];
+    let fields = ["Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect", "Text"];
+    const subs = [];
+    const toMs = (t) => {
+        const m = /^\s*(\d+):(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$/.exec(t || "");
+        if (!m) return NaN;
+        const frac = m[4] ? Number(m[4].padEnd(3, "0")) : 0;
+        return ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 + frac;
+    };
+    for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*\[/.test(line)) break; // the next section
+        const fm = /^\s*Format\s*:(.*)$/i.exec(line);
+        if (fm) { fields = fm[1].split(",").map((f) => f.trim()); continue; }
+        const dm = /^\s*Dialogue\s*:(.*)$/i.exec(line);
+        if (!dm) continue;
+        const parts = dm[1].split(",");
+        const head = parts.slice(0, fields.length - 1);
+        const raw = parts.slice(fields.length - 1).join(",");
+        const startMs = toMs(head[fields.indexOf("Start")]);
+        const endMs = toMs(head[fields.indexOf("End")]);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
+        const cueText = raw
+            .replace(/\{[^}]*\}/g, "")
+            .replace(/\\h/g, " ")
+            .split(/\\N|\\n/i)
+            .map((l) => l.replace(/<[^>]*>/g, "").trim())
+            .filter((l) => l.length > 0)
+            .join("\n");
+        // Empty after cleaning => not a cue (F-003).
+        if (cueText) subs.push({ startMs, endMs, text: cueText });
+    }
+    // Events are usually in order, but the format does not promise it.
+    return subs.sort((a, b) => a.startMs - b.startMs);
+}
+
 export async function parseSubtitles(text, onProgress) {
+    // An ASS file has no blank-line blocks or arrows to find; it has sections.
+    if (/^\s*\[(Script Info|Events)\]/im.test(text)) {
+        const subs = parseAss(text);
+        if (onProgress) onProgress(1);
+        return subs;
+    }
     const subs = [];
     const cleanText = text
         .replace(/\r\n/g, "\n")

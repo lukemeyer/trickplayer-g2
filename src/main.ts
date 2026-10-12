@@ -547,7 +547,11 @@ import * as store from "./store";
                 // Subtitle phase (20-90%): the only download large enough to
                 // be worth a progress bar now.
                 setLoadProgress(0.5, "Downloading subtitles...");
-                subtitles = await source.cues();
+                // A provider that has to extract an embedded track (Plex,
+                // F-023) reports how far the server has got — the only long
+                // wait in loading, up to a minute or two on first play.
+                subtitles = await source.cues((f) =>
+                    setLoadProgress(0.2 + 0.7 * f, "Reading subtitles from the file (first play only)..."));
                 setLoadProgress(0.9, "Parsing subtitles...");
 
                 durationMs = item.durationMs || bifs[bifs.length - 1].tsMs;
