@@ -508,6 +508,9 @@ import * as store from "./store";
                 sendSubtitleToGlasses(`Loading ${title}`).catch(() => {});
             }
 
+            /** Which load is current; see prepareItem. */
+            let loadSeq = 0;
+
             async function prepareItem(item) {
                 // Stop whatever is running FIRST. Choosing something from the
                 // recent list while an episode was playing left both pipelines
@@ -535,12 +538,22 @@ import * as store from "./store";
                 source = item.source;
                 currentItem = item;
                 clearFrameCache();
+                // A newer load, or Stop, makes this one stale: its results must
+                // not land on whatever is showing now.
+                const myLoad = ++loadSeq;
+                const stillCurrent = () => {
+                    if (myLoad === loadSeq) return;
+                    const e = new Error("superseded");
+                    e.code = "CANCELLED";
+                    throw e;
+                };
 
                 // Index phase (0-20%). The provider decides how to get a
                 // timeline — two small ranged reads here, tile geometry
                 // elsewhere. Either way the track is not downloaded (F-005).
                 setLoadProgress(null, "Reading index...");
                 const timelineResult = await source.timeline();
+                stillCurrent();
                 bifs = timelineResult.frames;
                 setLoadProgress(0.2, "Reading index...");
 
@@ -550,8 +563,11 @@ import * as store from "./store";
                 // A provider that has to extract an embedded track (Plex,
                 // F-023) reports how far the server has got — the only long
                 // wait in loading, up to a minute or two on first play.
-                subtitles = await source.cues((f) =>
-                    setLoadProgress(0.2 + 0.7 * f, "Reading subtitles from the file (first play only)..."));
+                const cues = await source.cues((f) => {
+                    if (myLoad === loadSeq) setLoadProgress(0.2 + 0.7 * f, "Reading subtitles from the file (first play only)...");
+                });
+                stillCurrent();
+                subtitles = cues;
                 setLoadProgress(0.9, "Parsing subtitles...");
 
                 durationMs = item.durationMs || bifs[bifs.length - 1].tsMs;
@@ -3260,6 +3276,7 @@ import * as store from "./store";
                 playBtn.innerText = "Play";
                 try { silentAudio.pause(); } catch (e) {}
                 if (bridgeInstance) sendSubtitleToGlasses("Stream terminated.").catch(() => {});
+                loadSeq++;
                 if (source && source.release) source.release();
                 resetPipelineState();
                 ensureMenu();

@@ -465,6 +465,7 @@ async function playRecent(index) {
             title: match.title, durationMs: match.durationMs, source: account.openSource(match),
         });
     } catch (e) {
+        if (e.code === "CANCELLED") return;
         // This one is started from the GLASSES, so the phone may be in a
         // pocket — but when it is looked at, it has to say what happened
         // rather than show a player that never starts.
@@ -614,6 +615,7 @@ async function playMatch(match) {
             source: account.openSource(match),
         });
     } catch (e) {
+        if (e.code === "CANCELLED") return;
         console.error(`Could not load this item: ${e.message}`);
         setPlayerError(`Could not load ${match.title}: ${e.message}`);
         return;
@@ -1316,6 +1318,7 @@ async function openItem(match) {
         engine.play();
         rememberPlayed(match, from);
     } catch (e) {
+        if (e.code === "CANCELLED") return;
         console.error(`Could not load this item: ${e.message}`);
         if (e.code === "SUBS_MISSING") missingSubs.add(missingKey(match));
         setPlayerError(`Could not load ${match.title}: ${e.message}`);

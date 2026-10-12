@@ -22,6 +22,13 @@ const EXTRACT_DEADLINE_MS = 6 * 60 * 1000;
 /** Once every segment is consumed, how long the subtitle stream may sit idle before it is taken as finished. */
 const SUBS_QUIET_MS = 15000;
 
+/** A load that was abandoned on purpose: not an error to show anyone. */
+function cancelled() {
+    const e = new Error("cancelled");
+    e.code = "CANCELLED";
+    return e;
+}
+
 /** Which embedded tracks are already extracted, by cache id — so a list can show them as ready. */
 export async function cachedEmbeddedIds() {
     try {
@@ -158,13 +165,28 @@ export function createPlexSource({
         return subs;
     }
 
+    /**
+     * Abandon whatever this source is still doing: the engine calls this when
+     * the wearer stops, or picks something else, mid-load. An extraction left
+     * running kept a server transcode busy for minutes — slowing the item
+     * chosen next — and then reported its timeout under that item.
+     */
+    let released = false;
+    let cancelExtract = null;
+    function release() {
+        released = true;
+        if (cancelExtract) cancelExtract();
+    }
+
     async function extractEmbedded(onProgress) {
+        if (released) throw cancelled();
         // The route, raced once; the long requests below cannot go through the
         // account's 12-second request deadline.
         const base = (await route(async (b) => b)).replace(/\/$/, "");
         const auth = { "X-Plex-Token": tokenNow() };
         const deadline = new AbortController();
         const timer = setTimeout(() => deadline.abort(), EXTRACT_DEADLINE_MS);
+        cancelExtract = () => deadline.abort();
         const session = `trickplayer-${Math.random().toString(36).slice(2, 10)}`;
         const t0 = Date.now();
         let q = null;
@@ -203,6 +225,21 @@ export function createPlexSource({
                 const d = await fetch(`${base}/video/:/transcode/universal/decision?${params}`, {
                     headers: { ...auth, Accept: "application/json" }, signal: deadline.signal,
                 });
+                // A copy is only worth having if the server will actually copy.
+                // Offered HEVC it cannot copy (a 10-bit 1080p file, measured),
+                // it RE-ENCODES to full-size HEVC in 1-second segments: five
+                // times the requests and the heaviest session it can run. The
+                // small re-encode beats that.
+                if (d.ok && shape === COPY) {
+                    const decision = await d.json().catch(() => null);
+                    const video = decision?.MediaContainer?.Metadata?.[0]?.Media?.[0]?.Part?.[0]?.Stream
+                        ?.find((st) => st.streamType === 1);
+                    if (video?.decision !== "copy") {
+                        console.log(`[plex] embedded subtitles: the server would re-encode the video (${video?.codec} ${video?.width}x${video?.height}); using the small re-encode`);
+                        await stopSession(base, session, auth);
+                        continue;
+                    }
+                }
                 const start = d.ok && await fetch(`${base}/video/:/transcode/universal/start.mpd?${params}`, {
                     headers: auth, signal: deadline.signal,
                 });
@@ -259,7 +296,7 @@ export function createPlexSource({
                 pulled += (await r.arrayBuffer()).byteLength;
                 return true;
             };
-            for (let i = 0; !finished; i++) {
+            for (let i = 0; !finished && !released; i++) {
                 // One after the other. Asking for both at once was no faster
                 // from a phone, and left the server holding the /subtitles
                 // response open after the last cue.
@@ -284,10 +321,12 @@ export function createPlexSource({
             console.log(`[plex] embedded subtitles extracted in ${((Date.now() - t0) / 1000).toFixed(1)}s, ${text.length} chars, ${pulled} B of segment data`);
             return text;
         } catch (e) {
+            if (released) throw cancelled();
             if (deadline.signal.aborted) throw new Error("Plex took too long to read this item's subtitles");
             throw e;
         } finally {
             clearTimeout(timer);
+            cancelExtract = null;
             await stopSession(base, session, auth);
         }
     }
@@ -326,5 +365,5 @@ export function createPlexSource({
         return sizes[sizes.length >> 1] * sceneCount;
     }
 
-    return { capabilities, timeline, frameBytes, cues, previewCostBytes };
+    return { capabilities, timeline, frameBytes, cues, previewCostBytes, release };
 }
