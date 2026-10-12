@@ -230,10 +230,19 @@ export function createPlexSource({
                 // it RE-ENCODES to full-size HEVC in 1-second segments: five
                 // times the requests and the heaviest session it can run. The
                 // small re-encode beats that.
+                const decided = d.ok ? (await d.json().catch(() => null))?.MediaContainer?.Metadata?.[0]
+                    ?.Media?.[0]?.Part?.[0]?.Stream || [] : [];
+                // The subtitles only come out of /subtitles when the server is
+                // CONVERTING them into their own segments. Burned into the
+                // picture, or copied as they are, the stream stays empty — say
+                // so now rather than after every segment has been asked for.
+                const subDecision = decided.find((st) => st.streamType === 3);
+                if (d.ok && !(subDecision?.decision === "transcode" && /subs/.test(subDecision?.location || ""))) {
+                    await stopSession(base, session, auth);
+                    throw new Error(`Plex won't send this item's subtitles as text (it would ${subDecision?.decision === "burn" ? "burn them into the picture" : subDecision ? subDecision.decision + " them" : "leave them out"}).`);
+                }
                 if (d.ok && shape === COPY) {
-                    const decision = await d.json().catch(() => null);
-                    const video = decision?.MediaContainer?.Metadata?.[0]?.Media?.[0]?.Part?.[0]?.Stream
-                        ?.find((st) => st.streamType === 1);
+                    const video = decided.find((st) => st.streamType === 1);
                     if (video?.decision !== "copy") {
                         console.log(`[plex] embedded subtitles: the server would re-encode the video (${video?.codec} ${video?.width}x${video?.height}); using the small re-encode`);
                         await stopSession(base, session, auth);

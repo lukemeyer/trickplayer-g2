@@ -7,6 +7,7 @@
 // before anything can be authenticated (UI.md §1).
 
 import { createJellyfinSource } from "./jellyfinsource";
+import { rankSubtitleCandidates } from "./account";
 
 const CLIENT = "Trickplayer";
 const DEVICE = "even-g2";
@@ -157,7 +158,7 @@ export function createJellyfinAccount(saved = {}) {
     // `UserData` carries the server's own resume position. It is returned by
     // default on user-scoped queries, but asked for explicitly so a listing that
     // is not user-scoped does not silently lose it.
-    const ITEM_FIELDS = "MediaSources,MediaStreams,Trickplay,RunTimeTicks,UserData";
+    const ITEM_FIELDS = "MediaSources,MediaStreams,Trickplay,RunTimeTicks,UserData,Overview,ProductionYear";
 
     async function listChildren(ref) {
         if (ref.kind === "resume") {
@@ -228,6 +229,11 @@ export function createJellyfinAccount(saved = {}) {
             seriesTitle: it.SeriesName || "",
             episodeNumber: epLabel,
             episodeName: it.Name,
+            // For the episode page on the phone.
+            summary: it.Overview || "",
+            seasonNumber: isEp ? (it.ParentIndexNumber ?? null) : null,
+            episodeIndex: isEp ? (it.IndexNumber ?? null) : null,
+            year: it.ProductionYear || null,
             durationMs,
             kind: "item",
             // Ticks are 100-nanosecond units; milliseconds is what everything
@@ -251,14 +257,15 @@ export function createJellyfinAccount(saved = {}) {
     async function assess(item) {
         const it = item.ref.raw
             || (await req(`/Items?${q({ userId, Ids: item.ref.id, Fields: ITEM_FIELDS })}`)).Items?.[0];
-        if (!it) return { img: false, subs: "none", playable: null };
+        if (!it) return { img: false, subs: "none", playable: null, still: null };
 
         const tp = it.Trickplay && Object.keys(it.Trickplay).length ? it.Trickplay : null;
         const ms = (it.MediaSources || [])[0];
-        const texts = (ms?.MediaStreams || []).filter((s) => s.Type === "Subtitle" && s.IsTextSubtitleStream);
+        // Not forced tracks: they cover only foreign-language moments.
+        const texts = (ms?.MediaStreams || []).filter((s) => s.Type === "Subtitle" && s.IsTextSubtitleStream && !s.IsForced);
         const sub = texts.find((s) => s.IsDefault) || texts[0];
         // Jellyfin converts on demand, so a text track plays at once: "file".
-        const status = { img: !!tp, subs: sub ? "file" : "none", playable: null };
+        const status = { img: !!tp, subs: sub ? "file" : "none", playable: null, still: chooseStill(it, ms) };
         if (!tp || !ms || !sub) return status;
 
         // Widest available: more pixels per thumbnail, and the sheet count is
@@ -268,11 +275,16 @@ export function createJellyfinAccount(saved = {}) {
         const durationMs = it.RunTimeTicks ? Math.round(it.RunTimeTicks / 10000) : (item.durationMs || null);
 
         status.playable = {
+            still: chooseStill(it, ms),
             title: item.title,
             shortTitle: item.shortTitle || item.title,
             seriesTitle: item.seriesTitle || "",
             episodeNumber: item.episodeNumber || "",
             episodeName: item.episodeName || "",
+            summary: it.Overview || item.summary || "",
+            seasonNumber: item.seasonNumber ?? null,
+            episodeIndex: item.episodeIndex ?? null,
+            year: it.ProductionYear || item.year || null,
             durationMs,
             resumeMs: Math.round((it.UserData?.PlaybackPositionTicks || 0) / 10000),
             progressRef: { id: it.Id },
@@ -294,6 +306,69 @@ export function createJellyfinAccount(saved = {}) {
 
     async function resolvePlayable(item) {
         return (await assess(item)).playable;
+    }
+
+    /**
+     * The curated picture: an episode's Primary image is its still (16:9); a
+     * film's Primary is its poster (2:3), so its Backdrop or Thumb (both 16:9)
+     * wins. Whichever is nearest the video's own shape.
+     */
+    function chooseStill(it, ms) {
+        const v = (ms?.MediaStreams || []).find((s) => s.Type === "Video");
+        const video = v?.Width && v?.Height ? v.Width / v.Height : 16 / 9;
+        const tags = it.ImageTags || {};
+        const candidates = it.Type === "Episode"
+            ? [{ type: "Primary", aspect: 16 / 9, ok: !!tags.Primary }]
+            : [{ type: "Backdrop", index: 0, aspect: 16 / 9, ok: !!(it.BackdropImageTags || []).length },
+               { type: "Thumb", aspect: 16 / 9, ok: !!tags.Thumb },
+               { type: "Primary", aspect: 2 / 3, ok: !!tags.Primary }];
+        const best = candidates.filter((c) => c.ok)
+            .sort((a, b) => Math.abs(a.aspect - video) - Math.abs(b.aspect - video))[0];
+        return best ? { itemId: it.Id, type: best.type, index: best.index ?? null } : null;
+    }
+
+    /**
+     * Subtitles the server can find, best first. Jellyfin searches through a
+     * subtitle plugin (OpenSubtitles); without one configured this is empty.
+     * Not yet run against a real server.
+     */
+    async function searchSubtitles(item, language = "eng") {
+        const list = await req(`/Items/${item.ref.id}/RemoteSearch/Subtitles/${encodeURIComponent(language)}`);
+        return (list || [])
+            .filter((c) => c.Id && !c.Forced)
+            .map((c) => ({
+                id: c.Id,
+                title: c.Name || c.ThreeLetterISOLanguageName || "Subtitles",
+                language: c.ThreeLetterISOLanguageName || language,
+                provider: c.ProviderName || "",
+                perfect: !!c.IsHashMatch,
+                hearingImpaired: !!c.HearingImpaired,
+                score: Number(c.DownloadCount) || 0,
+            }))
+            .sort(rankSubtitleCandidates);
+    }
+
+    /** The server downloads it and attaches it to the item. */
+    async function downloadSubtitle(item, candidate) {
+        await req(`/Items/${item.ref.id}/RemoteSearch/Subtitles/${encodeURIComponent(candidate.id)}`, { method: "POST" });
+        return true;
+    }
+
+    /** The still, resized by the server, as a Blob — or null if there is none. */
+    async function fetchStill(playable, width, height) {
+        const st = playable?.still;
+        if (!st) return null;
+        const path = `/Items/${st.itemId}/Images/${st.type}${st.index != null ? `/${st.index}` : ""}`;
+        try {
+            const res = await fetch(`${base}${path}?${q({ maxWidth: width, maxHeight: height, quality: 80 })}`, {
+                headers: { Authorization: authHeader(token), Accept: "image/*" },
+            });
+            if (!res.ok) throw new Error(`still -> HTTP ${res.status}`);
+            return await res.blob();
+        } catch (e) {
+            console.warn(`[jellyfin] no still: ${e.message}`);
+            return null;
+        }
     }
 
 
@@ -326,6 +401,7 @@ export function createJellyfinAccount(saved = {}) {
         get isAuthenticated() { return !!token; },
         get hasServer() { return !!base; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, assess, resolvePlayable, openSource, persist, reportProgress,
+        listRoots, listChildren, assess, resolvePlayable, fetchStill,
+        searchSubtitles, downloadSubtitle, openSource, persist, reportProgress,
     };
 }

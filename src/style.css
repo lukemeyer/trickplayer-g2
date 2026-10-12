@@ -818,8 +818,8 @@ button:disabled {
 }
 
 #controls {
-  margin-top: 24px;
-  margin-bottom: 24px;
+  margin-top: 8px;
+  margin-bottom: 20px;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -850,10 +850,72 @@ button:disabled {
   text-align: right;
 }
 
-#close-player-btn {
-  margin-top: 8px;
-  margin-bottom: 16px;
+/* --- NOW PLAYING: an episode page ------------------------------------- */
+.now-playing { margin-bottom: 18px; }
+/* The show and episode on the left, the still opposite them at a third. */
+.np-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 12px;
 }
+.np-text { flex: 1; min-width: 0; }
+.np-still {
+  flex: none;
+  width: 33%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.np-show {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.now-playing .np-title { margin: 0 0 6px; }
+.np-meta {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.np-summary {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Play/pause and stop side by side, each with an icon. */
+.transport {
+  display: flex;
+  gap: 12px;
+}
+.transport button { flex: 1; margin: 0; }
+.btn-icon { gap: 8px; }
+.btn-icon svg { width: 18px; height: 18px; flex: none; }
+
+/* What the glasses show, folded away by default. */
+.preview-section {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+.preview-section > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  list-style: none;
+}
+.preview-section > summary::-webkit-details-marker { display: none; }
+.preview-section > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s;
+}
+.preview-section[open] > summary::before { transform: rotate(90deg); }
 
 /* --- PIN DISPLAY ------------------------------------------------------- */
 .pin-container {
@@ -1318,3 +1380,73 @@ dialog.settings-dialog::backdrop {
   margin-top: -4px;
   margin-bottom: -4px;
 }
+
+/* --- EPISODE PAGE, NOT PLAYING ----------------------------------------- */
+.np-note {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  margin: 14px 0 0;
+}
+.np-note.note-bad { color: var(--color-danger); }
+.np-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+.np-actions button { flex: 1 1 140px; margin: 0; }
+
+/* A row that can be fixed carries its own button. */
+.row-action {
+  width: auto;
+  margin: 0 0 0 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  flex: none;
+}
+
+/* --- SUBTITLE SEARCH ---------------------------------------------------- */
+#subs-results { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 16px; }
+.subs-candidate {
+  width: 100%;
+  margin: 0;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, transparent);
+  cursor: pointer;
+  text-align: left;
+}
+.subs-candidate:hover { border-color: rgba(0, 230, 118, 0.4); }
+.subs-candidate .sc-title { font-size: 0.92rem; color: var(--text-primary); }
+.subs-candidate .sc-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+.subs-candidate.busy { opacity: 0.6; pointer-events: none; }
+
+/* --- EMBEDDED SUBTITLES: extract or download ---------------------------- */
+.np-embedded {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin: 0 0 14px;
+}
+.np-embedded-lead {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  margin: 0 0 12px;
+}
+.np-choices { display: flex; gap: 12px; }
+.np-choice { flex: 1; min-width: 0; }
+.np-choice button { margin: 0 0 6px; }
+.np-choice p {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  margin: 0;
+}
+.load-cancel { margin: 12px 0 0; }

@@ -370,6 +370,8 @@ function rememberPlayed(match, positionMs = 0) {
         // needed to tell the server where we got to.
         progressRef: match.progressRef ?? null,
         positionMs: Math.max(0, Math.round(positionMs) || 0),
+        // The episode page, for when this is started again from the glasses.
+        display: displayFields(match),
     };
     const rest = loadRecent().filter((r) => !sameItem(r, entry));
     const all = [entry, ...rest].slice(0, RECENT_MAX);
@@ -456,13 +458,17 @@ async function playRecent(index) {
         sourceKey = `${entry.provider}:${entry.accountId}`;
         eligibility.clear();
     }
-    const match = { title: entry.title, durationMs: entry.durationMs, badges: [], config: entry.config };
+    const match = { title: entry.title, durationMs: entry.durationMs, badges: [], config: entry.config, ...(entry.display || {}) };
     playable = match;
     setPlayerError(null);
     show("panel-player");
+    setPlayerMode(false);
+    renderNowPlaying(match);
     try {
         await engine.prepareItem({
             title: match.title, durationMs: match.durationMs, source: account.openSource(match),
+            // For the glasses, only while subtitles are read from the file.
+            still: account.fetchStill ? () => account.fetchStill(match, 256, 144) : null,
         });
     } catch (e) {
         if (e.code === "CANCELLED") return;
@@ -609,10 +615,14 @@ async function playMatch(match) {
     playable = match;
     setPlayerError(null);
     show("panel-player");
+    setPlayerMode(false);
+    renderNowPlaying(match);
     try {
         await engine.prepareItem({
             title: match.title, durationMs: match.durationMs,
             source: account.openSource(match),
+            // For the glasses, only while subtitles are read from the file.
+            still: account.fetchStill ? () => account.fetchStill(match, 256, 144) : null,
         });
     } catch (e) {
         if (e.code === "CANCELLED") return;
@@ -812,6 +822,36 @@ if (harness.get("addsource")) {
 if (harness.has("play")) {
     const want = harness.get("play");
     setTimeout(() => { firstPlayable(want && want !== "1" ? want : null); }, 2500);
+}
+
+// `?find=<text>` opens the episode page of the first episode, in the first show
+// whose title contains the text, that lacks subtitles a download could fix —
+// with the subtitle search open (`&sheet=0` for the page alone). It searches;
+// it never downloads. `&embedded=1` picks an amber episode instead — its
+// extract-or-download page — and `&extract=1` then presses Extract.
+if (harness.get("find")) {
+    setTimeout(async () => {
+        if (!account) return;
+        const want = harness.get("find").toLowerCase();
+        for (const root of await account.listRoots()) {
+            if (root.ref.kind !== "section") continue;
+            const show = (await account.listChildren(root.ref))
+                .find((c) => c.kind === "container" && c.title.toLowerCase().includes(want));
+            if (!show) continue;
+            const ready = account.provider === "plex" ? await cachedEmbeddedIds() : new Set();
+            for (const item of (await account.listChildren(show.ref)).filter((c) => c.kind === "item")) {
+                const answer = await assessCached(item);
+                const st = rowState(item, answer, ready);
+                const embedded = harness.get("embedded") === "1";
+                if (embedded ? st.count === "slow" : st.canFind) {
+                    stack = [root, show];
+                    openEpisodeInfo(item, answer, { findSubs: !embedded && harness.get("sheet") !== "0" });
+                    if (embedded && harness.get("extract") === "1") setTimeout(() => $("np-extract").click(), 1500);
+                    return;
+                }
+            }
+        }
+    }, 2500);
 }
 
 // `?open=<text>` opens the first library show whose title contains the text,
@@ -1119,6 +1159,25 @@ function openContainer(container) {
     renderList();
 }
 
+/**
+ * Where each level of the list was scrolled to, kept on its stack entry.
+ *
+ * Backing out of a show rebuilt the show list from the top, and the show just
+ * left was a long scroll away. Recorded as the wearer scrolls, so it is right
+ * whichever way they leave — into a show, into the player, or back.
+ */
+let listRendering = false;
+$("results-list").addEventListener("scroll", () => {
+    if (listRendering) return;
+    const here = stack[stack.length - 1];
+    if (here) here.scrollTop = $("results-list").scrollTop;
+}, { passive: true });
+
+function restoreListScroll(here) {
+    $("results-list").scrollTop = here?.scrollTop || 0;
+    listRendering = false;
+}
+
 $("list-back").onclick = () => {
     scanGeneration++;
     stack.pop();
@@ -1140,12 +1199,15 @@ async function renderList() {
     $("list-title").textContent = here.title;
     $("list-status").textContent = "Loading…";
     const list = $("results-list");
+    // Rebuilding the rows scrolls to the top; that is not the wearer scrolling.
+    listRendering = true;
     list.innerHTML = "";
 
     let children;
     try {
         children = await account.listChildren(here.ref);
     } catch (e) {
+        listRendering = false;
         $("list-status").textContent = `Could not load: ${e.message}`;
         return;
     }
@@ -1157,6 +1219,7 @@ async function renderList() {
     for (const c of containers) row(list, c.title, c.subtitle, () => openContainer(c));
 
     if (!items.length) {
+        restoreListScroll(here);
         $("list-status").textContent = containers.length ? "" : "Nothing here.";
         return;
     }
@@ -1186,6 +1249,8 @@ async function renderList() {
         div.onclick = () => { $("list-status").textContent = "Still checking this one…"; };
         return div;
     });
+    // Every row exists now (still "checking"), so the list is its full height.
+    restoreListScroll(here);
 
     const counts = { ready: 0, slow: 0, no: 0 };
     const summary = (pending) => {
@@ -1263,6 +1328,10 @@ function rowState(item, answer, ready) {
         badges: [...dur, ...imgBadge, subsBadge],
         note,
         tone: missing ? "bad" : "off",
+        item,
+        answer,
+        // A download fixes this one: it has pictures, and lacks subtitles.
+        canFind: !!account?.searchSubtitles && answer.img && (missing || answer.subs === "none"),
     };
 }
 
@@ -1273,10 +1342,198 @@ function fillRow(div, title, state) {
             `<div class="media-title">${esc(title)}</div>` +
             (state.note ? `<div class="media-subtitle note-${state.tone}">${esc(state.note)}</div>` : "") +
         `</div>` +
-        `<span class="tags">${state.badges.map(badgeHtml).join("")}</span>`;
-    div.onclick = state.playable
+        `<span class="tags">${state.badges.map(badgeHtml).join("")}</span>` +
+        (state.canFind ? `<button class="btn-secondary row-action">Find subtitles</button>` : "");
+    // A row that cannot play opens its episode page, which says why — and,
+    // from its button, with the subtitle search already open over it.
+    // Amber — subtitles still inside the file — opens the page first, where
+    // the wearer chooses between extracting them and downloading some.
+    div.onclick = state.playable && state.count !== "slow"
         ? () => openItem(state.playable)
-        : () => { $("list-status").textContent = state.note || "This one can't play."; };
+        : () => openEpisodeInfo(state.item, state.answer);
+    const find = div.querySelector(".row-action");
+    if (find) find.onclick = (e) => {
+        e.stopPropagation();
+        openEpisodeInfo(state.item, state.answer, { findSubs: true });
+    };
+}
+
+// ============================================================ EPISODE PAGE
+//
+// The same page as the player, for an item that cannot play yet: its picture
+// and description, why it cannot play, and — when subtitles are what it
+// lacks — a way to have the server download some. Nothing is loaded and the
+// glasses are not touched.
+
+let infoMode = false;
+let infoItem = null;
+let infoAnswer = null;
+
+function setPlayerMode(info) {
+    infoMode = info;
+    setHidden("controls", info);
+    setHidden("preview-section", info);
+    setHidden("np-actions", !info);
+    if (!info) {
+        setHidden("np-note", true);
+        setHidden("np-embedded", true);
+        setLoading(false);
+    } else {
+        setHidden("load-progress-container", true);
+        setPlayerError(null);
+    }
+}
+
+function openEpisodeInfo(item, answer, { findSubs = false } = {}) {
+    infoItem = item;
+    infoAnswer = answer;
+    playable = null;
+    show("panel-player");
+    setPlayerMode(true);
+    renderNowPlaying({ ...item, still: answer.still || answer.playable?.still || null });
+    renderEpisodeInfo();
+    if (findSubs) openSubsDialog();
+}
+
+/** The note and buttons, from the current answer. */
+async function renderEpisodeInfo() {
+    const ready = account?.provider === "plex" ? await cachedEmbeddedIds() : new Set();
+    const state = rowState(infoItem, infoAnswer, ready);
+    // Embedded and not yet read: the choice replaces the note and buttons.
+    const choose = state.count === "slow";
+    setHidden("np-embedded", !choose);
+    const note = $("np-note");
+    note.textContent = state.playable ? "Subtitles are ready." : (state.note || "This can't play yet.");
+    note.className = `np-note${state.tone === "bad" && !state.playable ? " note-bad" : ""}`;
+    setHidden("np-note", choose);
+    setHidden("np-play", choose || !state.playable);
+    setHidden("np-find-subs", choose || !state.canFind);
+    $("np-play").onclick = state.playable ? () => startFromInfo(state.playable) : null;
+    $("np-extract").onclick = state.playable ? () => startFromInfo(state.playable) : null;
+}
+
+/** Play from the episode page; a cancelled load comes back to it. */
+let loadFromInfo = null;
+function startFromInfo(p) {
+    openItem(p, { item: infoItem, answer: infoAnswer });
+}
+
+$("np-download").onclick = () => openSubsDialog();
+
+// Cancel a load — in practice an extraction, the only long one. It stops the
+// work on the server and returns to the page it was started from.
+/**
+ * While an item loads, Cancel shows and the play controls do not; after a
+ * failed load the play controls stay away — only Back is any use.
+ */
+function setLoading(loading, { failed = false } = {}) {
+    setHidden("load-cancel", !loading);
+    setHidden("play-btn", loading || failed);
+    setHidden("timeline-row", loading || failed);
+}
+
+$("load-cancel").onclick = () => {
+    engine.cancelLoad();
+    setLoading(false);
+    const from = loadFromInfo;
+    loadFromInfo = null;
+    if (from) openEpisodeInfo(from.item, from.answer);
+    else goBackFromPlayer();
+};
+
+$("np-find-subs").onclick = () => openSubsDialog();
+$("np-back").onclick = () => goBackFromPlayer();
+
+function goBackFromPlayer() {
+    if (infoMode) {
+        setPlayerMode(false);
+        stack.length ? renderList() : showSources();
+    } else {
+        engine.stop();   // its `stopped` hook returns to the list
+    }
+}
+
+// ------------------------------------------------------- subtitle search
+
+let subsSearchGeneration = 0;
+
+function closeSubsDialog() {
+    subsSearchGeneration++;
+    const d = $("subs-dialog");
+    if (d.open) d.close();
+}
+$("subs-close").onclick = closeSubsDialog;
+$("subs-cancel").onclick = closeSubsDialog;
+
+/**
+ * The server's subtitle search for the item on the page, over the page.
+ * Picking one has the server download it; either way the page stays.
+ */
+async function openSubsDialog() {
+    const item = infoItem;
+    if (!item || !account?.searchSubtitles) return;
+    const myGen = ++subsSearchGeneration;
+    const d = $("subs-dialog");
+    if (!d.open) d.showModal();
+    const results = $("subs-results");
+    results.innerHTML = "";
+    $("subs-status").textContent = "Searching…";
+    let found;
+    try {
+        found = await account.searchSubtitles(item);
+    } catch (e) {
+        if (myGen !== subsSearchGeneration) return;
+        $("subs-status").textContent = `Couldn't search: ${e.message}`;
+        return;
+    }
+    if (myGen !== subsSearchGeneration) return;
+    if (!found.length) {
+        $("subs-status").textContent = "The server found no subtitles for this one.";
+        return;
+    }
+    $("subs-status").textContent = "Your server downloads the one you pick and adds it to this item.";
+    for (const c of found) {
+        const b = document.createElement("button");
+        b.className = "subs-candidate";
+        const meta = [
+            c.perfect ? "Perfect match" : "May not be in sync",
+            c.hearingImpaired ? "describes sounds (SDH)" : "",
+            c.provider,
+            c.score ? `${c.score.toLocaleString()} downloads` : "",
+        ].filter(Boolean).join(" · ");
+        b.innerHTML = `<span><div class="sc-title">${esc(c.title)}</div><div class="sc-meta">${esc(meta)}</div></span>` +
+            (c.perfect ? `<span class="tag-badge">Match</span>` : "");
+        b.onclick = () => pickSubtitle(item, c, b, myGen);
+        results.appendChild(b);
+    }
+}
+
+async function pickSubtitle(item, candidate, button, myGen) {
+    for (const el of $("subs-results").children) el.classList.add("busy");
+    $("subs-status").textContent = "Downloading to your server…";
+    try {
+        await account.downloadSubtitle(item, candidate);
+    } catch (e) {
+        if (myGen !== subsSearchGeneration) return;
+        for (const el of $("subs-results").children) el.classList.remove("busy");
+        $("subs-status").textContent = `Couldn't download that one: ${e.message}`;
+        return;
+    }
+    // The server attaches it within a couple of seconds; ask again until the
+    // item has it, rather than assuming.
+    let answer = null;
+    for (let i = 0; i < 6 && myGen === subsSearchGeneration; i++) {
+        eligibility.delete(eligibilityKey(item));
+        try { answer = await assessCached(item); } catch (e) { answer = null; }
+        if (answer?.playable && answer.subs === "file") break;
+        await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (myGen !== subsSearchGeneration) return;
+    closeSubsDialog();
+    if (answer && infoItem === item) {
+        infoAnswer = answer;
+        renderEpisodeInfo();
+    }
 }
 
 // ==================================================================== PLAYER
@@ -1296,18 +1553,84 @@ function setPlayerError(message) {
     setHidden("player-error", !message);
 }
 
-async function openItem(match) {
+/** What the episode page shows; also kept with a recently played entry. */
+function displayFields(m) {
+    return {
+        seriesTitle: m.seriesTitle || "",
+        episodeName: m.episodeName || "",
+        seasonNumber: m.seasonNumber ?? null,
+        episodeIndex: m.episodeIndex ?? null,
+        year: m.year || null,
+        // Capped: five entries live in the boot-hydrated store.
+        summary: (m.summary || "").slice(0, 600),
+        still: m.still || null,
+    };
+}
+
+/**
+ * The episode still (or a film's backdrop) at the top of the episode page.
+ *
+ * One request, ~10-15 KB at this size. Shown from a Blob URL so the token
+ * stays in a header (F-021); dropped if another item was opened meanwhile.
+ */
+let stillUrl = null;
+let stillFor = null;
+async function showStill(m) {
+    const img = $("np-still");
+    stillFor = m;
+    if (stillUrl) { URL.revokeObjectURL(stillUrl); stillUrl = null; }
+    img.removeAttribute("src");
+    setHidden("np-still", true);
+    if (!m.still || !account?.fetchStill) return;
+    // A third of the screen's width; 320 wide is sharp on a 2-3x display.
+    const blob = await account.fetchStill(m, 320, 180);
+    if (!blob || stillFor !== m) return;
+    stillUrl = URL.createObjectURL(blob);
+    img.src = stillUrl;
+    setHidden("np-still", false);
+}
+
+/**
+ * The playback screen, laid out like an episode page: the show, the episode,
+ * season and number, the description. A film has no show line; its year goes
+ * with the running time instead.
+ */
+function renderNowPlaying(m) {
+    const isEp = m.seasonNumber != null || m.episodeIndex != null;
+    $("np-show").textContent = isEp ? (m.seriesTitle || "") : "";
+    setHidden("np-show", !$("np-show").textContent);
+    $("np-title").textContent = (isEp && m.episodeName) || (m.seriesTitle && m.episodeName) || m.title || "";
+    const meta = [];
+    if (m.seasonNumber != null) meta.push(`Season ${m.seasonNumber}`);
+    if (m.episodeIndex != null) meta.push(`Episode ${m.episodeIndex}`);
+    if (!isEp && m.year) meta.push(String(m.year));
+    if (m.durationMs) meta.push(`${Math.max(1, Math.round(m.durationMs / 60000))} min`);
+    $("np-meta").textContent = meta.join(" · ");
+    $("np-summary").textContent = m.summary || "";
+    setHidden("np-summary", !m.summary);
+    showStill(m).catch(() => {});
+}
+
+async function openItem(match, fromInfo = null) {
+    loadFromInfo = fromInfo;
     playable = match;
     releasePreview();
     setPlayerError(null);
     show("panel-player");
+    setPlayerMode(false);
+    renderNowPlaying(match);
 
+    // Nothing can play until the load is done: only Cancel and Back show.
+    setLoading(true);
     try {
         await engine.prepareItem({
             title: match.title,
             durationMs: match.durationMs,
             source: account.openSource(match),
+            // For the glasses, only while subtitles are read from the file.
+            still: account.fetchStill ? () => account.fetchStill(match, 256, 144) : null,
         });
+        setLoading(false);
         applyOptionsToEngine();
 
         // Carry on where this one stopped, however it was opened.
@@ -1319,6 +1642,7 @@ async function openItem(match) {
         rememberPlayed(match, from);
     } catch (e) {
         if (e.code === "CANCELLED") return;
+        setLoading(false, { failed: true });
         console.error(`Could not load this item: ${e.message}`);
         if (e.code === "SUBS_MISSING") missingSubs.add(missingKey(match));
         setPlayerError(`Could not load ${match.title}: ${e.message}`);
@@ -1551,7 +1875,7 @@ function repaintPreview() {
 
 // ================================================================== PLAYER
 
-$("close-player-btn").onclick = () => engine.stop();
+$("close-player-btn").onclick = () => goBackFromPlayer();
 
 /**
  * Open and play the first item the current source can actually show.

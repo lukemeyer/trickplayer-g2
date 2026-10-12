@@ -8,11 +8,18 @@
 
 import { createPlexSource } from "./plexsource";
 import { normaliseRoutes, raceRoutes, staticBest, rank } from "./plexroutes";
+import { rankSubtitleCandidates } from "./account";
 
 const CLIENT_ID = "trickplayer-g2";
 const APP_NAME = "Trickplayer";
-/** Subtitle codecs the transcoder can hand back as text (F-023). */
-const TEXT_SUBTITLE_CODECS = new Set(["srt", "subrip", "ass", "ssa", "webvtt", "vtt", "mov_text", "text"]);
+/**
+ * Embedded subtitle codecs the transcoder hands back as text (F-023).
+ *
+ * Not ASS/SSA: the server burns a styled track into the picture, or with a
+ * profile that accepts it, copies it — and either way `/subtitles` stays empty.
+ * Measured on For All Mankind S04E09: 0 bytes in 2 minutes.
+ */
+const TEXT_SUBTITLE_CODECS = new Set(["srt", "subrip", "webvtt", "vtt", "mov_text", "text"]);
 
 export function createPlexAccount(saved = {}) {
     let accountToken = saved.accountToken || null;
@@ -365,6 +372,11 @@ export function createPlexAccount(saved = {}) {
             seriesTitle: md.grandparentTitle || "",
             episodeNumber: epLabel,
             episodeName: md.title,
+            // For the episode page on the phone. Every listing carries these.
+            summary: md.summary || "",
+            seasonNumber: isEp ? (md.parentIndex ?? null) : null,
+            episodeIndex: isEp ? (md.index ?? null) : null,
+            year: md.year || null,
             durationMs: md.duration || null,
             kind: "item",
             // Where the SERVER thinks this was left off. Plex sends it with every
@@ -397,7 +409,9 @@ export function createPlexAccount(saved = {}) {
     async function assess(item) {
         const d = await plexFetch(`/library/metadata/${item.ref.key}`);
         const md = d.MediaContainer?.Metadata?.[0];
-        if (!md?.Media) return { img: false, subs: "none", playable: null };
+        if (!md?.Media) return { img: false, subs: "none", playable: null, still: null };
+        // Even an item that cannot play gets its page, picture and all.
+        const itemStill = chooseStill(md, md.Media[0]);
 
         // What the item has, part by part, so an ineligible one can say which
         // half is missing — not only whether it plays.
@@ -406,8 +420,13 @@ export function createPlexAccount(saved = {}) {
         for (const media of md.Media) {
             for (const part of media.Part || []) {
                 const hasImg = !!part.indexes && part.indexes.includes("sd");
-                const subStreams = (part.Stream || []).filter((st) => st.streamType === 3);
-                const sub = subStreams.find((st) => st.codec === "srt" && st.key);
+                // Forced tracks cover only foreign-language moments; an item with
+                // nothing else would play nearly silent.
+                const subStreams = (part.Stream || []).filter((st) => st.streamType === 3 && !st.forced);
+                // The SELECTED file first: after a download the new track is
+                // selected, and an older one Plex still lists may be gone.
+                const sub = subStreams.find((st) => st.codec === "srt" && st.key && st.selected)
+                    || subStreams.find((st) => st.codec === "srt" && st.key);
                 // Looked for even when there is a sidecar: a sidecar Plex still
                 // lists can be gone from disk (a 404), and then the file's own
                 // track is the way to the subtitles.
@@ -418,6 +437,7 @@ export function createPlexAccount(saved = {}) {
                 img = img || hasImg;
                 if (RANK[partSubs] > RANK[subs]) subs = partSubs;
                 if (!hasImg || partSubs === "none") continue;
+                const still = chooseStill(md, media);
                 const embedded = inFile
                     ? { ratingKey: String(md.ratingKey), streamId: inFile.id,
                         cacheId: `${id}:${md.ratingKey}:${inFile.id}` }
@@ -425,12 +445,17 @@ export function createPlexAccount(saved = {}) {
                 return {
                     img: true,
                     subs: partSubs,
+                    still: itemStill,
                     playable: {
                         title: item.title,
                         shortTitle: item.shortTitle || item.title,
                         seriesTitle: item.seriesTitle || "",
                         episodeNumber: item.episodeNumber || "",
                         episodeName: item.episodeName || "",
+                        summary: md.summary || item.summary || "",
+                        seasonNumber: item.seasonNumber ?? (md.type === "episode" ? md.parentIndex ?? null : null),
+                        episodeIndex: item.episodeIndex ?? (md.type === "episode" ? md.index ?? null : null),
+                        year: md.year || item.year || null,
                         durationMs: md.duration || item.durationMs || null,
                         // What the progress report has to name. The playback config
                         // is about BYTES — a part id and a subtitle key — and says
@@ -443,16 +468,103 @@ export function createPlexAccount(saved = {}) {
                         // copies of one formatter have to agree for ever, and the
                         // shape of a badge is a presentation question anyway.
                         badges: [],
+                        // The picture that stands for this item; see chooseStill.
+                        still,
                         config: { timelineRef: part.id, subtitleRef: sub ? sub.key : null, embedded },
                     },
                 };
             }
         }
-        return { img, subs, playable: null };
+        return { img, subs, playable: null, still: itemStill };
     }
 
     async function resolvePlayable(item) {
         return (await assess(item)).playable;
+    }
+
+    /**
+     * The curated picture for an item: an episode's still, a film's backdrop.
+     *
+     * Whichever candidate's usual shape is nearest the video's own. An
+     * episode's `thumb` is its still (16:9); a film's `thumb` is its POSTER
+     * (2:3), far too tall, and its `art` is the backdrop (16:9). Measured
+     * against the server: a still is ~11 KB at 256x144, a backdrop ~6 KB.
+     */
+    function chooseStill(md, media) {
+        const video = Number(media?.aspectRatio) ||
+            (media?.width && media?.height ? media.width / media.height : 16 / 9);
+        const candidates = md.type === "episode"
+            ? [{ path: md.thumb, aspect: 16 / 9 }, { path: md.art, aspect: 16 / 9 }]
+            : [{ path: md.art, aspect: 16 / 9 }, { path: md.thumb, aspect: 2 / 3 }];
+        const best = candidates.filter((c) => c.path)
+            .sort((a, b) => Math.abs(a.aspect - video) - Math.abs(b.aspect - video))[0];
+        return best ? { path: best.path } : null;
+    }
+
+    /**
+     * The still, resized by the server, as a Blob — or null if there is none.
+     *
+     * Fetched with the token as a header (F-021), so the page shows it from a
+     * Blob URL rather than an <img> pointed at a URL with the token in it.
+     */
+    /**
+     * Subtitles the server can find for an item, best first (the server asks
+     * OpenSubtitles through its own agent; the phone only sees this list).
+     *
+     * `perfectMatch` means the file's hash matched this exact video, so its
+     * timing should fit. Forced tracks are left out — they are not dialogue.
+     */
+    async function searchSubtitles(item, language = "en") {
+        const d = await plexFetch(`/library/metadata/${item.ref.key}/subtitles?${new URLSearchParams({ language })}`);
+        const yes = (v) => v === true || v === 1 || v === "1" || v === "true";
+        return (d.MediaContainer?.Stream || [])
+            .filter((c) => c.key && !yes(c.forced))
+            .map((c) => ({
+                key: c.key,
+                title: c.displayTitle || c.title || c.language || "Subtitles",
+                language: c.languageCode || language,
+                provider: c.providerTitle || "",
+                perfect: yes(c.perfectMatch),
+                hearingImpaired: yes(c.hearingImpaired),
+                score: Number(c.score) || 0,
+            }))
+            .sort(rankSubtitleCandidates);
+    }
+
+    /**
+     * Have the SERVER download one and attach it to the item. The request
+     * carries only the candidate's key; the file goes from OpenSubtitles to
+     * the server, never through the phone. Measured: 48 ms, and the track
+     * appears (selected) within ~2 s.
+     */
+    async function downloadSubtitle(item, candidate) {
+        await withRoute(async (base) => {
+            const res = await timedFetch(`${base.replace(/\/$/, "")}/library/metadata/${item.ref.key}/subtitles?${new URLSearchParams({ key: candidate.key })}`, {
+                method: "PUT",
+                headers: { "X-Plex-Token": serverToken, "X-Plex-Client-Identifier": CLIENT_ID },
+            });
+            if (!res.ok) throw new Error(`subtitle download -> HTTP ${res.status}`);
+        });
+        return true;
+    }
+
+    async function fetchStill(playable, width, height) {
+        const path = playable?.still?.path;
+        if (!path) return null;
+        const q = new URLSearchParams({ width: String(width), height: String(height),
+            minSize: "1", upscale: "1", url: path });
+        try {
+            return await withRoute(async (base) => {
+                const res = await timedFetch(`${base.replace(/\/$/, "")}/photo/:/transcode?${q}`, {
+                    headers: { Accept: "image/*", "X-Plex-Token": serverToken },
+                });
+                if (!res.ok) throw new Error(`still -> HTTP ${res.status}`);
+                return await res.blob();
+            });
+        } catch (e) {
+            console.warn(`[plex] no still: ${e.message}`);
+            return null;
+        }
     }
 
     /**
@@ -536,6 +648,7 @@ export function createPlexAccount(saved = {}) {
         get isAuthenticated() { return !!accountToken; },
         get hasServer() { return !!serverUrl; },
         capabilities, beginAuth, listServers, use,
-        listRoots, listChildren, assess, resolvePlayable, openSource, persist, reportProgress,
+        listRoots, listChildren, assess, resolvePlayable, fetchStill,
+        searchSubtitles, downloadSubtitle, openSource, persist, reportProgress,
     };
 }

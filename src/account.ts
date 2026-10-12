@@ -18,6 +18,8 @@
 //                              at once), "embedded" (read from the media file on
 //                              first play), "none"; playable: Playable | null
 //   resolvePlayable(item)   → Playable | null     assess(item).playable
+//   searchSubtitles(item)   → [Candidate]         what the SERVER can download
+//   downloadSubtitle(item, candidate)             the server fetches and attaches it
 //   openSource(playable)    → MediaSource         hands the engine src/source.ts
 //   persist()               → JSON                what re-creates this account
 //
@@ -37,3 +39,14 @@
 // is only WHERE the code is entered, which is why `enterAt` is a string the
 // provider writes rather than something the UI knows.
 export const ACCOUNT_SEAM_VERSION = 1;
+
+/**
+ * Subtitle candidates, best first: a perfect (hash) match before a guess, a
+ * plain track before one for the hearing impaired (it describes sounds too),
+ * then the more downloaded. Shared, so both providers order the same way.
+ */
+export function rankSubtitleCandidates(a, b) {
+    return (b.perfect - a.perfect)
+        || (a.hearingImpaired - b.hearingImpaired)
+        || (b.score - a.score);
+}

@@ -176,6 +176,28 @@ import * as store from "./store";
             const subDiv = document.getElementById("subtitle-overlay");
             const timeline = document.getElementById("timeline");
             const playBtn = document.getElementById("play-btn");
+
+            // The transport buttons carry an icon as well as a word.
+            const ICONS = {
+                Play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>',
+                Pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect fill="currentColor" x="6" y="5" width="4" height="14" rx="1"/><rect fill="currentColor" x="14" y="5" width="4" height="14" rx="1"/></svg>',
+                Back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7"/></svg>',
+            };
+            function setPlayLabel(label) {
+                if (!playBtn) return;
+                playBtn.innerHTML = `${ICONS[label] || ""}<span>${label}</span>`;
+            }
+            setPlayLabel("Play");
+            {
+                // "Back", not "Stop": it ends playback AND returns to the list,
+                // and the second half is what the wearer is asking for.
+                const stopBtn = document.getElementById("close-player-btn");
+                if (stopBtn) stopBtn.innerHTML = `${ICONS.Back}<span>Back</span>`;
+                const npBack = document.getElementById("np-back");
+                if (npBack) npBack.innerHTML = `${ICONS.Back}<span>Back</span>`;
+                const npPlay = document.getElementById("np-play");
+                if (npPlay) npPlay.innerHTML = `${ICONS.Play}<span>Play</span>`;
+            }
             const timeDisplay = document.getElementById("time-display");
 
             // --- BIF/SUBTITLE LOAD PROGRESS BAR ---
@@ -197,6 +219,10 @@ import * as store from "./store";
 
             // Pass fraction=null for an indeterminate bar (unknown total size).
             function setLoadProgress(fraction, label) {
+                if (glassesLoading) {
+                    if (label) glassesLoading.label = label;
+                    showGlassesLoading(glassesLoadingMessage(glassesLoading.label), fraction);
+                }
                 if (!loadProgressContainer) return;
                 if (label && loadProgressLabel)
                     loadProgressLabel.textContent = label;
@@ -210,6 +236,7 @@ import * as store from "./store";
             }
 
             function hideLoadProgress() {
+                endGlassesLoading();
                 if (!loadProgressContainer) return;
                 loadProgressContainer.classList.add("hidden");
                 loadProgressContainer.classList.remove("indeterminate");
@@ -505,11 +532,125 @@ import * as store from "./store";
                 if (!bridgeInstance || !title) return;
                 if (showingList) applyPage("player").catch(() => {});
                 ble.forgetText();
-                sendSubtitleToGlasses(`Loading ${title}`).catch(() => {});
+                glassesLoading = { title, sentAt: 0, timer: null, text: "" };
+                // The empty frame, not the last item's final picture, above it.
+                showIdleSkeleton().catch(() => {});
+                showGlassesLoading("Loading", null);
             }
+
+            // --- GLASSES LOADING SCREEN -------------------------------------
+            //
+            // Three lines under the (empty) picture while an item loads: what
+            // is coming, what is happening, how far along. The phone has a
+            // progress bar; the wearer is looking at the glasses, and a first
+            // play that reads subtitles out of the file can take a minute.
+            //
+            // Text writes cost a BLE round trip, so the screen is redrawn at
+            // most once a second, and only when what it says has changed.
+            let glassesLoading = null;
+            const LOADING_REDRAW_MS = 1000;
+            // The bar spans the picture above it: 12 cells of 20px is 240 of
+            // the picture's 256px. The percentage goes on the message line, so
+            // the bar's ends line up with the picture's.
+            const BAR_CELLS = 12;
+            /** The picture's centre, in the subtitle container's own x: (576/2) - 72. */
+            const PICTURE_CENTRE_X = 576 / 2 - 72;
+            const SPACE_PX = getTextWidth(" ") || 5;
+
+            function fitGlassesLine(text) {
+                if (fitsSubtitleLine(text)) return text;
+                let t = text;
+                while (t.length > 1 && !fitsSubtitleLine(`${t}…`)) t = t.slice(0, -1);
+                return `${t.trimEnd()}…`;
+            }
+
+            /**
+             * Centre a line under the picture. The container is left-aligned
+             * and has no alignment setting, so the line is led with spaces,
+             * measured in the firmware's own font.
+             */
+            function centreUnderPicture(text) {
+                const w = getTextWidth(text);
+                const lead = Math.max(0, Math.round((PICTURE_CENTRE_X - w / 2) / SPACE_PX));
+                return " ".repeat(lead) + text;
+            }
+
+            function glassesBar(fraction) {
+                const f = Math.max(0, Math.min(1, fraction));
+                const filled = Math.round(f * BAR_CELLS);
+                // █ and ─ are in the firmware font (▓ and ░ are not); a solid
+                // block reads as done next to a thin line, where ━ did not.
+                return `${"█".repeat(filled)}${"─".repeat(BAR_CELLS - filled)}`;
+            }
+
+            /** What the phone's label means, said briefly for the glasses. */
+            function glassesLoadingMessage(label) {
+                if (/extract/i.test(label || "")) {
+                    const left = /·\s*(.+ left)/.exec(label || "");
+                    // Short: the percentage joins this line too.
+                    return left ? `Extracting · ${left[1]}` : "Extracting subtitles";
+                }
+                if (/subtitle/i.test(label || "")) return "Loading subtitles";
+                if (/index/i.test(label || "")) return "Loading pictures";
+                if (/connect/i.test(label || "")) return "Connecting";
+                return "Loading";
+            }
+
+            function showGlassesLoading(message, fraction) {
+                const gl = glassesLoading;
+                if (!gl || !bridgeInstance) return;
+                const pct = fraction == null ? "" : ` · ${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
+                const text = [
+                    centreUnderPicture(fitGlassesLine(gl.title)),
+                    centreUnderPicture(fitGlassesLine(`${message}${pct}`)),
+                    fraction == null ? "" : centreUnderPicture(glassesBar(fraction)),
+                ].filter(Boolean).join("\n");
+                if (text === gl.text) return;
+                gl.pending = text;
+                const send = () => {
+                    gl.timer = null;
+                    if (glassesLoading !== gl || gl.pending === gl.text) return;
+                    gl.text = gl.pending;
+                    gl.sentAt = Date.now();
+                    sendSubtitleToGlasses(gl.text).catch(() => {});
+                };
+                const wait = LOADING_REDRAW_MS - (Date.now() - gl.sentAt);
+                if (wait <= 0) send();
+                else if (!gl.timer) gl.timer = setTimeout(send, wait);
+            }
+
+            function endGlassesLoading() {
+                if (glassesLoading?.timer) clearTimeout(glassesLoading.timer);
+                glassesLoading = null;
+            }
+
+            /** The block of subtitle text last sent while playing; the preview shows it. */
+            let previewBlockText = "";
 
             /** Which load is current; see prepareItem. */
             let loadSeq = 0;
+
+            /** "about 40 s", "about 2 min" — rounded so it does not jitter. */
+            function aboutTime(seconds) {
+                if (seconds < 10) return "a few seconds";
+                if (seconds < 60) return `about ${Math.ceil(seconds / 10) * 10} s`;
+                return `about ${Math.round(seconds / 60)} min`;
+            }
+
+            /**
+             * Abandon a load in progress and stay where we are: the extraction
+             * stops and its server session ends (the source's release), and
+             * whatever it finishes later is dropped. Unlike stop(), nothing
+             * navigates — the episode page stays up.
+             */
+            export function cancelLoad() {
+                loadSeq++;
+                if (source && source.release) source.release();
+                source = null;
+                hideLoadProgress();
+                if (bridgeInstance) sendSubtitleToGlasses("Cancelled").catch(() => {});
+                noteLifecycle("load-cancelled", {});
+            }
 
             async function prepareItem(item) {
                 // Stop whatever is running FIRST. Choosing something from the
@@ -520,7 +661,7 @@ import * as store from "./store";
                     isPlaying = false;
                     stopScenePipeline();
                     try { silentAudio.pause(); } catch (e) {}
-                    playBtn.innerText = "Play";
+                    setPlayLabel("Play");
                     ui.playing(false);
                 }
                 document.getElementById("playing-title").textContent = item.title;
@@ -563,8 +704,26 @@ import * as store from "./store";
                 // A provider that has to extract an embedded track (Plex,
                 // F-023) reports how far the server has got — the only long
                 // wait in loading, up to a minute or two on first play.
+                // Only an extraction reports progress, so the first report is
+                // the moment to put the item's still on the glasses: there is a
+                // wait worth filling, and nothing else wants the link. A
+                // subtitle file, or a track already read, loads too fast for a
+                // picture to be anything but a delay to the first frame.
+                let stillSent = false;
+                let extractStart = 0;
                 const cues = await source.cues((f) => {
-                    if (myLoad === loadSeq) setLoadProgress(0.2 + 0.7 * f, "Reading subtitles from the file (first play only)...");
+                    if (myLoad !== loadSeq) return;
+                    // Time left, once the pace is known: requests run at a
+                    // steady rate per file (0.03 s a segment on one, 0.45 s on
+                    // another), and the manifest says how many there are.
+                    if (!extractStart) extractStart = Date.now();
+                    const elapsed = (Date.now() - extractStart) / 1000;
+                    const left = f >= 0.05 && elapsed >= 3 ? (elapsed * (1 - f)) / f : null;
+                    setLoadProgress(0.2 + 0.7 * f, `Extracting subtitles${left == null ? "…" : ` · ${aboutTime(left)} left`}`);
+                    if (!stillSent && item.still) {
+                        stillSent = true;
+                        showStillOnGlasses(item.still, () => myLoad === loadSeq).catch(() => {});
+                    }
                 });
                 stillCurrent();
                 subtitles = cues;
@@ -1573,6 +1732,27 @@ import * as store from "./store";
                 console.log(`[Idle] frame ${r.ok ? "shown" : `failed (${r.reason})`}`);
             }
 
+            /**
+             * An item's still in the picture area, while its subtitles load.
+             * Same preparation as a playback frame — letterboxed, dithered —
+             * and sent once. `current` says whether that load is still wanted.
+             */
+            async function showStillOnGlasses(fetchStill, current) {
+                if (!bridgeInstance) return;
+                const blob = await fetchStill();
+                if (!blob || !current() || !glassesLoading) return;
+                const bytes = await resizeAndPrepareImage(blob, GLASSES_IMAGE_WIDTH, GLASSES_IMAGE_HEIGHT, {});
+                if (!current() || !glassesLoading) return;
+                const payload = typeof ImageRawDataUpdate !== "undefined"
+                    ? new ImageRawDataUpdate({ containerID: 2, containerName: "g2_bif", imageData: bytes })
+                    : { containerID: 2, containerName: "g2_bif", imageData: bytes };
+                const r = await ble.sendImage(
+                    async (pl) => (await bridgeInstance.updateImageRawData(pl)) === "success",
+                    payload, { idle: true, bytes: bytes.byteLength },
+                );
+                console.log(`[Loading] still ${r.ok ? "shown" : `failed (${r.reason})`} (${(bytes.byteLength / 1024).toFixed(1)} KB)`);
+            }
+
             async function createGlassesContainers() {
                 return await bridgeInstance.createStartUpPageContainer({
                     containerTotalNum: 2,
@@ -1929,6 +2109,7 @@ import * as store from "./store";
                 }
 
                 scenePipelineRunning = true;
+                previewBlockText = "";
                 sceneAbortController = new AbortController();
                 const signal = sceneAbortController.signal;
 
@@ -2031,6 +2212,7 @@ import * as store from "./store";
 
                             // Update HTML to track this block's start time
                             currentTimeMs = block.startMs;
+                            previewBlockText = block.text;
                             updateUI();
 
                             // Send to glasses (sendSubtitleToGlasses deduplicates automatically)
@@ -2065,6 +2247,8 @@ import * as store from "./store";
                                 !signal.aborted &&
                                 nextStartMs - block.endMs > SUBTITLE_CLEAR_GAP_MS
                             ) {
+                                previewBlockText = "";
+                                updateUI();
                                 try {
                                     await sendSubtitleToGlasses(" ");
                                 } catch (e) {}
@@ -2079,6 +2263,8 @@ import * as store from "./store";
                         //     long as the quiet lasted — the wearer reads a line
                         //     that belongs to a different moment.
                         if (!blocks.length && !signal.aborted) {
+                            previewBlockText = "";
+                            updateUI();
                             try { await sendSubtitleToGlasses(" "); } catch (e) {}
                         }
 
@@ -2109,7 +2295,7 @@ import * as store from "./store";
                     if (pipelinePos >= durationMs && !signal.aborted) {
                         isPlaying = false;
                         currentTimeMs = 0;
-                        playBtn.innerText = "Play";
+                        setPlayLabel("Play");
                         try {
                             silentAudio.pause();
                         } catch (e) {}
@@ -2245,17 +2431,23 @@ import * as store from "./store";
                     }
                 }
 
-                // Find subtitle matching currentTimeMs for local display
-                const sub = subtitles.find(
+                // While the pipeline plays, the preview shows exactly what the
+                // glasses were sent: a BLOCK of merged cues. Looking up the one
+                // cue at `currentTimeMs` showed only a block's first cue — the
+                // clock stands at the block's start while it is held — so the
+                // rest of every block seemed to be skipped. Scrubbing with
+                // nothing playing still looks the cue up by time.
+                const sub = scenePipelineRunning ? null : subtitles.find(
                     (s) =>
                         currentTimeMs >= s.startMs && currentTimeMs <= s.endMs,
                 );
+                const previewText = scenePipelineRunning ? previewBlockText : (sub ? sub.text : "");
 
                 // Cue text is plain text with real newlines now that cleaning
                 // happens at parse time (F-011), so it is escaped and its
                 // newlines turned into <br> here rather than trusted as markup.
-                const previewHtml = sub
-                    ? escapeHtml(sub.text).replace(/\n/g, "<br>")
+                const previewHtml = previewText
+                    ? escapeHtml(previewText).replace(/\n/g, "<br>")
                     : "";
                 if (subDiv.innerHTML !== previewHtml) {
                     subDiv.innerHTML = previewHtml;
@@ -2294,7 +2486,7 @@ import * as store from "./store";
                         noteLifecycle("playback-ended", { by: "clock" });
                         isPlaying = false;
                         currentTimeMs = 0;
-                        playBtn.innerText = "Play";
+                        setPlayLabel("Play");
                         stopClock();
                         try {
                             silentAudio.pause();
@@ -2336,7 +2528,7 @@ import * as store from "./store";
                 noteLifecycle("app-cleanup", { wasPlaying: isPlaying });
                 if (typeof stopScenePipeline === 'function') stopScenePipeline();
                 isPlaying = false;
-                playBtn.innerText = "Play";
+                setPlayLabel("Play");
                 try { silentAudio.pause(); } catch (e) {}
             }
 
@@ -2375,7 +2567,7 @@ import * as store from "./store";
                 if (!bifs || bifs.length === 0) return;
                 isPlaying = true;
                 skipNextQualitySample = true;
-                playBtn.innerText = "Pause";
+                setPlayLabel("Pause");
                 silentAudio.play().catch(() => {});
                 const title =
                     document.getElementById("playing-title")?.textContent ||
@@ -2620,7 +2812,7 @@ import * as store from "./store";
                         if (state.isPlaying && bifs.length > 0) {
                             isPlaying = true;
                             backgroundedWhilePlaying = false;
-                            playBtn.innerText = "Pause";
+                            setPlayLabel("Pause");
                             const title =
                                 document.getElementById("playing-title")
                                     ?.textContent || "media";
@@ -3217,7 +3409,7 @@ import * as store from "./store";
                 // underneath it.
                 if (showingList) applyPage("player").catch(() => {});
                 backgroundedWhilePlaying = false;
-                playBtn.innerText = "Pause";
+                setPlayLabel("Pause");
                 silentAudio.play().catch(() => {});
                 setStatus(`Now playing: ${currentItem?.title || "media"}`, "active");
                 ui.playing(true);
@@ -3229,7 +3421,7 @@ import * as store from "./store";
                 if (!isPlaying) return;
                 noteLifecycle("playback-stopped", { by: "pause" });
                 isPlaying = false;
-                playBtn.innerText = "Play";
+                setPlayLabel("Play");
                 stopScenePipeline();
                 try { silentAudio.pause(); } catch (e) {}
                 setStatus(`Paused: ${currentItem?.title || "media"}`, "active");
@@ -3273,7 +3465,7 @@ import * as store from "./store";
                 stopClock();
                 hideLoadProgress();
                 clearFrameCache();
-                playBtn.innerText = "Play";
+                setPlayLabel("Play");
                 try { silentAudio.pause(); } catch (e) {}
                 if (bridgeInstance) sendSubtitleToGlasses("Stream terminated.").catch(() => {});
                 loadSeq++;

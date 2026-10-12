@@ -222,13 +222,63 @@
       <button class="btn-secondary" id="list-back">Back</button>
     </div>
 
+    <!-- Subtitles the server can download for an item, over its page. -->
+    <dialog class="settings-dialog" id="subs-dialog">
+      <div class="dialog-card">
+        <div class="dialog-head">
+          <h2>Find subtitles</h2>
+          <button class="icon-btn" id="subs-close" aria-label="Close" title="Close">✕</button>
+        </div>
+        <p class="text-muted" id="subs-status"></p>
+        <div id="subs-results"></div>
+        <button class="btn-secondary" id="subs-cancel">Cancel</button>
+      </div>
+    </dialog>
+
     <!-- ============================ PLAYER ============================= -->
     <div class="section hidden" id="panel-player">
-      <h2 id="playing-title">…</h2>
+      <!-- Like an episode page: what this is, then how to play it. The engine
+           still writes its status text into #playing-title, so it stays. -->
+      <div class="now-playing">
+        <div class="np-head">
+          <div class="np-text">
+            <div class="np-show" id="np-show"></div>
+            <h2 class="np-title" id="np-title">…</h2>
+            <div class="np-meta" id="np-meta"></div>
+          </div>
+          <img class="np-still hidden" id="np-still" alt="" />
+        </div>
+        <!-- An item whose subtitles are only inside the video: a choice, made
+             here, between reading them out and downloading some. -->
+        <div class="np-embedded hidden" id="np-embedded">
+          <p class="np-embedded-lead">This video contains embedded subtitles. To play the video, the subtitles need to be extracted or downloaded.</p>
+          <div class="np-choices">
+            <div class="np-choice">
+              <button class="btn-primary" id="np-extract">Extract</button>
+              <p>Extraction may take a few seconds to a few minutes depending on the video.</p>
+            </div>
+            <div class="np-choice">
+              <button class="btn-secondary" id="np-download">Download</button>
+              <p>Downloads happen through the subtitle search on your media server.</p>
+            </div>
+          </div>
+        </div>
+        <p class="np-summary hidden" id="np-summary"></p>
+        <!-- An episode that cannot play yet still gets its page: why not, and
+             what can be done about it. -->
+        <p class="np-note hidden" id="np-note"></p>
+        <div class="np-actions hidden" id="np-actions">
+          <button class="btn-primary btn-icon hidden" id="np-play">Play</button>
+          <button class="btn-secondary btn-icon hidden" id="np-find-subs">Find subtitles</button>
+          <button class="btn-secondary btn-icon" id="np-back">Back</button>
+        </div>
+      </div>
+      <h2 class="hidden" id="playing-title">…</h2>
 
       <div class="load-progress-container hidden" id="load-progress-container">
         <div class="load-progress-label" id="load-progress-label"></div>
         <div class="load-progress-track"><div class="load-progress-fill" id="load-progress-fill"></div></div>
+        <button class="btn-secondary load-cancel hidden" id="load-cancel">Cancel</button>
       </div>
 
       <!-- An item that cannot be loaded used to say so in the preview note,
@@ -237,20 +287,26 @@
            looks exactly like one that is still loading. -->
       <p class="player-error hidden" id="player-error"></p>
 
-      <div id="player-container">
-        <img id="seek-image" alt="" />
-        <div id="subtitle-overlay"></div>
-      </div>
-
       <div id="controls">
-        <button class="btn-secondary" id="play-btn">Play</button>
-        <div class="timeline-row">
+        <div class="transport">
+          <button class="btn-secondary btn-icon" id="play-btn">Play</button>
+          <button class="btn-secondary btn-icon" id="close-player-btn">Back</button>
+        </div>
+        <div class="timeline-row" id="timeline-row">
           <input type="range" id="timeline" min="0" max="0" value="0" />
           <span id="time-display">0:00</span>
         </div>
       </div>
 
-      <button class="btn-danger" id="close-player-btn">Stop</button>
+      <!-- What the glasses are showing, for checking. Not the point of the
+           screen, so it starts folded away. -->
+      <details class="preview-section" id="preview-section">
+        <summary>Preview</summary>
+        <div id="player-container">
+          <img id="seek-image" alt="" />
+          <div id="subtitle-overlay"></div>
+        </div>
+      </details>
     </div>
 
     <script type="module" src="/src/ui.ts"></script>
