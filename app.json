@@ -23,8 +23,7 @@
     {
       "version": "0.9.37",
       "notes": [
-        "The subtitle search now shows each file's release name, so you can tell matching files apart.",
-        "Subtitle files named for a different episode are marked and moved to the bottom of the list, even when the search calls them a match."
+        "The subtitle search now shows each file's release name, so you can tell matching files apart."
       ]
     }
   ],
