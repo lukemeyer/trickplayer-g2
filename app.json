@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.33",
+  "version": "0.9.34",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,10 +21,12 @@
   ],
   "changelog": [
     {
-      "version": "0.9.33",
+      "version": "0.9.34",
       "notes": [
-        "Removed references to placeholder servers.",
-        "When adding a Jellyfin server the app now provides better feedback if it can't connect."
+        "Plex episodes whose subtitles are inside the video file now play. The first play reads the subtitles out through your server, which takes a few seconds to a minute or so; after that they load at once.",
+        "Every episode is now listed, with badges showing what will play: SUBS in green plays straight away, amber reads its subtitles from the file on first play, and a crossed-out SUBS or IMG shows what an episode is missing.",
+        "Long subtitle lines are no longer cut off on the glasses. Lines are measured to fit, and a long subtitle is split across screens instead of losing its last lines.",
+        "Jellyfin items with only image-based subtitles are now shown as missing subtitles instead of failing when played."
       ]
     }
   ],
