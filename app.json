@@ -2,7 +2,7 @@
   "package_id": "com.elsethenif.trickplayer",
   "edition": "202601",
   "name": "Trickplayer",
-  "version": "0.9.35",
+  "version": "0.9.36",
   "min_sdk_version": "0.0.14",
   "min_app_version": "0.0.10",
   "description": "Plex/Jellyfin player as synced thumbnails + subs",
@@ -21,10 +21,14 @@
   ],
   "changelog": [
     {
-      "version": "0.9.35",
+      "version": "0.9.36",
       "notes": [
-        "Leaving an episode while its subtitles are being read now stops the work on your server, so the next episode loads at full speed.",
-        "Episodes your server can't copy quickly now read their subtitles much faster."
+        "Episodes now open on their own page, with the episode's picture, description, and season and episode number. Stop is now Back.",
+        "Episodes without subtitles can get some: Find subtitles searches through your media server, which downloads the one you pick.",
+        "For episodes with subtitles inside the video, you choose: extract them, or download some instead. Extraction shows how long is left and can be cancelled.",
+        "While an episode loads, the glasses show its title, what's happening and a progress bar.",
+        "The episode list keeps its place when you go back.",
+        "Fixed the phone preview skipping some subtitle lines."
       ]
     }
   ],
