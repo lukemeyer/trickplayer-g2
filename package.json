@@ -21,7 +21,8 @@
     "store-check": "node tools/store-check.mjs"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.14"
+    "@evenrealities/even_hub_sdk": "^0.0.14",
+    "@evenrealities/pretext": "^0.1.4"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.12",

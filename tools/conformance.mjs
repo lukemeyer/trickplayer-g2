@@ -192,10 +192,16 @@ const jellyfin = await loadTs("src/jellyfinsource.ts");
   check("scene", "no size hints: differs from the filtered run",
     degraded.length > built.length, true);
 }
-skip("cues", "wrap / paginate",
-  "F-002 not implemented — groupSceneSubtitles merges cues to fill the " +
-  "container but estimates lines rather than wrapping, and clips rather " +
-  "than paginating.");
+// F-002: wrap and paginate, losing no word. The corpus measures in
+// characters; the glasses pass a pixel measure into the same code.
+{
+  const layout = await loadTs("src/cuelayout.ts");
+  for (const c of readJson("cues/layout.cases.json").cases) {
+    const got = layout.layoutCue(c.text, layout.fitsChars(c.maxCharsPerLine), c.maxLinesPerPage);
+    check("cues", `${c.name}: lines`, got.lines, c.expectLines);
+    check("cues", `${c.name}: pages`, got.pages, c.expectPages);
+  }
+}
 
 // -------------------------------------------------------------------- real
 

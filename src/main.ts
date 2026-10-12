@@ -9,6 +9,8 @@ import { createBleTransport } from "./bletransport";
 import { toGlassesLevels, expandBlocks, PALETTES } from "./pixels";
 import { createQualityController, resolvePictureLevel } from "./quality";
 import { encodeGreyPng } from "./png";
+import { getTextWidth } from "@evenrealities/pretext";
+import { wrapKeepingBreaks, paginate } from "./cuelayout";
 import * as store from "./store";
 
             // --- UI HOOKS ---
@@ -97,9 +99,15 @@ import * as store from "./store";
             // The G2 subtitle container is 432×132 px. We merge consecutive SRT
             // cues into one on-screen block so the user has more to read while
             // the (slow) next image transfers — without overflowing the box.
-            // Tune these against the simulator / real hardware if text clips.
-            const GLASSES_MAX_LINES = 5; // ~26px line height into a 132px tall container
-            const GLASSES_CHARS_PER_LINE = 32; // ~432px wide; conservative wrap estimate
+            //
+            // Lines are MEASURED, with the firmware's own font metrics
+            // (@evenrealities/pretext), not estimated. The old guess was 32
+            // characters a line and five 26px lines; the firmware's line is
+            // 27px, so 132px holds four, and a fifth line was always cut off.
+            const SUBS_WIDTH = 432;
+            const SUBS_HEIGHT = 132;
+            const GLASSES_LINE_HEIGHT = 27;
+            const GLASSES_MAX_LINES = Math.floor(SUBS_HEIGHT / GLASSES_LINE_HEIGHT); // 4
             const GLASSES_MAX_BLOCK_GAP_MS = 4000; // don't merge cues separated by a longer silence
             const SUBTITLE_CLEAR_GAP_MS = 1500; // only blank the screen if the next text is this far off
             const IMAGE_SEND_MAX_ATTEMPTS = 3; // retry a failed BLE image send before giving up on the frame
@@ -426,8 +434,8 @@ import * as store from "./store";
                     glassesSubtitleContainer = {
                         xPosition: 72, // Centered horizontally: (576 - 432) / 2
                         yPosition: 156, // Top = image bottom (144) + 12px padding (half text line)
-                        width: 432, // 75% of 576 screen width
-                        height: 132, // Fill remaining space: 288 - 156 = 132
+                        width: SUBS_WIDTH, // 75% of 576 screen width
+                        height: SUBS_HEIGHT, // Fill remaining space: 288 - 156 = 132
                         borderWidth: 0,
                         containerID: 1,
                         containerName: "g2_subs",
@@ -1005,16 +1013,33 @@ import * as store from "./store";
                 return String(text).trim();
             }
 
-            // Estimate how many rendered lines a block of text occupies on the
-            // glasses, accounting for explicit newlines and word-wrap at the
-            // container width.
-            function estimateGlassesLines(text) {
-                let count = 0;
-                for (const line of text.split("\n")) {
-                    const len = line.trim().length;
-                    count += len === 0 ? 1 : Math.ceil(len / GLASSES_CHARS_PER_LINE);
+            /** Whether a line fits the subtitle container, by the firmware's metrics. */
+            const fitsSubtitleLine = (line) => getTextWidth(line) <= SUBS_WIDTH;
+
+            // Lay each cue out into measured lines (F-002), and split one too
+            // long for the screen into pages that share its time — never cut
+            // off. Pages get time in proportion to how much they say.
+            function pageSceneSubtitles(subs) {
+                const pieces = [];
+                for (const sub of subs) {
+                    const text = cleanSubText(sub.text);
+                    if (!text) continue;
+                    const span = sub.endMs - sub.startMs;
+                    if (span <= 0) continue;
+
+                    const pages = paginate(wrapKeepingBreaks(text, fitsSubtitleLine), GLASSES_MAX_LINES);
+                    const weights = pages.map((p) => Math.max(1, p.join(" ").length));
+                    const total = weights.reduce((a, w) => a + w, 0);
+                    let at = sub.startMs;
+                    pages.forEach((lines, i) => {
+                        const end = i === pages.length - 1
+                            ? sub.endMs
+                            : Math.round(at + (span * weights[i]) / total);
+                        pieces.push({ lines, startMs: at, endMs: end });
+                        at = end;
+                    });
                 }
-                return count;
+                return pieces;
             }
 
             // Merge consecutive SRT cues into multi-line blocks that fit the
@@ -1026,41 +1051,27 @@ import * as store from "./store";
                 const groups = [];
                 let current = null;
 
-                for (const sub of subs) {
-                    const text = cleanSubText(sub.text);
-                    if (!text) continue;
-                    if (sub.endMs - sub.startMs <= 0) continue;
-
-                    const lines = estimateGlassesLines(text);
-
+                for (const piece of pageSceneSubtitles(subs)) {
                     // Merge into the current block only if it still fits the line
                     // budget AND follows closely enough that showing it now isn't
                     // a spoiler for a much later line.
-                    const gap = current ? sub.startMs - current.endMs : 0;
+                    const gap = current ? piece.startMs - current.endMs : 0;
                     if (
                         current &&
-                        current.lineCount + lines <= GLASSES_MAX_LINES &&
+                        current.lines.length + piece.lines.length <= GLASSES_MAX_LINES &&
                         gap <= GLASSES_MAX_BLOCK_GAP_MS
                     ) {
-                        // Append to the in-progress block
-                        current.texts.push(text);
-                        current.lineCount += lines;
-                        current.endMs = Math.max(current.endMs, sub.endMs);
+                        current.lines.push(...piece.lines);
+                        current.endMs = Math.max(current.endMs, piece.endMs);
                     } else {
-                        // Flush the previous block and start a new one
                         if (current) groups.push(current);
-                        current = {
-                            texts: [text],
-                            lineCount: lines,
-                            startMs: sub.startMs,
-                            endMs: sub.endMs,
-                        };
+                        current = { lines: [...piece.lines], startMs: piece.startMs, endMs: piece.endMs };
                     }
                 }
                 if (current) groups.push(current);
 
                 return groups.map((g) => ({
-                    text: g.texts.join("\n"),
+                    text: g.lines.join("\n"),
                     startMs: g.startMs,
                     endMs: g.endMs,
                 }));

@@ -736,7 +736,9 @@ if (harness.has("logging") && harness.get("logging") !== "0") {
     setTimeout(() => openDebugTools(), 1500);
 }
 // `?play=1` starts the first playable item, so a harness can measure the real
-// pipeline rather than an idle page.
+// pipeline rather than an idle page. `?play=<text>` starts the first playable
+// item of the first library show or film whose title contains the text, for a
+// harness that needs particular content (say, a dialogue-heavy show).
 // `?demorecent=1` draws the glasses picker with placeholder titles. The
 // simulator has no server to sign into, and the list container is a piece of
 // glasses UI that cannot be checked any other way.
@@ -777,7 +779,8 @@ if (harness.get("addsource")) {
 }
 
 if (harness.has("play")) {
-    setTimeout(() => { firstPlayable(); }, 2500);
+    const want = harness.get("play");
+    setTimeout(() => { firstPlayable(want && want !== "1" ? want : null); }, 2500);
 }
 
 $("add-source-btn").onclick = () => startAddSource();
@@ -1434,10 +1437,15 @@ $("close-player-btn").onclick = () => engine.stop();
  * rather than a shortcut, because a measurement of a different path would
  * measure the wrong thing.
  */
-export async function firstPlayable() {
+export async function firstPlayable(titleMatch = null) {
     if (!account) return null;
+    const matches = (c) => !titleMatch || c.title.toLowerCase().includes(titleMatch.toLowerCase());
     for (const root of await account.listRoots()) {
-        const children = await account.listChildren(root.ref);
+        if (titleMatch && root.ref.kind !== "section") continue;
+        let children = await account.listChildren(root.ref);
+        const show = children.find((c) => c.kind === "container" && matches(c));
+        if (show) children = await account.listChildren(show.ref);
+        else if (titleMatch) children = children.filter(matches);
         for (const item of children.filter((c) => c.kind === "item")) {
             const p = await resolveCached(item).catch(() => null);
             if (!p) continue;
