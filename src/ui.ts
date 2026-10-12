@@ -1496,12 +1496,16 @@ async function openSubsDialog() {
         const b = document.createElement("button");
         b.className = "subs-candidate";
         const meta = [
-            c.perfect ? "Perfect match" : "May not be in sync",
+            c.mismatch ? `Looks like a different episode${c.nameTag ? ` (${c.nameTag})` : ""}`
+                : c.perfect ? "Perfect match" : "May not be in sync",
+            c.language,
             c.hearingImpaired ? "describes sounds (SDH)" : "",
-            c.provider,
             c.score ? `${c.score.toLocaleString()} downloads` : "",
         ].filter(Boolean).join(" · ");
-        b.innerHTML = `<span><div class="sc-title">${esc(c.title)}</div><div class="sc-meta">${esc(meta)}</div></span>` +
+        // The release name first: it is what tells two "English" files apart,
+        // and what gives away one named for another episode.
+        b.innerHTML = `<span class="sc-text"><div class="sc-title">${esc(c.name || c.language || "Subtitles")}</div>` +
+            `<div class="sc-meta${c.mismatch ? " sc-warn" : ""}">${esc(meta)}</div></span>` +
             (c.perfect ? `<span class="tag-badge">Match</span>` : "");
         b.onclick = () => pickSubtitle(item, c, b, myGen);
         results.appendChild(b);

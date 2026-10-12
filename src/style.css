@@ -1423,7 +1423,10 @@ dialog.settings-dialog::backdrop {
   text-align: left;
 }
 .subs-candidate:hover { border-color: rgba(0, 230, 118, 0.4); }
-.subs-candidate .sc-title { font-size: 0.92rem; color: var(--text-primary); }
+.subs-candidate .sc-text { min-width: 0; }
+/* Release names are long dotted strings: let them break anywhere. */
+.subs-candidate .sc-title { font-size: 0.88rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.subs-candidate .sc-meta.sc-warn { color: var(--color-warning); }
 .subs-candidate .sc-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
 .subs-candidate.busy { opacity: 0.6; pointer-events: none; }
 

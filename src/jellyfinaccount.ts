@@ -7,7 +7,7 @@
 // before anything can be authenticated (UI.md §1).
 
 import { createJellyfinSource } from "./jellyfinsource";
-import { rankSubtitleCandidates } from "./account";
+import { rankSubtitleCandidates, checkCandidateName } from "./account";
 
 const CLIENT = "Trickplayer";
 const DEVICE = "even-g2";
@@ -336,15 +336,21 @@ export function createJellyfinAccount(saved = {}) {
         const list = await req(`/Items/${item.ref.id}/RemoteSearch/Subtitles/${encodeURIComponent(language)}`);
         return (list || [])
             .filter((c) => c.Id && !c.Forced)
-            .map((c) => ({
-                id: c.Id,
-                title: c.Name || c.ThreeLetterISOLanguageName || "Subtitles",
-                language: c.ThreeLetterISOLanguageName || language,
-                provider: c.ProviderName || "",
-                perfect: !!c.IsHashMatch,
-                hearingImpaired: !!c.HearingImpaired,
-                score: Number(c.DownloadCount) || 0,
-            }))
+            .map((c) => {
+                const name = c.Name || "";
+                const check = checkCandidateName(name, item);
+                return {
+                    id: c.Id,
+                    name,
+                    language: c.ThreeLetterISOLanguageName || language,
+                    provider: c.ProviderName || "",
+                    perfect: !!c.IsHashMatch && !check.mismatch,
+                    hearingImpaired: !!c.HearingImpaired,
+                    score: Number(c.DownloadCount) || 0,
+                    mismatch: check.mismatch,
+                    nameTag: check.tag,
+                };
+            })
             .sort(rankSubtitleCandidates);
     }
 

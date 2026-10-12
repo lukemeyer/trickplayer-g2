@@ -8,7 +8,7 @@
 
 import { createPlexSource } from "./plexsource";
 import { normaliseRoutes, raceRoutes, staticBest, rank } from "./plexroutes";
-import { rankSubtitleCandidates } from "./account";
+import { rankSubtitleCandidates, checkCandidateName } from "./account";
 
 const CLIENT_ID = "trickplayer-g2";
 const APP_NAME = "Trickplayer";
@@ -519,15 +519,24 @@ export function createPlexAccount(saved = {}) {
         const yes = (v) => v === true || v === 1 || v === "1" || v === "true";
         return (d.MediaContainer?.Stream || [])
             .filter((c) => c.key && !yes(c.forced))
-            .map((c) => ({
-                key: c.key,
-                title: c.displayTitle || c.title || c.language || "Subtitles",
-                language: c.languageCode || language,
-                provider: c.providerTitle || "",
-                perfect: yes(c.perfectMatch),
-                hearingImpaired: yes(c.hearingImpaired),
-                score: Number(c.score) || 0,
-            }))
+            .map((c) => {
+                // `title` is OpenSubtitles' own name: the release the file
+                // was timed to. `displayTitle` is only the language.
+                const name = c.title || "";
+                const check = checkCandidateName(name, item);
+                return {
+                    key: c.key,
+                    name,
+                    language: c.language || c.displayTitle || language,
+                    provider: c.providerTitle || "",
+                    // A hash "match" for a file named as another episode is not one.
+                    perfect: yes(c.perfectMatch) && !check.mismatch,
+                    hearingImpaired: yes(c.hearingImpaired),
+                    score: Number(c.score) || 0,
+                    mismatch: check.mismatch,
+                    nameTag: check.tag,
+                };
+            })
             .sort(rankSubtitleCandidates);
     }
 
